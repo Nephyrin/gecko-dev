@@ -15,7 +15,7 @@
 # include <sys/resource.h>
 #endif
 
-#ifdef XP_UNIX
+#ifdef MOZ_WIDGET_GONK
 #include <sys/types.h>
 #include <sys/wait.h>
 #endif
@@ -150,6 +150,7 @@ using namespace mozilla::system;
 #endif
 
 #ifdef ENABLE_TESTS
+#include "BackgroundChildImpl.h"
 #include "mozilla/ipc/PBackgroundChild.h"
 #include "nsIIPCBackgroundChildCreateCallback.h"
 #endif
@@ -240,6 +241,10 @@ private:
                 // Callback 1.
                 bool ok = BackgroundChild::GetOrCreateForCurrentThread(this);
                 MOZ_RELEASE_ASSERT(ok);
+
+                BackgroundChildImpl::ThreadLocal* threadLocal =
+                  BackgroundChildImpl::GetThreadLocalForCurrentThread();
+                MOZ_RELEASE_ASSERT(threadLocal);
 
                 // Callback 2.
                 ok = BackgroundChild::GetOrCreateForCurrentThread(this);
@@ -577,11 +582,24 @@ ContentParent::GetNewOrUsed(bool aForBrowserElement)
         return p.forget();
     }
 
-    nsRefPtr<ContentParent> p =
-        new ContentParent(/* app = */ nullptr,
-                          aForBrowserElement,
-                          /* isForPreallocated = */ false,
-                          PROCESS_PRIORITY_FOREGROUND);
+    // Try to take and transform the preallocated process into browser.
+    nsRefPtr<ContentParent> p = PreallocatedProcessManager::Take();
+    if (p) {
+        p->TransformPreallocatedIntoBrowser();
+    } else {
+      // Failed in using the preallocated process: fork from the chrome process.
+#ifdef MOZ_NUWA_PROCESS
+        if (Preferences::GetBool("dom.ipc.processPrelaunch.enabled", false)) {
+            // Wait until the Nuwa process forks a new process.
+            return nullptr;
+        }
+#endif
+        p = new ContentParent(/* app = */ nullptr,
+                              aForBrowserElement,
+                              /* isForPreallocated = */ false,
+                              PROCESS_PRIORITY_FOREGROUND);
+    }
+
     p->Init();
     sNonAppContentParents->AppendElement(p);
     return p.forget();
@@ -686,7 +704,8 @@ ContentParent::CreateBrowserOrApp(const TabContext& aContext,
             new nsDataHashtable<nsStringHashKey, ContentParent*>();
     }
 
-    // Each app gets its own ContentParent instance.
+    // Each app gets its own ContentParent instance unless it shares it with
+    // a parent app.
     nsAutoString manifestURL;
     if (NS_FAILED(ownApp->GetManifestURL(manifestURL))) {
         NS_ERROR("Failed to get manifest URL");
@@ -694,8 +713,41 @@ ContentParent::CreateBrowserOrApp(const TabContext& aContext,
     }
 
     ProcessPriority initialPriority = GetInitialProcessPriority(aFrameElement);
-
     nsRefPtr<ContentParent> p = sAppContentParents->Get(manifestURL);
+
+    if (!p && Preferences::GetBool("dom.ipc.reuse_parent_app")) {
+        nsAutoString parentAppURL;
+        aFrameElement->GetAttr(kNameSpaceID_None,
+                               nsGkAtoms::parentapp, parentAppURL);
+        nsAdoptingString systemAppURL =
+            Preferences::GetString("browser.homescreenURL");
+        nsCOMPtr<nsIAppsService> appsService =
+            do_GetService(APPS_SERVICE_CONTRACTID);
+        if (!parentAppURL.IsEmpty() &&
+            !parentAppURL.Equals(systemAppURL) &&
+            appsService) {
+            nsCOMPtr<mozIApplication> parentApp;
+            nsCOMPtr<mozIApplication> app;
+            appsService->GetAppByManifestURL(parentAppURL,
+                                             getter_AddRefs(parentApp));
+            appsService->GetAppByManifestURL(manifestURL,
+                                             getter_AddRefs(app));
+
+            // Only let certified apps re-use the same process.
+            unsigned short parentAppStatus = 0;
+            unsigned short appStatus = 0;
+            if (app &&
+                NS_SUCCEEDED(app->GetAppStatus(&appStatus)) &&
+                appStatus == nsIPrincipal::APP_STATUS_CERTIFIED &&
+                parentApp &&
+                NS_SUCCEEDED(parentApp->GetAppStatus(&parentAppStatus)) &&
+                parentAppStatus == nsIPrincipal::APP_STATUS_CERTIFIED) {
+                // Check if we can re-use the process of the parent app.
+                p = sAppContentParents->Get(parentAppURL);
+            }
+        }
+    }
+
     if (p) {
         // Check that the process is still alive and set its priority.
         // Hopefully the process won't die after this point, if this call
@@ -925,7 +977,7 @@ ContentParent::SetPriorityAndCheckIsAlive(ProcessPriority aPriority)
     // direct child because of Nuwa this will fail with ECHILD, and we
     // need to assume the child is alive in that case rather than
     // assuming it's dead (as is otherwise a reasonable fallback).
-#ifdef XP_UNIX
+#ifdef MOZ_WIDGET_GONK
     siginfo_t info;
     info.si_pid = 0;
     if (waitid(P_PID, Pid(), &info, WNOWAIT | WNOHANG | WEXITED) == 0
@@ -967,6 +1019,14 @@ ContentParent::TransformPreallocatedIntoApp(const nsAString& aAppManifestURL)
     MOZ_ASSERT(IsPreallocated());
     mAppManifestURL = aAppManifestURL;
     TryGetNameFromManifestURL(aAppManifestURL, mAppName);
+}
+
+void
+ContentParent::TransformPreallocatedIntoBrowser()
+{
+    // Reset mAppManifestURL, mIsForBrowser and mOSPrivileges for browser.
+    mAppManifestURL.Truncate();
+    mIsForBrowser = true;
 }
 
 void
@@ -1822,7 +1882,7 @@ ContentParent::RecvGetShowPasswordSetting(bool* showPassword)
 #ifdef MOZ_WIDGET_ANDROID
     NS_ASSERTION(AndroidBridge::Bridge() != nullptr, "AndroidBridge is not available");
 
-    *showPassword = GeckoAppShell::GetShowPasswordSetting();
+    *showPassword = mozilla::widget::android::GeckoAppShell::GetShowPasswordSetting();
 #endif
     return true;
 }
@@ -1839,7 +1899,7 @@ ContentParent::RecvFirstIdle()
 }
 
 bool
-ContentParent::RecvAudioChannelGetState(const AudioChannelType& aType,
+ContentParent::RecvAudioChannelGetState(const AudioChannel& aChannel,
                                         const bool& aElementHidden,
                                         const bool& aElementWasHidden,
                                         AudioChannelState* aState)
@@ -1848,33 +1908,33 @@ ContentParent::RecvAudioChannelGetState(const AudioChannelType& aType,
         AudioChannelService::GetAudioChannelService();
     *aState = AUDIO_CHANNEL_STATE_NORMAL;
     if (service) {
-        *aState = service->GetStateInternal(aType, mChildID,
+        *aState = service->GetStateInternal(aChannel, mChildID,
                                             aElementHidden, aElementWasHidden);
     }
     return true;
 }
 
 bool
-ContentParent::RecvAudioChannelRegisterType(const AudioChannelType& aType,
+ContentParent::RecvAudioChannelRegisterType(const AudioChannel& aChannel,
                                             const bool& aWithVideo)
 {
     nsRefPtr<AudioChannelService> service =
         AudioChannelService::GetAudioChannelService();
     if (service) {
-        service->RegisterType(aType, mChildID, aWithVideo);
+        service->RegisterType(aChannel, mChildID, aWithVideo);
     }
     return true;
 }
 
 bool
-ContentParent::RecvAudioChannelUnregisterType(const AudioChannelType& aType,
+ContentParent::RecvAudioChannelUnregisterType(const AudioChannel& aChannel,
                                               const bool& aElementHidden,
                                               const bool& aWithVideo)
 {
     nsRefPtr<AudioChannelService> service =
         AudioChannelService::GetAudioChannelService();
     if (service) {
-        service->UnregisterType(aType, aElementHidden, mChildID, aWithVideo);
+        service->UnregisterType(aChannel, aElementHidden, mChildID, aWithVideo);
     }
     return true;
 }
@@ -1891,13 +1951,13 @@ ContentParent::RecvAudioChannelChangedNotification()
 }
 
 bool
-ContentParent::RecvAudioChannelChangeDefVolChannel(
-  const AudioChannelType& aType, const bool& aHidden)
+ContentParent::RecvAudioChannelChangeDefVolChannel(const int32_t& aChannel,
+                                                   const bool& aHidden)
 {
     nsRefPtr<AudioChannelService> service =
         AudioChannelService::GetAudioChannelService();
     if (service) {
-       service->SetDefaultVolumeControlChannelInternal(aType,
+       service->SetDefaultVolumeControlChannelInternal(aChannel,
                                                        aHidden, mChildID);
     }
     return true;
@@ -1924,8 +1984,11 @@ ContentParent::RecvNuwaReady()
 {
 #ifdef MOZ_NUWA_PROCESS
     if (!IsNuwaProcess()) {
-        printf_stderr("Terminating child process %d for unauthorized IPC message: "
-                      "NuwaReady", Pid());
+        NS_ERROR(
+            nsPrintfCString(
+                "Terminating child process %d for unauthorized IPC message: NuwaReady",
+                Pid()).get());
+
         KillHard();
         return false;
     }
@@ -1943,8 +2006,11 @@ ContentParent::RecvAddNewProcess(const uint32_t& aPid,
 {
 #ifdef MOZ_NUWA_PROCESS
     if (!IsNuwaProcess()) {
-        printf_stderr("Terminating child process %d for unauthorized IPC message: "
-                      "AddNewProcess(%d)", Pid(), aPid);
+        NS_ERROR(
+            nsPrintfCString(
+                "Terminating child process %d for unauthorized IPC message: "
+                "AddNewProcess(%d)", Pid(), aPid).get());
+
         KillHard();
         return false;
     }

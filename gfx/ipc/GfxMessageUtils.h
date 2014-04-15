@@ -244,72 +244,82 @@ struct ParamTraits<gfx3DMatrix>
 
 template <>
 struct ParamTraits<gfxContentType>
-  : public TypedEnumSerializer<gfxContentType,
-                               gfxContentType::COLOR,
-                               gfxContentType::SENTINEL>
+  : public ContiguousTypedEnumSerializer<
+             gfxContentType,
+             gfxContentType::COLOR,
+             gfxContentType::SENTINEL>
 {};
 
 template <>
 struct ParamTraits<gfxSurfaceType>
-  : public TypedEnumSerializer<gfxSurfaceType,
-                               gfxSurfaceType::Image,
-                               gfxSurfaceType::Max>
+  : public ContiguousTypedEnumSerializer<
+             gfxSurfaceType,
+             gfxSurfaceType::Image,
+             gfxSurfaceType::Max>
 {};
 
 template <>
 struct ParamTraits<mozilla::GraphicsFilterType>
-  : public EnumSerializer<mozilla::GraphicsFilterType,
-                          GraphicsFilter::FILTER_FAST,
-                          GraphicsFilter::FILTER_SENTINEL>
+  : public ContiguousEnumSerializer<
+             mozilla::GraphicsFilterType,
+             GraphicsFilter::FILTER_FAST,
+             GraphicsFilter::FILTER_SENTINEL>
 {};
 
 template <>
 struct ParamTraits<mozilla::layers::LayersBackend>
-  : public TypedEnumSerializer<mozilla::layers::LayersBackend,
-                               mozilla::layers::LayersBackend::LAYERS_NONE,
-                               mozilla::layers::LayersBackend::LAYERS_LAST>
+  : public ContiguousTypedEnumSerializer<
+             mozilla::layers::LayersBackend,
+             mozilla::layers::LayersBackend::LAYERS_NONE,
+             mozilla::layers::LayersBackend::LAYERS_LAST>
 {};
 
 template <>
 struct ParamTraits<mozilla::layers::ScaleMode>
-  : public TypedEnumSerializer<mozilla::layers::ScaleMode,
-                               mozilla::layers::ScaleMode::SCALE_NONE,
-                               mozilla::layers::ScaleMode::SENTINEL>
+  : public ContiguousTypedEnumSerializer<
+             mozilla::layers::ScaleMode,
+             mozilla::layers::ScaleMode::SCALE_NONE,
+             mozilla::layers::ScaleMode::SENTINEL>
 {};
 
 template <>
 struct ParamTraits<gfxImageFormat>
-  : public TypedEnumSerializer<gfxImageFormat,
-                               gfxImageFormat::ARGB32,
-                               gfxImageFormat::Unknown>
+  : public ContiguousTypedEnumSerializer<
+             gfxImageFormat,
+             gfxImageFormat::ARGB32,
+             gfxImageFormat::Unknown>
 {};
 
 template <>
 struct ParamTraits<mozilla::gfx::AttributeName>
-  : public EnumSerializer<mozilla::gfx::AttributeName,
-                          mozilla::gfx::eBlendBlendmode,
-                          mozilla::gfx::eLastAttributeName>
+  : public ContiguousEnumSerializer<
+             mozilla::gfx::AttributeName,
+             mozilla::gfx::eBlendBlendmode,
+             mozilla::gfx::eLastAttributeName>
 {};
 
 template <>
 struct ParamTraits<mozilla::gfx::AttributeType>
-  : public TypedEnumSerializer<mozilla::gfx::AttributeType,
-                               mozilla::gfx::AttributeType::eBool,
-                               mozilla::gfx::AttributeType::Max>
+  : public ContiguousTypedEnumSerializer<
+             mozilla::gfx::AttributeType,
+             mozilla::gfx::AttributeType::eBool,
+             mozilla::gfx::AttributeType::Max>
 {};
 
 template <>
 struct ParamTraits<mozilla::gfx::PrimitiveType>
-  : public TypedEnumSerializer<mozilla::gfx::PrimitiveType,
-                               mozilla::gfx::PrimitiveType::Empty,
-                               mozilla::gfx::PrimitiveType::Max>
+  : public ContiguousTypedEnumSerializer<
+             mozilla::gfx::PrimitiveType,
+             mozilla::gfx::PrimitiveType::Empty,
+             mozilla::gfx::PrimitiveType::Max>
 {};
 
 template <>
 struct ParamTraits<mozilla::gfx::ColorSpace>
-  : public TypedEnumSerializer<mozilla::gfx::ColorSpace,
-                               mozilla::gfx::ColorSpace::SRGB,
-                               mozilla::gfx::ColorSpace::Max>
+  : public ContiguousTypedEnumSerializer<
+             mozilla::gfx::ColorSpace,
+             mozilla::gfx::ColorSpace::SRGB,
+             mozilla::gfx::ColorSpace::Max>
 {};
 
 /*
@@ -563,10 +573,10 @@ struct ParamTraits< mozilla::gfx::IntPointTyped<T> >
   }
 };
 
-template<>
-struct ParamTraits<mozilla::gfx::Size>
+template<class T>
+struct ParamTraits< mozilla::gfx::SizeTyped<T> >
 {
-  typedef mozilla::gfx::Size paramType;
+  typedef mozilla::gfx::SizeTyped<T> paramType;
 
   static void Write(Message* msg, const paramType& param)
   {
@@ -707,8 +717,11 @@ struct ParamTraits<mozilla::layers::FrameMetrics>
     WriteParam(aMsg, aParam.mViewport);
     WriteParam(aMsg, aParam.mScrollOffset);
     WriteParam(aMsg, aParam.mDisplayPort);
+    WriteParam(aMsg, aParam.mDisplayPortMargins);
+    WriteParam(aMsg, aParam.mUseDisplayPortMargins);
     WriteParam(aMsg, aParam.mCriticalDisplayPort);
     WriteParam(aMsg, aParam.mCompositionBounds);
+    WriteParam(aMsg, aParam.mRootCompositionSize);
     WriteParam(aMsg, aParam.mScrollId);
     WriteParam(aMsg, aParam.mResolution);
     WriteParam(aMsg, aParam.mCumulativeResolution);
@@ -730,8 +743,11 @@ struct ParamTraits<mozilla::layers::FrameMetrics>
             ReadParam(aMsg, aIter, &aResult->mViewport) &&
             ReadParam(aMsg, aIter, &aResult->mScrollOffset) &&
             ReadParam(aMsg, aIter, &aResult->mDisplayPort) &&
+            ReadParam(aMsg, aIter, &aResult->mDisplayPortMargins) &&
+            ReadParam(aMsg, aIter, &aResult->mUseDisplayPortMargins) &&
             ReadParam(aMsg, aIter, &aResult->mCriticalDisplayPort) &&
             ReadParam(aMsg, aIter, &aResult->mCompositionBounds) &&
+            ReadParam(aMsg, aIter, &aResult->mRootCompositionSize) &&
             ReadParam(aMsg, aIter, &aResult->mScrollId) &&
             ReadParam(aMsg, aIter, &aResult->mResolution) &&
             ReadParam(aMsg, aIter, &aResult->mCumulativeResolution) &&
@@ -792,16 +808,18 @@ struct ParamTraits<mozilla::layers::TextureInfo>
 
 template <>
 struct ParamTraits<mozilla::layers::CompositableType>
-  : public EnumSerializer<mozilla::layers::CompositableType,
-                          mozilla::layers::BUFFER_UNKNOWN,
-                          mozilla::layers::BUFFER_COUNT>
+  : public ContiguousEnumSerializer<
+             mozilla::layers::CompositableType,
+             mozilla::layers::BUFFER_UNKNOWN,
+             mozilla::layers::BUFFER_COUNT>
 {};
 
 template <>
 struct ParamTraits<mozilla::gfx::SurfaceFormat>
-  : public TypedEnumSerializer<mozilla::gfx::SurfaceFormat,
-                               mozilla::gfx::SurfaceFormat::B8G8R8A8,
-                               mozilla::gfx::SurfaceFormat::UNKNOWN>
+  : public ContiguousTypedEnumSerializer<
+             mozilla::gfx::SurfaceFormat,
+             mozilla::gfx::SurfaceFormat::B8G8R8A8,
+             mozilla::gfx::SurfaceFormat::UNKNOWN>
 {};
 
 template <>

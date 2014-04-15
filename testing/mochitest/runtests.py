@@ -29,7 +29,7 @@ import traceback
 import urllib2
 import zipfile
 
-from automationutils import environment, getDebuggerInfo, isURL, KeyValueParseError, parseKeyValue, processLeakLog, systemMemory, dumpScreen, ShutdownLeaks
+from automationutils import environment, getDebuggerInfo, isURL, KeyValueParseError, parseKeyValue, processLeakLog, systemMemory, dumpScreen, ShutdownLeaks, printstatus
 from datetime import datetime
 from manifestparser import TestManifest
 from mochitest_options import MochitestOptions
@@ -308,7 +308,10 @@ class MochitestUtilsMixin(object):
     # allow relative paths for logFile
     if options.logFile:
       options.logFile = self.getLogFilePath(options.logFile)
-    if options.browserChrome or options.chrome or options.a11y or options.webapprtChrome:
+
+    # Note that all tests under options.subsuite need to be browser chrome tests.
+    if options.browserChrome or options.chrome or options.subsuite or \
+       options.a11y or options.webapprtChrome:
       self.makeTestConfig(options)
     else:
       if options.autorun:
@@ -361,6 +364,8 @@ class MochitestUtilsMixin(object):
         self.urlOpts.append("dumpAboutMemoryAfterTest=true")
       if options.dumpDMDAfterTest:
         self.urlOpts.append("dumpDMDAfterTest=true")
+      if options.quiet:
+        self.urlOpts.append("quiet=true")
 
   def getTestFlavor(self, options):
     if options.browserChrome:
@@ -382,8 +387,11 @@ class MochitestUtilsMixin(object):
       testPattern = re.compile(r"browser_.+\.js")
     elif options.chrome or options.a11y:
       testPattern = re.compile(r"(browser|test)_.+\.(xul|html|js|xhtml)")
-    elif options.webapprtChrome:
+    elif options.webapprtContent:
       testPattern = re.compile(r"webapprt_")
+    elif options.webapprtChrome:
+      allow_js_css = True
+      testPattern = re.compile(r"browser_")
     else:
       testPattern = re.compile(r"test_")
 
@@ -434,13 +442,16 @@ class MochitestUtilsMixin(object):
 
     testRoot = self.getTestRoot(options)
     testRootAbs = os.path.abspath(testRoot)
-    if options.manifestFile and os.path.isfile(options.manifestFile):
+    if isinstance(options.manifestFile, TestManifest):
+        manifest = options.manifestFile
+    elif options.manifestFile and os.path.isfile(options.manifestFile):
       manifestFileAbs = os.path.abspath(options.manifestFile)
       assert manifestFileAbs.startswith(testRootAbs)
       manifest = TestManifest([options.manifestFile], strict=False)
     else:
       masterName = self.getTestFlavor(options) + '.ini'
       masterPath = os.path.join(testRoot, masterName)
+
       if os.path.exists(masterPath):
         manifest = TestManifest([masterPath], strict=False)
 
@@ -455,9 +466,10 @@ class MochitestUtilsMixin(object):
         info[k] = v
 
       # Bug 883858 - return all tests including disabled tests
-      tests = manifest.active_tests(disabled=True, **info)
+      tests = manifest.active_tests(disabled=True, options=options, **info)
       paths = []
       testPath = self.getTestPath(options)
+
       for test in tests:
         pathAbs = os.path.abspath(test['path'])
         assert pathAbs.startswith(testRootAbs)
@@ -790,8 +802,11 @@ class Mochitest(MochitestUtilsMixin):
       if mozinfo.isWin:
         # We should have a "crashinject" program in our utility path
         crashinject = os.path.normpath(os.path.join(utilityPath, "crashinject.exe"))
-        if os.path.exists(crashinject) and subprocess.Popen([crashinject, str(processPID)]).wait() == 0:
-          return
+        if os.path.exists(crashinject):
+          status = subprocess.Popen([crashinject, str(processPID)]).wait()
+          printstatus(status, "crashinject")
+          if status == 0:
+            return
       else:
         try:
           os.kill(processPID, signal.SIGABRT)
@@ -875,7 +890,8 @@ class Mochitest(MochitestUtilsMixin):
              timeout=-1,
              onLaunch=None,
              webapprtChrome=False,
-             hide_subtests=False):
+             hide_subtests=False,
+             screenshotOnFail=False):
     """
     Run the app, log the duration it took to execute, return the status code.
     Kills the app if it runs for longer than |maxTime| seconds, or outputs nothing for |timeout| seconds.
@@ -965,6 +981,7 @@ class Mochitest(MochitestUtilsMixin):
                                          utilityPath=utilityPath,
                                          symbolsPath=symbolsPath,
                                          dump_screen_on_timeout=not debuggerInfo,
+                                         dump_screen_on_fail=screenshotOnFail,
                                          hide_subtests=hide_subtests,
                                          shutdownLeaks=shutdownLeaks,
         )
@@ -1019,6 +1036,7 @@ class Mochitest(MochitestUtilsMixin):
       # until bug 913970 is fixed regarding mozrunner `wait` not returning status
       # see https://bugzilla.mozilla.org/show_bug.cgi?id=913970
       status = proc.wait()
+      printstatus(status, "Main app process")
       runner.process_handler = None
 
       if timeout is None:
@@ -1143,7 +1161,8 @@ class Mochitest(MochitestUtilsMixin):
                                timeout=timeout,
                                onLaunch=onLaunch,
                                webapprtChrome=options.webapprtChrome,
-                               hide_subtests=options.hide_subtests
+                               hide_subtests=options.hide_subtests,
+                               screenshotOnFail=options.screenshotOnFail
                                )
         except KeyboardInterrupt:
           log.info("runtests.py | Received keyboard interrupt.\n");
@@ -1196,7 +1215,7 @@ class Mochitest(MochitestUtilsMixin):
 
   class OutputHandler(object):
     """line output handler for mozrunner"""
-    def __init__(self, harness, utilityPath, symbolsPath=None, dump_screen_on_timeout=True,
+    def __init__(self, harness, utilityPath, symbolsPath=None, dump_screen_on_timeout=True, dump_screen_on_fail=False,
                  hide_subtests=False, shutdownLeaks=None):
       """
       harness -- harness instance
@@ -1208,6 +1227,7 @@ class Mochitest(MochitestUtilsMixin):
       self.utilityPath = utilityPath
       self.symbolsPath = symbolsPath
       self.dump_screen_on_timeout = dump_screen_on_timeout
+      self.dump_screen_on_fail = dump_screen_on_fail
       self.hide_subtests = hide_subtests
       self.shutdownLeaks = shutdownLeaks
 
@@ -1233,6 +1253,7 @@ class Mochitest(MochitestUtilsMixin):
       return [self.fix_stack,
               self.format,
               self.dumpScreenOnTimeout,
+              self.dumpScreenOnFail,
               self.metro_subprocess_id,
               self.trackShutdownLeaks,
               self.check_test_failure,
@@ -1305,7 +1326,13 @@ class Mochitest(MochitestUtilsMixin):
       return line.rstrip().decode("UTF-8", "ignore")
 
     def dumpScreenOnTimeout(self, line):
-      if self.dump_screen_on_timeout and "TEST-UNEXPECTED-FAIL" in line and "Test timed out" in line:
+      if not self.dump_screen_on_fail and self.dump_screen_on_timeout and "TEST-UNEXPECTED-FAIL" in line and "Test timed out" in line:
+        self.log_output_buffer()
+        self.harness.dumpScreen(self.utilityPath)
+      return line
+
+    def dumpScreenOnFail(self, line):
+      if self.dump_screen_on_fail and "TEST-UNEXPECTED-FAIL" in line:
         self.log_output_buffer()
         self.harness.dumpScreen(self.utilityPath)
       return line
@@ -1354,32 +1381,6 @@ class Mochitest(MochitestUtilsMixin):
 
   def makeTestConfig(self, options):
     "Creates a test configuration file for customizing test execution."
-    def jsonString(val):
-      if isinstance(val, bool):
-        if val:
-          return "true"
-        return "false"
-      elif val is None:
-        return '""'
-      elif isinstance(val, basestring):
-        return '"%s"' % (val.replace('\\', '\\\\'))
-      elif isinstance(val, int):
-        return '%s' % (val)
-      elif isinstance(val, list):
-        content = '['
-        first = True
-        for item in val:
-          if first:
-            first = False
-          else:
-            content += ", "
-          content += jsonString(item)
-        content += ']'
-        return content
-      else:
-        print "unknown type: %s: %s" % (opt, val)
-        sys.exit(1)
-
     options.logFile = options.logFile.replace("\\", "\\\\")
     options.testPath = options.testPath.replace("\\", "\\\\")
     testRoot = self.getTestRoot(options)
@@ -1387,20 +1388,9 @@ class Mochitest(MochitestUtilsMixin):
     if "MOZ_HIDE_RESULTS_TABLE" in os.environ and os.environ["MOZ_HIDE_RESULTS_TABLE"] == "1":
       options.hideResultsTable = True
 
-    #TODO: when we upgrade to python 2.6, just use json.dumps(options.__dict__)
-    content = "{"
-    content += '"testRoot": "%s", ' % (testRoot)
-    first = True
-    for opt in options.__dict__.keys():
-      val = options.__dict__[opt]
-      if first:
-        first = False
-      else:
-        content += ", "
-
-      content += '"' + opt + '": '
-      content += jsonString(val)
-    content += "}"
+    d = dict(options.__dict__)
+    d['testRoot'] = testRoot
+    content = json.dumps(d)
 
     with open(os.path.join(options.profilePath, "testConfig.js"), "w") as config:
       config.write(content)
@@ -1497,6 +1487,7 @@ class Mochitest(MochitestUtilsMixin):
     pk12util = os.path.join(utilityPath, "pk12util" + bin_suffix)
 
     status = call([certutil, "-N", "-d", profileDir, "-f", pwfilePath], env=env)
+    printstatus(status, "certutil")
     if status:
       return status
 
@@ -1508,13 +1499,15 @@ class Mochitest(MochitestUtilsMixin):
         trustBits = "CT,,"
         if root.endswith("-object"):
           trustBits = "CT,,CT"
-        call([certutil, "-A", "-i", os.path.join(certPath, item),
+        status = call([certutil, "-A", "-i", os.path.join(certPath, item),
               "-d", profileDir, "-f", pwfilePath, "-n", root, "-t", trustBits],
               env=env)
+        printstatus(status, "certutil")
       elif ext == ".client":
-        call([pk12util, "-i", os.path.join(certPath, item), "-w",
+        status = call([pk12util, "-i", os.path.join(certPath, item), "-w",
               pwfilePath, "-d", profileDir],
               env=env)
+        printstatus(status, "pk2util")
 
     os.unlink(pwfilePath)
     return 0

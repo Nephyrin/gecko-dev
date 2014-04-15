@@ -74,7 +74,7 @@ ConsoleStructuredCloneCallbacksRead(JSContext* aCx,
   }
 
   nsTArray<nsString>* strings = static_cast<nsTArray<nsString>*>(aClosure);
-  MOZ_ASSERT(strings->Length() <= aData);
+  MOZ_ASSERT(strings->Length() > aData);
 
   JS::Rooted<JS::Value> value(aCx);
   if (!xpc::StringToJsval(aCx, strings->ElementAt(aData), &value)) {
@@ -592,9 +592,9 @@ Console::Observe(nsISupports* aSubject, const char* aTopic,
 }
 
 JSObject*
-Console::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aScope)
+Console::WrapObject(JSContext* aCx)
 {
-  return ConsoleBinding::Wrap(aCx, aScope, this);
+  return ConsoleBinding::Wrap(aCx, this);
 }
 
 #define METHOD(name, string)                                          \
@@ -689,7 +689,7 @@ Console::ProfileMethod(JSContext* aCx, const nsAString& aAction,
   }
 
   JS::Rooted<JS::Value> eventValue(aCx);
-  if (!event.ToObject(aCx, JS::NullPtr(), &eventValue)) {
+  if (!event.ToObject(aCx, &eventValue)) {
     aRv.Throw(NS_ERROR_FAILURE);
     return;
   }
@@ -791,8 +791,8 @@ Console::Method(JSContext* aCx, MethodName aMethodName,
     loadContext->GetUsePrivateBrowsing(&callData->mPrivate);
   }
 
-  uint32_t maxDepth = aMethodName == MethodTrace ?
-                       DEFAULT_MAX_STACKTRACE_DEPTH : 1;
+  uint32_t maxDepth = ShouldIncludeStackrace(aMethodName) ?
+                      DEFAULT_MAX_STACKTRACE_DEPTH : 1;
   nsCOMPtr<nsIStackFrame> stack = CreateStack(aCx, maxDepth);
 
   if (!stack) {
@@ -814,14 +814,11 @@ Console::Method(JSContext* aCx, MethodName aMethodName,
         language == nsIProgrammingLanguage::JAVASCRIPT2) {
       ConsoleStackEntry& data = *callData->mStack.AppendElement();
 
-      nsCString string;
-      rv = stack->GetFilename(string);
+      rv = stack->GetFilename(data.mFilename);
       if (NS_FAILED(rv)) {
         Throw(aCx, rv);
         return;
       }
-
-      CopyUTF8toUTF16(string, data.mFilename);
 
       int32_t lineNumber;
       rv = stack->GetLineNumber(&lineNumber);
@@ -832,13 +829,11 @@ Console::Method(JSContext* aCx, MethodName aMethodName,
 
       data.mLineNumber = lineNumber;
 
-      rv = stack->GetName(string);
+      rv = stack->GetName(data.mFunctionName);
       if (NS_FAILED(rv)) {
         Throw(aCx, rv);
         return;
       }
-
-      CopyUTF8toUTF16(string, data.mFunctionName);
 
       data.mLanguage = language;
     }
@@ -969,7 +964,9 @@ Console::ProcessCallData(ConsoleCallData* aData)
     case MethodDebug:
     case MethodAssert:
       event.mArguments.Construct();
-      ProcessArguments(cx, aData->mArguments, event.mArguments.Value());
+      event.mStyles.Construct();
+      ProcessArguments(cx, aData->mArguments, event.mArguments.Value(),
+                       event.mStyles.Value());
       break;
 
     default:
@@ -977,7 +974,7 @@ Console::ProcessCallData(ConsoleCallData* aData)
       ArgumentsToValueList(aData->mArguments, event.mArguments.Value());
   }
 
-  if (aData->mMethodName == MethodTrace) {
+  if (ShouldIncludeStackrace(aData->mMethodName)) {
     event.mStacktrace.Construct();
     event.mStacktrace.Value().SwapElements(aData->mStack);
   }
@@ -1001,7 +998,7 @@ Console::ProcessCallData(ConsoleCallData* aData)
   }
 
   JS::Rooted<JS::Value> eventValue(cx);
-  if (!event.ToObject(cx, JS::NullPtr(), &eventValue)) {
+  if (!event.ToObject(cx, &eventValue)) {
     Throw(cx, NS_ERROR_FAILURE);
     return;
   }
@@ -1051,7 +1048,8 @@ Console::ProcessCallData(ConsoleCallData* aData)
 void
 Console::ProcessArguments(JSContext* aCx,
                           const nsTArray<JS::Heap<JS::Value>>& aData,
-                          Sequence<JS::Value>& aSequence)
+                          Sequence<JS::Value>& aSequence,
+                          Sequence<JS::Value>& aStyles)
 {
   if (aData.IsEmpty()) {
     return;
@@ -1061,8 +1059,6 @@ Console::ProcessArguments(JSContext* aCx,
     ArgumentsToValueList(aData, aSequence);
     return;
   }
-
-  SequenceRooter<JS::Value> rooter(aCx, &aSequence);
 
   JS::Rooted<JS::Value> format(aCx, aData[0]);
   JS::Rooted<JSString*> jsString(aCx, JS::ToString(aCx, format));
@@ -1158,6 +1154,7 @@ Console::ProcessArguments(JSContext* aCx,
 
     switch (ch) {
       case 'o':
+      case 'O':
       {
         if (!output.IsEmpty()) {
           JS::Rooted<JSString*> str(aCx, JS_NewUCStringCopyN(aCx,
@@ -1177,6 +1174,38 @@ Console::ProcessArguments(JSContext* aCx,
         }
 
         aSequence.AppendElement(v);
+        break;
+      }
+
+      case 'c':
+      {
+        if (!output.IsEmpty()) {
+          JS::Rooted<JSString*> str(aCx, JS_NewUCStringCopyN(aCx,
+                                                             output.get(),
+                                                             output.Length()));
+          if (!str) {
+            return;
+          }
+
+          aSequence.AppendElement(JS::StringValue(str));
+          output.Truncate();
+        }
+
+        if (index < aData.Length()) {
+          JS::Rooted<JS::Value> v(aCx, aData[index++]);
+          JS::Rooted<JSString*> jsString(aCx, JS::ToString(aCx, v));
+          if (!jsString) {
+            return;
+          }
+
+          int32_t diff = aSequence.Length() - aStyles.Length();
+          if (diff > 0) {
+            for (int32_t i = 0; i < diff; i++) {
+              aStyles.AppendElement(JS::NullValue());
+            }
+          }
+          aStyles.AppendElement(JS::StringValue(jsString));
+        }
         break;
       }
 
@@ -1300,7 +1329,7 @@ Console::StartTimer(JSContext* aCx, const JS::Value& aName,
     RootedDictionary<ConsoleTimerError> error(aCx);
 
     JS::Rooted<JS::Value> value(aCx);
-    if (!error.ToObject(aCx, JS::NullPtr(), &value)) {
+    if (!error.ToObject(aCx, &value)) {
       return JS::UndefinedValue();
     }
 
@@ -1332,7 +1361,7 @@ Console::StartTimer(JSContext* aCx, const JS::Value& aName,
   timer.mStarted = aTimestamp;
 
   JS::Rooted<JS::Value> value(aCx);
-  if (!timer.ToObject(aCx, JS::NullPtr(), &value)) {
+  if (!timer.ToObject(aCx, &value)) {
     return JS::UndefinedValue();
   }
 
@@ -1366,7 +1395,7 @@ Console::StopTimer(JSContext* aCx, const JS::Value& aName,
   timer.mDuration = aTimestamp - entry;
 
   JS::Rooted<JS::Value> value(aCx);
-  if (!timer.ToObject(aCx, JS::NullPtr(), &value)) {
+  if (!timer.ToObject(aCx, &value)) {
     return JS::UndefinedValue();
   }
 
@@ -1414,7 +1443,7 @@ Console::IncreaseCounter(JSContext* aCx, const ConsoleStackEntry& aFrame,
       RootedDictionary<ConsoleCounterError> error(aCx);
 
       JS::Rooted<JS::Value> value(aCx);
-      if (!error.ToObject(aCx, JS::NullPtr(), &value)) {
+      if (!error.ToObject(aCx, &value)) {
         return JS::UndefinedValue();
       }
 
@@ -1430,7 +1459,7 @@ Console::IncreaseCounter(JSContext* aCx, const ConsoleStackEntry& aFrame,
   data.mCount = count;
 
   JS::Rooted<JS::Value> value(aCx);
-  if (!data.ToObject(aCx, JS::NullPtr(), &value)) {
+  if (!data.ToObject(aCx, &value)) {
     return JS::UndefinedValue();
   }
 
@@ -1442,6 +1471,20 @@ Console::ClearConsoleData()
 {
   while (ConsoleCallData* data = mQueuedCalls.popFirst()) {
     delete data;
+  }
+}
+
+bool
+Console::ShouldIncludeStackrace(MethodName aMethodName)
+{
+  switch (aMethodName) {
+    case MethodError:
+    case MethodException:
+    case MethodAssert:
+    case MethodTrace:
+      return true;
+    default:
+      return false;
   }
 }
 

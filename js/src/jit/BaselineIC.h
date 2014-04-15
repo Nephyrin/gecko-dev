@@ -1049,6 +1049,11 @@ class ICStubCompiler
     // given label.
     void guardProfilingEnabled(MacroAssembler &masm, Register scratch, Label *skip);
 
+    // Higher-level helper to emit an update to the profiler pseudo-stack.
+    void emitProfilingUpdate(MacroAssembler &masm, Register pcIdx, Register scratch,
+                             uint32_t stubPcOffset);
+    void emitProfilingUpdate(MacroAssembler &masm, GeneralRegisterSet regs, uint32_t stubPcOffset);
+
     inline GeneralRegisterSet availableGeneralRegs(size_t numInputs) const {
         GeneralRegisterSet regs(GeneralRegisterSet::All());
         JS_ASSERT(!regs.has(BaselineStackReg));
@@ -3727,9 +3732,7 @@ class ICIn_Fallback : public ICFallbackStub
 
 // GetName
 //      JSOP_NAME
-//      JSOP_CALLNAME
 //      JSOP_GETGNAME
-//      JSOP_CALLGNAME
 class ICGetName_Fallback : public ICMonitoredFallbackStub
 {
     friend class ICStubSpace;
@@ -3925,7 +3928,6 @@ class ICBindName_Fallback : public ICFallbackStub
 
 // GetIntrinsic
 //      JSOP_GETINTRINSIC
-//      JSOP_CALLINTRINSIC
 class ICGetIntrinsic_Fallback : public ICMonitoredFallbackStub
 {
     friend class ICStubSpace;

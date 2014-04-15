@@ -171,6 +171,12 @@ class MochitestOptions(optparse.OptionParser):
           "help": "run browser chrome Mochitests",
           "default": False,
         }],
+        [["--subsuite"],
+        { "action": "store",
+          "dest": "subsuite",
+          "help": "subsuite of tests to run",
+          "default": "",
+        }],
         [["--webapprt-content"],
         { "action": "store_true",
           "dest": "webapprtContent",
@@ -391,6 +397,18 @@ class MochitestOptions(optparse.OptionParser):
                    "when not set, recoverable but misleading SIGSEGV instances "
                    "may occur in Ion/Odin JIT code."
         }],
+        [["--screenshot-on-fail"],
+         { "action": "store_true",
+           "default": False,
+           "dest": "screenshotOnFail",
+           "help": "Take screenshots on all test failures. Set $MOZ_UPLOAD_DIR to a directory for storing the screenshots."
+        }],
+        [["--quiet"],
+         { "action": "store_true",
+           "default": False,
+           "dest": "quiet",
+           "help": "Do not print test log lines unless a failure occurs."
+         }],
     ]
 
     def __init__(self, **kwargs):

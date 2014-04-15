@@ -75,12 +75,12 @@ public:
 };
 
 // Could really use those NS_REFCOUNTING_HAHA_YEAH_RIGHT macros here.
-NS_IMETHODIMP_(nsrefcnt) StartTransactionRunnable::AddRef()
+NS_IMETHODIMP_(MozExternalRefCountType) StartTransactionRunnable::AddRef()
 {
   return 2;
 }
 
-NS_IMETHODIMP_(nsrefcnt) StartTransactionRunnable::Release()
+NS_IMETHODIMP_(MozExternalRefCountType) StartTransactionRunnable::Release()
 {
   return 1;
 }
@@ -632,9 +632,9 @@ NS_IMPL_ADDREF_INHERITED(IDBTransaction, IDBWrapperCache)
 NS_IMPL_RELEASE_INHERITED(IDBTransaction, IDBWrapperCache)
 
 JSObject*
-IDBTransaction::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aScope)
+IDBTransaction::WrapObject(JSContext* aCx)
 {
-  return IDBTransactionBinding::Wrap(aCx, aScope, this);
+  return IDBTransactionBinding::Wrap(aCx, this);
 }
 
 mozilla::dom::IDBTransactionMode

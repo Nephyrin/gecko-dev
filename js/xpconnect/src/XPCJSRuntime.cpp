@@ -587,6 +587,12 @@ GetJunkScopeGlobal()
     return GetNativeForGlobal(junkScope);
 }
 
+JSObject *
+GetSafeJSContextGlobal()
+{
+    return XPCJSRuntime::Get()->GetJSContextStack()->GetSafeJSContextGlobal();
+}
+
 nsGlobalWindow*
 WindowOrNull(JSObject *aObj)
 {
@@ -1052,7 +1058,7 @@ class Watchdog
             AutoLockWatchdog lock(this);
 
             mThread = PR_CreateThread(PR_USER_THREAD, WatchdogMain, this,
-                                      PR_PRIORITY_NORMAL, PR_LOCAL_THREAD,
+                                      PR_PRIORITY_NORMAL, PR_GLOBAL_THREAD,
                                       PR_UNJOINABLE_THREAD, 0);
             if (!mThread)
                 NS_RUNTIMEABORT("PR_CreateThread failed!");
@@ -1391,6 +1397,19 @@ XPCJSRuntime::InterruptCallback(JSContext *cx)
     // running in a non-DOM scope, we have to just let it keep running.
     RootedObject global(cx, JS::CurrentGlobalOrNull(cx));
     nsRefPtr<nsGlobalWindow> win = WindowOrNull(global);
+    if (!win && IsSandbox(global)) {
+        // If this is a sandbox associated with a DOMWindow via a
+        // sandboxPrototype, use that DOMWindow. This supports GreaseMonkey
+        // and JetPack content scripts.
+        JS::Rooted<JSObject*> proto(cx);
+        if (!JS_GetPrototype(cx, global, &proto))
+            return false;
+        if (proto && IsSandboxPrototypeProxy(proto) &&
+            (proto = js::CheckedUnwrap(proto, /* stopAtOuter = */ false)))
+        {
+            win = WindowGlobalOrNull(proto);
+        }
+    }
     if (!win)
         return true;
 
@@ -2349,6 +2368,11 @@ ReportJSRuntimeExplicitTreeStats(const JS::RuntimeStats &rtStats,
         KIND_NONHEAP, rtStats.runtime.gc.nurseryCommitted,
         "Memory being used by the GC's nursery.");
 
+    RREPORT_BYTES(rtPath + NS_LITERAL_CSTRING("runtime/gc/nursery-huge-slots"),
+        KIND_NONHEAP, rtStats.runtime.gc.nurseryHugeSlots,
+        "Out-of-line slots and elements belonging to objects in the "
+        "nursery.");
+
     RREPORT_BYTES(rtPath + NS_LITERAL_CSTRING("runtime/gc/store-buffer/vals"),
         KIND_HEAP, rtStats.runtime.gc.storeBufferVals,
         "Values in the store buffer.");
@@ -2987,7 +3011,6 @@ class XPCJSSourceHook: public js::SourceHook {
 
 static const JSWrapObjectCallbacks WrapObjectCallbacks = {
     xpc::WrapperFactory::Rewrap,
-    xpc::WrapperFactory::WrapForSameCompartment,
     xpc::WrapperFactory::PrepareForWrapping
 };
 

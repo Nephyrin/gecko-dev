@@ -14,6 +14,7 @@
 #include "jit/IonSpewer.h"
 #include "jit/JitCommon.h"
 #include "vm/Interpreter.h"
+#include "vm/TraceLogging.h"
 
 #include "jsgcinlines.h"
 #include "jsobjinlines.h"
@@ -200,9 +201,9 @@ jit::EnterBaselineAtBranch(JSContext *cx, InterpreterFrame *fp, jsbytecode *pc)
             data.calleeToken = CalleeToToken(fp->script());
     }
 
-#if JS_TRACE_LOGGING
-    TraceLogging::defaultLogger()->log(TraceLogging::INFO_ENGINE_BASELINE);
-#endif
+    TraceLogger *logger = TraceLoggerForMainThread(cx->runtime());
+    TraceLogStopEvent(logger, TraceLogger::Interpreter);
+    TraceLogStartEvent(logger, TraceLogger::Baseline);
 
     IonExecStatus status = EnterBaseline(cx, data);
     if (status != IonExec_Ok)
@@ -932,10 +933,10 @@ MarkActiveBaselineScripts(JSRuntime *rt, const JitActivationIterator &activation
 {
     for (jit::IonFrameIterator iter(activation); !iter.done(); ++iter) {
         switch (iter.type()) {
-          case IonFrame_BaselineJS:
+          case JitFrame_BaselineJS:
             iter.script()->baselineScript()->setActive();
             break;
-          case IonFrame_OptimizedJS: {
+          case JitFrame_IonJS: {
             // Keep the baseline script around, since bailouts from the ion
             // jitcode might need to re-enter into the baseline jitcode.
             iter.script()->baselineScript()->setActive();

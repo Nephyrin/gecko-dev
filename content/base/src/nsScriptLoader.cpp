@@ -124,7 +124,8 @@ nsScriptLoader::nsScriptLoader(nsIDocument *aDocument)
     mBlockerCount(0),
     mEnabled(true),
     mDeferEnabled(false),
-    mDocumentParsingDone(false)
+    mDocumentParsingDone(false),
+    mBlockingDOMContentLoaded(false)
 {
   // enable logging for CSP
 #ifdef PR_LOGGING
@@ -656,7 +657,7 @@ nsScriptLoader::ProcessScriptElement(nsIScriptElement *aElement)
       NS_ASSERTION(mDocument->GetCurrentContentSink() ||
                    aElement->GetParserCreated() == FROM_PARSER_XSLT,
           "Non-XSLT Defer script on a document without an active parser; bug 592366.");
-      mDeferRequests.AppendElement(request);
+      AddDeferRequest(request);
       return false;
     }
 
@@ -853,7 +854,7 @@ nsScriptLoader::AttemptAsyncScriptParse(nsScriptLoadRequest* aRequest)
   // This reference will be consumed by OffThreadScriptLoaderCallback.
   NS_ADDREF(runnable);
 
-  if (!JS::CompileOffThread(cx, global, options,
+  if (!JS::CompileOffThread(cx, options,
                             aRequest->mScriptText.get(), aRequest->mScriptText.Length(),
                             OffThreadScriptLoaderCallback,
                             static_cast<void*>(runnable))) {
@@ -1027,8 +1028,9 @@ nsScriptLoader::FillCompileOptionsForRequest(nsScriptLoadRequest *aRequest,
   // compartments with it... and in particular, it will compile in the
   // compartment of aScopeChain, so we want to wrap into that compartment as
   // well.
-  if (NS_SUCCEEDED(nsContentUtils::WrapNative(cx, aScopeChain,
-                                              aRequest->mElement, &elementVal,
+  JSAutoCompartment ac(cx, aScopeChain);
+  if (NS_SUCCEEDED(nsContentUtils::WrapNative(cx, aRequest->mElement,
+                                              &elementVal,
                                               /* aAllowWrapping = */ true))) {
     MOZ_ASSERT(elementVal.isObject());
     aOptions->setElement(&elementVal.toObject());
@@ -1040,8 +1042,6 @@ nsScriptLoader::EvaluateScript(nsScriptLoadRequest* aRequest,
                                const nsAFlatString& aScript,
                                void** aOffThreadToken)
 {
-  nsresult rv = NS_OK;
-
   // We need a document to evaluate scripts.
   if (!mDocument) {
     return NS_ERROR_FAILURE;
@@ -1070,6 +1070,11 @@ nsScriptLoader::EvaluateScript(nsScriptLoadRequest* aRequest,
     return NS_ERROR_FAILURE;
   }
 
+  JSVersion version = JSVersion(aRequest->mJSVersion);
+  if (version == JSVERSION_UNKNOWN) {
+    return NS_OK;
+  }
+
   // New script entry point required, due to the "Create a script" sub-step of
   // http://www.whatwg.org/specs/web-apps/current-work/#execute-the-script-block
   AutoEntryScript entryScript(globalObject, true, context->GetNativeContext());
@@ -1083,14 +1088,10 @@ nsScriptLoader::EvaluateScript(nsScriptLoadRequest* aRequest,
   nsCOMPtr<nsIScriptElement> oldCurrent = mCurrentScript;
   mCurrentScript = aRequest->mElement;
 
-  JSVersion version = JSVersion(aRequest->mJSVersion);
-  if (version != JSVERSION_UNKNOWN) {
-    JS::CompileOptions options(entryScript.cx());
-    FillCompileOptionsForRequest(aRequest, global, &options);
-    nsJSUtils::EvaluateOptions evalOptions;
-    rv = nsJSUtils::EvaluateString(entryScript.cx(), aScript, global, options,
-                                   evalOptions, nullptr, aOffThreadToken);
-  }
+  JS::CompileOptions options(entryScript.cx());
+  FillCompileOptionsForRequest(aRequest, global, &options);
+  nsresult rv = nsJSUtils::EvaluateString(entryScript.cx(), aScript, global, options,
+                                          aOffThreadToken);
 
   // Put the old script back in case it wants to do anything else.
   mCurrentScript = oldCurrent;
@@ -1171,6 +1172,9 @@ nsScriptLoader::ProcessPendingRequests()
       !mParserBlockingRequest && mAsyncRequests.IsEmpty() &&
       mNonAsyncExternalScriptInsertedRequests.IsEmpty() &&
       mXSLTRequests.IsEmpty() && mDeferRequests.IsEmpty()) {
+    if (MaybeRemovedDeferRequests()) {
+      return ProcessPendingRequests();
+    }
     // No more pending scripts; time to unblock onload.
     // OK to unblock onload synchronously here, since callers must be
     // prepared for the world changing anyway.
@@ -1334,12 +1338,16 @@ nsScriptLoader::OnStreamComplete(nsIStreamLoader* aLoader,
     } else {
       mPreloads.RemoveElement(request, PreloadRequestComparator());
     }
+    rv = NS_OK;
+  } else {
+    NS_Free(const_cast<uint8_t *>(aString));
+    rv = NS_SUCCESS_ADOPTED_DATA;
   }
 
   // Process our request and/or any pending ones
   ProcessPendingRequests();
 
-  return NS_OK;
+  return rv;
 }
 
 void
@@ -1483,4 +1491,28 @@ nsScriptLoader::PreloadURI(nsIURI *aURI, const nsAString &aCharset,
   PreloadInfo *pi = mPreloads.AppendElement();
   pi->mRequest = request;
   pi->mCharset = aCharset;
+}
+
+void
+nsScriptLoader::AddDeferRequest(nsScriptLoadRequest* aRequest)
+{
+  mDeferRequests.AppendElement(aRequest);
+  if (mDeferEnabled && mDeferRequests.Length() == 1 && mDocument &&
+      !mBlockingDOMContentLoaded) {
+    MOZ_ASSERT(mDocument->GetReadyStateEnum() == nsIDocument::READYSTATE_LOADING);
+    mBlockingDOMContentLoaded = true;
+    mDocument->BlockDOMContentLoaded();
+  }
+}
+
+bool
+nsScriptLoader::MaybeRemovedDeferRequests()
+{
+  if (mDeferRequests.Length() == 0 && mDocument &&
+      mBlockingDOMContentLoaded) {
+    mBlockingDOMContentLoaded = false;
+    mDocument->UnblockDOMContentLoaded();
+    return true;
+  }
+  return false;
 }

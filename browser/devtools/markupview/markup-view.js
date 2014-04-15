@@ -289,15 +289,16 @@ MarkupView.prototype = {
     let done = this._inspector.updating("markup-view");
     if (selection.isNode()) {
       if (this._shouldNewSelectionBeHighlighted()) {
-        this._brieflyShowBoxModel(selection.nodeFront, {
-          scrollIntoView: true
-        });
+        this._brieflyShowBoxModel(selection.nodeFront, {});
       }
 
       this.showNode(selection.nodeFront, true).then(() => {
         if (selection.reason !== "treepanel") {
           this.markNodeAsSelected(selection.nodeFront);
         }
+        done();
+      }, (e) => {
+        console.error(e);
         done();
       });
     } else {
@@ -863,8 +864,10 @@ MarkupView.prototype = {
       let parent = node.parentNode();
       if (!container.elt.parentNode) {
         let parentContainer = this._containers.get(parent);
-        parentContainer.childrenDirty = true;
-        this._updateChildren(parentContainer, {expand: node});
+        if (parentContainer) {
+          parentContainer.childrenDirty = true;
+          this._updateChildren(parentContainer, {expand: node});
+        }
       }
 
       node = parent;

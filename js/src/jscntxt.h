@@ -266,6 +266,9 @@ struct ThreadSafeContext : ContextFriendFields,
         return runtime_->onOutOfMemory(p, nbytes, maybeJSContext());
     }
 
+    /* Clear the pending exception (if any) due to OOM. */
+    void recoverFromOutOfMemory();
+
     inline void updateMallocCounter(size_t nbytes) {
         // Note: this is racy.
         runtime_->updateMallocCounter(zone_, nbytes);
@@ -347,6 +350,7 @@ class ExclusiveContext : public ThreadSafeContext
 #endif
 
     inline void enterCompartment(JSCompartment *c);
+    inline void enterNullCompartment();
     inline void leaveCompartment(JSCompartment *oldCompartment);
 
     void setWorkerThread(WorkerThread *workerThread);
@@ -392,12 +396,6 @@ class ExclusiveContext : public ThreadSafeContext
     frontend::CompileError &addPendingCompileError();
     void addPendingOverRecursed();
 };
-
-inline void
-MaybeCheckStackRoots(ExclusiveContext *cx)
-{
-    MaybeCheckStackRoots(cx->maybeJSContext());
-}
 
 } /* namespace js */
 
@@ -562,6 +560,8 @@ struct JSContext : public js::ExclusiveContext,
 
     MOZ_WARN_UNUSED_RESULT
     bool getPendingException(JS::MutableHandleValue rval);
+
+    bool isThrowingOutOfMemory();
 
     void setPendingException(js::Value v);
 
@@ -934,7 +934,7 @@ class AutoArrayRooter : private AutoGCRooter
   public:
     AutoArrayRooter(JSContext *cx, size_t len, Value *vec
                     MOZ_GUARD_OBJECT_NOTIFIER_PARAM)
-      : AutoGCRooter(cx, len), array(vec), skip(cx, array, len)
+      : AutoGCRooter(cx, len), array(vec)
     {
         MOZ_GUARD_OBJECT_NOTIFIER_INIT;
         JS_ASSERT(tag_ >= 0);
@@ -980,7 +980,6 @@ class AutoArrayRooter : private AutoGCRooter
 
   private:
     Value *array;
-    js::SkipRoot skip;
     MOZ_DECL_USE_GUARD_OBJECT_NOTIFIER
 };
 
@@ -1030,6 +1029,7 @@ bool intrinsic_ThrowError(JSContext *cx, unsigned argc, Value *vp);
 bool intrinsic_NewDenseArray(JSContext *cx, unsigned argc, Value *vp);
 
 bool intrinsic_UnsafePutElements(JSContext *cx, unsigned argc, Value *vp);
+bool intrinsic_DefineValueProperty(JSContext *cx, unsigned argc, Value *vp);
 bool intrinsic_UnsafeSetReservedSlot(JSContext *cx, unsigned argc, Value *vp);
 bool intrinsic_UnsafeGetReservedSlot(JSContext *cx, unsigned argc, Value *vp);
 bool intrinsic_HaveSameClass(JSContext *cx, unsigned argc, Value *vp);

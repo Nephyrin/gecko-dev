@@ -10,7 +10,6 @@
 
 #include "jsnum.h"
 
-#include "jit/ExecutionModeInlines.h"
 #include "jit/IonCaches.h"
 #include "jit/MIR.h"
 #include "jit/MIRGraph.h"
@@ -18,6 +17,7 @@
 
 #include "jsscriptinlines.h"
 
+#include "jit/ExecutionMode-inl.h"
 #include "jit/shared/CodeGenerator-shared-inl.h"
 
 using namespace js;
@@ -687,13 +687,17 @@ CodeGeneratorX86::postAsmJSCall(LAsmJSCall *lir)
         return;
 
     if (mir->type() == MIRType_Float32) {
-        Operand op(esp, -sizeof(float));
+        masm.reserveStack(sizeof(float));
+        Operand op(esp, 0);
         masm.fstp32(op);
         masm.loadFloat32(op, ReturnFloatReg);
+        masm.freeStack(sizeof(float));
     } else {
-        Operand op(esp, -sizeof(double));
+        masm.reserveStack(sizeof(double));
+        Operand op(esp, 0);
         masm.fstp(op);
         masm.loadDouble(op, ReturnFloatReg);
+        masm.freeStack(sizeof(double));
     }
 }
 

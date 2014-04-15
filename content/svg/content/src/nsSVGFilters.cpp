@@ -64,8 +64,6 @@ nsSVGElement::LengthInfo nsSVGFE::sLengthInfo[4] =
 NS_IMPL_ADDREF_INHERITED(nsSVGFE,nsSVGFEBase)
 NS_IMPL_RELEASE_INHERITED(nsSVGFE,nsSVGFEBase)
 
-NS_DEFINE_STATIC_IID_ACCESSOR(nsSVGFE, NS_SVG_FE_CID)
-
 NS_INTERFACE_MAP_BEGIN(nsSVGFE)
    // nsISupports is an ambiguous base of nsSVGFE so we have to work
    // around that
@@ -245,8 +243,6 @@ nsSVGElement::EnumInfo SVGComponentTransferFunctionElement::sEnumInfo[1] =
 NS_IMPL_ADDREF_INHERITED(SVGComponentTransferFunctionElement,SVGComponentTransferFunctionElementBase)
 NS_IMPL_RELEASE_INHERITED(SVGComponentTransferFunctionElement,SVGComponentTransferFunctionElementBase)
 
-NS_DEFINE_STATIC_IID_ACCESSOR(SVGComponentTransferFunctionElement, NS_SVG_FE_COMPONENT_TRANSFER_FUNCTION_ELEMENT_CID)
-
 NS_INTERFACE_MAP_BEGIN(SVGComponentTransferFunctionElement)
    // nsISupports is an ambiguous base of nsSVGFE so we have to work
    // around that
@@ -370,9 +366,9 @@ SVGComponentTransferFunctionElement::GetNumberInfo()
 }
 
 /* virtual */ JSObject*
-SVGFEFuncRElement::WrapNode(JSContext* aCx, JS::Handle<JSObject*> aScope)
+SVGFEFuncRElement::WrapNode(JSContext* aCx)
 {
-  return SVGFEFuncRElementBinding::Wrap(aCx, aScope, this);
+  return SVGFEFuncRElementBinding::Wrap(aCx, this);
 }
 
 } // namespace dom
@@ -386,9 +382,9 @@ namespace dom {
 NS_IMPL_ELEMENT_CLONE_WITH_INIT(SVGFEFuncRElement)
 
 /* virtual */ JSObject*
-SVGFEFuncGElement::WrapNode(JSContext* aCx, JS::Handle<JSObject*> aScope)
+SVGFEFuncGElement::WrapNode(JSContext* aCx)
 {
-  return SVGFEFuncGElementBinding::Wrap(aCx, aScope, this);
+  return SVGFEFuncGElementBinding::Wrap(aCx, this);
 }
 
 } // namespace dom
@@ -402,9 +398,9 @@ namespace dom {
 NS_IMPL_ELEMENT_CLONE_WITH_INIT(SVGFEFuncGElement)
 
 /* virtual */ JSObject*
-SVGFEFuncBElement::WrapNode(JSContext* aCx, JS::Handle<JSObject*> aScope)
+SVGFEFuncBElement::WrapNode(JSContext* aCx)
 {
-  return SVGFEFuncBElementBinding::Wrap(aCx, aScope, this);
+  return SVGFEFuncBElementBinding::Wrap(aCx, this);
 }
 
 } // namespace dom
@@ -418,9 +414,9 @@ namespace dom {
 NS_IMPL_ELEMENT_CLONE_WITH_INIT(SVGFEFuncBElement)
 
 /* virtual */ JSObject*
-SVGFEFuncAElement::WrapNode(JSContext* aCx, JS::Handle<JSObject*> aScope)
+SVGFEFuncAElement::WrapNode(JSContext* aCx)
 {
-  return SVGFEFuncAElementBinding::Wrap(aCx, aScope, this);
+  return SVGFEFuncAElementBinding::Wrap(aCx, this);
 }
 
 } // namespace dom

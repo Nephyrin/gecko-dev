@@ -48,7 +48,6 @@
     macro(DateTimeFormatFormatGet, DateTimeFormatFormatGet, "Intl_DateTimeFormat_format_get") \
     macro(decodeURI, decodeURI, "decodeURI") \
     macro(decodeURIComponent, decodeURIComponent, "decodeURIComponent") \
-    macro(DescrToSource, DescrToSource, "DescrToSource") \
     macro(default_, default_, "default") \
     macro(defineProperty, defineProperty, "defineProperty") \
     macro(defineGetter, defineGetter, "__defineGetter__") \
@@ -128,6 +127,10 @@
     macro(name, name, "name") \
     macro(NaN, NaN, "NaN") \
     macro(next, next, "next") \
+    macro(NFC, NFC, "NFC") \
+    macro(NFD, NFD, "NFD") \
+    macro(NFKC, NFKC, "NFKC") \
+    macro(NFKD, NFKD, "NFKD") \
     macro(noSuchMethod, noSuchMethod, "__noSuchMethod__") \
     macro(NumberFormat, NumberFormat, "NumberFormat") \
     macro(NumberFormatFormatGet, NumberFormatFormatGet, "Intl_NumberFormat_format_get") \

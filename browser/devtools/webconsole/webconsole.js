@@ -401,6 +401,11 @@ WebConsoleFrame.prototype = {
    */
   setSaveRequestAndResponseBodies:
   function WCF_setSaveRequestAndResponseBodies(aValue) {
+    if (!this.webConsoleClient) {
+      // Don't continue if the webconsole disconnected.
+      return promise.resolve(null);
+    }
+
     let deferred = promise.defer();
     let newValue = !!aValue;
     let toSet = {
@@ -3484,6 +3489,7 @@ JSTerm.prototype = {
 
     this._sidebarDestroy();
     this.inputNode.focus();
+    aEvent.stopPropagation();
   },
 
   /**
@@ -3917,10 +3923,12 @@ JSTerm.prototype = {
         if (this.autocompletePopup.isOpen) {
           this.clearCompletion();
           aEvent.preventDefault();
+          aEvent.stopPropagation();
         }
         else if (this.sidebar) {
           this._sidebarDestroy();
           aEvent.preventDefault();
+          aEvent.stopPropagation();
         }
         break;
 

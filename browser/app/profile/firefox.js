@@ -1176,7 +1176,7 @@ pref("devtools.profiler.ui.show-platform-data", false);
 pref("devtools.netmonitor.enabled", true);
 
 // The default Network Monitor UI settings
-pref("devtools.netmonitor.panes-network-details-width", 450);
+pref("devtools.netmonitor.panes-network-details-width", 550);
 pref("devtools.netmonitor.panes-network-details-height", 450);
 pref("devtools.netmonitor.statistics", true);
 pref("devtools.netmonitor.filters", "[\"all\"]");
@@ -1205,8 +1205,11 @@ pref("devtools.styleeditor.autocompletion-enabled", true);
 // Enable the Shader Editor.
 pref("devtools.shadereditor.enabled", false);
 
-// Enable tools for Chrome development.
-pref("devtools.chrome.enabled", false);
+// Enable the Canvas Debugger.
+pref("devtools.canvasdebugger.enabled", false);
+
+// Enable the Web Audio Editor
+pref("devtools.webaudioeditor.enabled", false);
 
 // Default theme ("dark" or "light")
 pref("devtools.theme", "light");
@@ -1225,8 +1228,8 @@ pref("devtools.webconsole.filter.csserror", true);
 pref("devtools.webconsole.filter.cssparser", false);
 pref("devtools.webconsole.filter.csslog", false);
 pref("devtools.webconsole.filter.exception", true);
-pref("devtools.webconsole.filter.jswarn", false);
-pref("devtools.webconsole.filter.jslog", true);
+pref("devtools.webconsole.filter.jswarn", true);
+pref("devtools.webconsole.filter.jslog", false);
 pref("devtools.webconsole.filter.error", true);
 pref("devtools.webconsole.filter.warn", true);
 pref("devtools.webconsole.filter.info", true);
@@ -1236,10 +1239,10 @@ pref("devtools.webconsole.filter.secwarn", true);
 
 // Remember the Browser Console filters
 pref("devtools.browserconsole.filter.network", true);
-pref("devtools.browserconsole.filter.networkinfo", true);
+pref("devtools.browserconsole.filter.networkinfo", false);
 pref("devtools.browserconsole.filter.netwarn", true);
 pref("devtools.browserconsole.filter.csserror", true);
-pref("devtools.browserconsole.filter.cssparser", true);
+pref("devtools.browserconsole.filter.cssparser", false);
 pref("devtools.browserconsole.filter.csslog", false);
 pref("devtools.browserconsole.filter.exception", true);
 pref("devtools.browserconsole.filter.jswarn", true);
@@ -1271,15 +1274,20 @@ pref("devtools.hud.loglimit.cssparser", 200);
 pref("devtools.hud.loglimit.exception", 200);
 pref("devtools.hud.loglimit.console", 200);
 
+// By how many times eyedropper will magnify pixels
+pref("devtools.eyedropper.zoom", 6);
+
 // The developer tools editor configuration:
 // - tabsize: how many spaces to use when a Tab character is displayed.
 // - expandtab: expand Tab characters to spaces.
 // - keymap: which keymap to use (can be 'default', 'emacs' or 'vim')
 // - autoclosebrackets: whether to permit automatic bracket/quote closing.
+// - detectindentation: whether to detect the indentation from the file
 pref("devtools.editor.tabsize", 4);
 pref("devtools.editor.expandtab", true);
 pref("devtools.editor.keymap", "default");
 pref("devtools.editor.autoclosebrackets", true);
+pref("devtools.editor.detectindentation", true);
 
 // Enable the Font Inspector
 pref("devtools.fontinspector.enabled", true);
@@ -1311,6 +1319,8 @@ pref("browser.newtabpage.rows", 3);
 
 // number of columns of newtab grid
 pref("browser.newtabpage.columns", 3);
+
+pref("browser.newtabpage.directorySource", "data:application/json,{}");
 
 // Enable the DOM fullscreen API.
 pref("full-screen-api.enabled", true);
@@ -1360,6 +1370,8 @@ pref("security.csp.speccompliant", true);
 // Block insecure active content on https pages
 pref("security.mixed_content.block_active_content", true);
 
+pref("security.use_mozillapkix_verification", true);
+
 // Override the Gecko-default value of false for Firefox.
 pref("plain_text.wrap_long_lines", true);
 
@@ -1408,6 +1420,10 @@ pref("ui.key.menuAccessKeyFocuses", true);
 
 // Delete HTTP cache v2 data of users that didn't opt-in manually
 pref("browser.cache.auto_delete_cache_version", 1);
+// Play with different values of the decay time and get telemetry,
+// 0 means to randomize (and persist) the experiment value in users' profiles,
+// -1 means no experiment is run and we use the preferred value for frecency (6h)
+pref("browser.cache.frecency_experiment", 0);
 
 // Telemetry experiments settings.
 pref("experiments.enabled", false);
@@ -1415,3 +1431,5 @@ pref("experiments.manifest.fetchIntervalSeconds", 86400);
 pref("experiments.manifest.uri", "https://telemetry-experiment.cdn.mozilla.net/manifest/v1/firefox/%VERSION%/%CHANNEL%");
 pref("experiments.manifest.certs.1.commonName", "*.cdn.mozilla.net");
 pref("experiments.manifest.certs.1.issuerName", "CN=Cybertrust Public SureServer SV CA,O=Cybertrust Inc");
+// Whether experiments are supported by the current application profile.
+pref("experiments.supported", true);

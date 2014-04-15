@@ -42,7 +42,6 @@
 #include "nsITextControlFrame.h"
 #include "nsIFrame.h"
 #include "nsRangeFrame.h"
-#include "nsEventStates.h"
 #include "nsIServiceManager.h"
 #include "nsError.h"
 #include "nsIEditor.h"
@@ -62,6 +61,7 @@
 #include "nsIDOMMutationEvent.h"
 #include "mozilla/ContentEvents.h"
 #include "mozilla/EventDispatcher.h"
+#include "mozilla/EventStates.h"
 #include "mozilla/InternalMutationEvent.h"
 #include "mozilla/TextEvents.h"
 #include "mozilla/TouchEvents.h"
@@ -272,8 +272,9 @@ class HTMLInputElementState MOZ_FINAL : public nsISupports
     bool mCheckedSet;
 };
 
-NS_IMPL_ISUPPORTS1(HTMLInputElementState, HTMLInputElementState)
 NS_DEFINE_STATIC_IID_ACCESSOR(HTMLInputElementState, NS_INPUT_ELEMENT_STATE_IID)
+
+NS_IMPL_ISUPPORTS1(HTMLInputElementState, HTMLInputElementState)
 
 HTMLInputElement::nsFilePickerShownCallback::nsFilePickerShownCallback(
   HTMLInputElement* aInput, nsIFilePicker* aFilePicker)
@@ -3229,7 +3230,7 @@ HTMLInputElement::NeedToInitializeEditorForEvent(
   // are lazily initialized.  We don't need to initialize the control for
   // certain types of events, because we know that those events are safe to be
   // handled without the editor being initialized.  These events include:
-  // mousein/move/out, and DOM mutation events.
+  // mousein/move/out, overflow/underflow, and DOM mutation events.
   if (!IsSingleLineTextControl(false) ||
       aVisitor.mEvent->eventStructType == NS_MUTATION_EVENT) {
     return false;
@@ -3241,6 +3242,8 @@ HTMLInputElement::NeedToInitializeEditorForEvent(
   case NS_MOUSE_EXIT:
   case NS_MOUSE_ENTER_SYNTH:
   case NS_MOUSE_EXIT_SYNTH:
+  case NS_SCROLLPORT_UNDERFLOW:
+  case NS_SCROLLPORT_OVERFLOW:
     return false;
   default:
     return true;
@@ -3492,7 +3495,7 @@ HTMLInputElement::PreHandleEvent(EventChainPreVisitor& aVisitor)
       textControl = numberControlFrame->GetAnonTextControl();
     }
     if (textControl && aVisitor.mEvent->originalTarget == textControl) {
-      if (aVisitor.mEvent->message == NS_FORM_INPUT) {
+      if (aVisitor.mEvent->message == NS_EDITOR_INPUT) {
         // Propogate the anon text control's new value to our HTMLInputElement:
         nsAutoString value;
         numberControlFrame->GetValueOfAnonTextControl(value);
@@ -3916,7 +3919,7 @@ HTMLInputElement::PostHandleEvent(EventChainPostVisitor& aVisitor)
       // the editor's handling of up/down keypress events. For that reason we
       // just ignore aVisitor.mEventStatus here and go ahead and handle the
       // event to increase/decrease the value of the number control.
-      if (!aVisitor.mEvent->mFlags.mDefaultPreventedByContent) {
+      if (!aVisitor.mEvent->mFlags.mDefaultPreventedByContent && IsMutable()) {
         StepNumberControlForUserEvent(keyEvent->keyCode == NS_VK_UP ? 1 : -1);
         aVisitor.mEventStatus = nsEventStatus_eConsumeNoDefault;
       }
@@ -4142,7 +4145,8 @@ HTMLInputElement::PostHandleEvent(EventChainPostVisitor& aVisitor)
               nsNumberControlFrame* numberControlFrame =
                 do_QueryFrame(GetPrimaryFrame());
               if (numberControlFrame) {
-                if (aVisitor.mEvent->message == NS_MOUSE_BUTTON_DOWN) {
+                if (aVisitor.mEvent->message == NS_MOUSE_BUTTON_DOWN && 
+                    IsMutable()) {
                   switch (numberControlFrame->GetSpinButtonForPointerEvent(
                             aVisitor.mEvent->AsMouseEvent())) {
                   case nsNumberControlFrame::eSpinButtonUp:
@@ -5726,13 +5730,13 @@ HTMLInputElement::DoneCreatingElement()
   mShouldInitChecked = false;
 }
 
-nsEventStates
+EventStates
 HTMLInputElement::IntrinsicState() const
 {
   // If you add states here, and they're type-dependent, you need to add them
   // to the type case in AfterSetAttr.
 
-  nsEventStates state = nsGenericHTMLFormElementWithState::IntrinsicState();
+  EventStates state = nsGenericHTMLFormElementWithState::IntrinsicState();
   if (mType == NS_FORM_INPUT_CHECKBOX || mType == NS_FORM_INPUT_RADIO) {
     // Check current checked state (:checked)
     if (mChecked) {
@@ -5804,11 +5808,11 @@ HTMLInputElement::IntrinsicState() const
 }
 
 void
-HTMLInputElement::AddStates(nsEventStates aStates)
+HTMLInputElement::AddStates(EventStates aStates)
 {
   if (mType == NS_FORM_INPUT_TEXT) {
-    nsEventStates focusStates(aStates & (NS_EVENT_STATE_FOCUS |
-                                         NS_EVENT_STATE_FOCUSRING));
+    EventStates focusStates(aStates & (NS_EVENT_STATE_FOCUS |
+                                       NS_EVENT_STATE_FOCUSRING));
     if (!focusStates.IsEmpty()) {
       HTMLInputElement* ownerNumberControl = GetOwnerNumberControl();
       if (ownerNumberControl) {
@@ -5820,11 +5824,11 @@ HTMLInputElement::AddStates(nsEventStates aStates)
 }
 
 void
-HTMLInputElement::RemoveStates(nsEventStates aStates)
+HTMLInputElement::RemoveStates(EventStates aStates)
 {
   if (mType == NS_FORM_INPUT_TEXT) {
-    nsEventStates focusStates(aStates & (NS_EVENT_STATE_FOCUS |
-                                         NS_EVENT_STATE_FOCUSRING));
+    EventStates focusStates(aStates & (NS_EVENT_STATE_FOCUS |
+                                       NS_EVENT_STATE_FOCUSRING));
     if (!focusStates.IsEmpty()) {
       HTMLInputElement* ownerNumberControl = GetOwnerNumberControl();
       if (ownerNumberControl) {
@@ -7408,9 +7412,9 @@ HTMLInputElement::PickerClosed()
 }
 
 JSObject*
-HTMLInputElement::WrapNode(JSContext* aCx, JS::Handle<JSObject*> aScope)
+HTMLInputElement::WrapNode(JSContext* aCx)
 {
-  return HTMLInputElementBinding::Wrap(aCx, aScope, this);
+  return HTMLInputElementBinding::Wrap(aCx, this);
 }
 
 } // namespace dom

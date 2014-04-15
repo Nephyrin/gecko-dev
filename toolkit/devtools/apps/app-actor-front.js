@@ -3,7 +3,7 @@ Cu.import("resource://gre/modules/osfile.jsm");
 const {Services} = Cu.import("resource://gre/modules/Services.jsm");
 const {FileUtils} = Cu.import("resource://gre/modules/FileUtils.jsm");
 const {devtools} = Cu.import("resource://gre/modules/devtools/Loader.jsm", {});
-const promise = require("sdk/core/promise");
+const {Promise: promise} = Cu.import("resource://gre/modules/Promise.jsm", {});
 
 // XXX: bug 912476 make this module a real protocol.js front
 // by converting webapps actor to protocol.js
@@ -24,7 +24,6 @@ function addDirToZip(writer, dir, basePath) {
     let file = files.getNext().QueryInterface(Ci.nsIFile);
 
     if (file.isHidden() ||
-        file.isSymlink() ||
         file.isSpecial() ||
         file.equals(writer.file))
     {

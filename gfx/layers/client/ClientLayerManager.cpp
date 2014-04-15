@@ -7,7 +7,7 @@
 #include "CompositorChild.h"            // for CompositorChild
 #include "GeckoProfiler.h"              // for PROFILER_LABEL
 #include "gfxASurface.h"                // for gfxASurface, etc
-#include "ipc/AutoOpenSurface.h"        // for AutoOpenSurface
+#include "gfxPrefs.h"                   // for gfxPrefs::LayersTileWidth/Height
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT, etc
 #include "mozilla/Hal.h"
 #include "mozilla/dom/ScreenOrientation.h"  // for ScreenOrientation
@@ -24,6 +24,7 @@
 #include "mozilla/layers/SimpleTextureClientPool.h" // for SimpleTextureClientPool
 #include "nsAString.h"
 #include "nsIWidget.h"                  // for nsIWidget
+#include "nsIWidgetListener.h"
 #include "nsTArray.h"                   // for AutoInfallibleTArray
 #include "nsXULAppAPI.h"                // for XRE_GetProcessType, etc
 #include "TiledLayerBuffer.h"
@@ -271,6 +272,20 @@ ClientLayerManager::Composite()
   }
 }
 
+void
+ClientLayerManager::DidComposite()
+{
+  MOZ_ASSERT(mWidget);
+  nsIWidgetListener *listener = mWidget->GetWidgetListener();
+  if (listener) {
+    listener->DidCompositeWindow();
+  }
+  listener = mWidget->GetAttachedWidgetListener();
+  if (listener) {
+    listener->DidCompositeWindow();
+  }
+}
+
 void 
 ClientLayerManager::MakeSnapshotIfRequired()
 {
@@ -281,18 +296,21 @@ ClientLayerManager::MakeSnapshotIfRequired()
     if (CompositorChild* remoteRenderer = GetRemoteRenderer()) {
       nsIntRect bounds;
       mWidget->GetBounds(bounds);
+      IntSize widgetSize = bounds.Size().ToIntSize();
       SurfaceDescriptor inSnapshot, snapshot;
-      if (mForwarder->AllocSurfaceDescriptor(bounds.Size().ToIntSize(),
+      if (mForwarder->AllocSurfaceDescriptor(widgetSize,
                                              gfxContentType::COLOR_ALPHA,
                                              &inSnapshot) &&
           // The compositor will usually reuse |snapshot| and return
           // it through |outSnapshot|, but if it doesn't, it's
           // responsible for freeing |snapshot|.
           remoteRenderer->SendMakeSnapshot(inSnapshot, &snapshot)) {
-        AutoOpenSurface opener(OPEN_READ_ONLY, snapshot);
-        gfxASurface* source = opener.Get();
-
-        mShadowTarget->DrawSurface(source, source->GetSize());
+        RefPtr<DataSourceSurface> surf = GetSurfaceForDescriptor(snapshot);
+        DrawTarget* dt = mShadowTarget->GetDrawTarget();
+        Rect widgetRect(Point(0, 0), Size(widgetSize.width, widgetSize.height));
+        dt->DrawSurface(surf, widgetRect, widgetRect,
+                        DrawSurfaceOptions(),
+                        DrawOptions(1.0f, CompositionOp::OP_OVER));
       }
       if (IsSurfaceDescriptorValid(snapshot)) {
         mForwarder->DestroySharedSurface(&snapshot);
@@ -352,7 +370,7 @@ ClientLayerManager::ForwardTransaction(bool aScheduleComposite)
   // forward this transaction's changeset to our LayerManagerComposite
   bool sent;
   AutoInfallibleTArray<EditReply, 10> replies;
-  if (HasShadowManager() && mForwarder->EndTransaction(&replies, aScheduleComposite, &sent)) {
+  if (HasShadowManager() && mForwarder->EndTransaction(&replies, mRegionToClear, aScheduleComposite, &sent)) {
     for (nsTArray<EditReply>::size_type i = 0; i < replies.Length(); ++i) {
       const EditReply& reply = replies[i];
 
@@ -457,8 +475,8 @@ ClientLayerManager::GetTexturePool(SurfaceFormat aFormat)
   }
 
   mTexturePools.AppendElement(
-      new TextureClientPool(aFormat, IntSize(TILEDLAYERBUFFER_TILE_SIZE,
-                                             TILEDLAYERBUFFER_TILE_SIZE),
+      new TextureClientPool(aFormat, IntSize(gfxPrefs::LayersTileWidth(),
+                                             gfxPrefs::LayersTileHeight()),
                             mForwarder));
 
   return mTexturePools.LastElement();
@@ -471,8 +489,8 @@ ClientLayerManager::GetSimpleTileTexturePool(SurfaceFormat aFormat)
   mSimpleTilePools.EnsureLengthAtLeast(index+1);
 
   if (mSimpleTilePools[index].get() == nullptr) {
-    mSimpleTilePools[index] = new SimpleTextureClientPool(aFormat, IntSize(TILEDLAYERBUFFER_TILE_SIZE,
-                                                                           TILEDLAYERBUFFER_TILE_SIZE),
+    mSimpleTilePools[index] = new SimpleTextureClientPool(aFormat, IntSize(gfxPrefs::LayersTileWidth(),
+                                                                           gfxPrefs::LayersTileHeight()),
                                                           mForwarder);
   }
 

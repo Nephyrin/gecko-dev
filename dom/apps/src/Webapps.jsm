@@ -43,6 +43,9 @@ Cu.import("resource://gre/modules/osfile.jsm");
 Cu.import("resource://gre/modules/Task.jsm");
 Cu.import("resource://gre/modules/Promise.jsm");
 
+XPCOMUtils.defineLazyModuleGetter(this, "TrustedRootCertificate",
+  "resource://gre/modules/StoreTrustAnchor.jsm");
+
 XPCOMUtils.defineLazyModuleGetter(this, "PermissionsInstaller",
   "resource://gre/modules/PermissionsInstaller.jsm");
 
@@ -178,7 +181,7 @@ this.DOMApplicationRegistry = {
 
   // loads the current registry, that could be empty on first run.
   loadCurrentRegistry: function() {
-    return this._loadJSONAsync(this.appsFile).then((aData) => {
+    return AppsUtils.loadJSONAsync(this.appsFile).then((aData) => {
       if (!aData) {
         return;
       }
@@ -513,7 +516,7 @@ this.DOMApplicationRegistry = {
       }
 
       // a
-      let data = yield this._loadJSONAsync(file.path);
+      let data = yield AppsUtils.loadJSONAsync(file.path);
       if (!data) {
         return;
       }
@@ -550,6 +553,12 @@ this.DOMApplicationRegistry = {
           if (this.webapps[id].removable === undefined) {
             this.webapps[id].removable = false;
           }
+        } else {
+          // we fall into this case if the app is present in /system/b2g/webapps/webapps.json
+          // and in /data/local/webapps/webapps.json: this happens when updating gaia apps
+          // Confere bug 989876
+          this.webapps[id].updateTime = data[id].updateTime;
+          this.webapps[id].lastUpdateCheck = data[id].updateTime;
         }
       }
     }.bind(this)).then(null, Cu.reportError);
@@ -944,56 +953,6 @@ this.DOMApplicationRegistry = {
     }
   },
 
-  _loadJSONAsync: function(aPath) {
-    let deferred = Promise.defer();
-
-    try {
-      let file = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
-      file.initWithPath(aPath);
-      let channel = NetUtil.newChannel(file);
-      channel.contentType = "application/json";
-      NetUtil.asyncFetch(channel, function(aStream, aResult) {
-        if (!Components.isSuccessCode(aResult)) {
-          deferred.resolve(null);
-
-          if (aResult == Cr.NS_ERROR_FILE_NOT_FOUND) {
-            // We expect this under certain circumstances, like for webapps.json
-            // on firstrun, so we return early without reporting an error.
-            return;
-          }
-
-          Cu.reportError("DOMApplicationRegistry: Could not read from json file "
-                         + aPath);
-          return;
-        }
-
-        try {
-          // Obtain a converter to read from a UTF-8 encoded input stream.
-          let converter = Cc["@mozilla.org/intl/scriptableunicodeconverter"]
-                          .createInstance(Ci.nsIScriptableUnicodeConverter);
-          converter.charset = "UTF-8";
-
-          // Read json file into a string
-          let data = JSON.parse(converter.ConvertToUnicode(NetUtil.readInputStreamToString(aStream,
-                                                            aStream.available()) || ""));
-          aStream.close();
-
-          deferred.resolve(data);
-        } catch (ex) {
-          Cu.reportError("DOMApplicationRegistry: Could not parse JSON: " +
-                         aPath + " " + ex + "\n" + ex.stack);
-          deferred.resolve(null);
-        }
-      });
-    } catch (ex) {
-      Cu.reportError("DOMApplicationRegistry: Could not read from " +
-                     aPath + " : " + ex + "\n" + ex.stack);
-      deferred.resolve(null);
-    }
-
-    return deferred.promise;
-  },
-
   addMessageListener: function(aMsgNames, aApp, aMm) {
     aMsgNames.forEach(function (aMsgName) {
       let man = aApp && aApp.manifestURL;
@@ -1229,10 +1188,30 @@ this.DOMApplicationRegistry = {
   _writeFile: function(aPath, aData) {
     debug("Saving " + aPath);
 
-    return OS.File.writeAtomic(aPath,
-                               new TextEncoder().encode(aData),
-                               { tmpPath: aPath + ".tmp" })
-                  .then(null, Cu.reportError);
+    let deferred = Promise.defer();
+
+    let file = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
+    file.initWithPath(aPath);
+
+    // Initialize the file output stream
+    let ostream = FileUtils.openSafeFileOutputStream(file);
+
+    // Obtain a converter to convert our data to a UTF-8 encoded input stream.
+    let converter = Cc["@mozilla.org/intl/scriptableunicodeconverter"]
+                      .createInstance(Ci.nsIScriptableUnicodeConverter);
+    converter.charset = "UTF-8";
+
+    // Asynchronously copy the data to the file.
+    let istream = converter.convertToInputStream(aData);
+    NetUtil.asyncCopy(istream, ostream, function(aResult) {
+      if (!Components.isSuccessCode(aResult)) {
+        deferred.reject()
+      } else {
+        deferred.resolve();
+      }
+    });
+
+    return deferred.promise;
   },
 
   doLaunch: function (aData, aMm) {
@@ -1401,7 +1380,7 @@ this.DOMApplicationRegistry = {
       return;
     }
 
-    this._loadJSONAsync(file.path).then((aJSON) => {
+    AppsUtils.loadJSONAsync(file.path).then((aJSON) => {
       if (!aJSON) {
         debug("startDownload: No update manifest found at " + file.path + " " +
               aManifestURL);
@@ -1514,7 +1493,7 @@ this.DOMApplicationRegistry = {
           // Update the handlers and permissions for this app.
           this.updateAppHandlers(aOldManifest, aData, app);
 
-          this._loadJSONAsync(staged.path).then((aUpdateManifest) => {
+          AppsUtils.loadJSONAsync(staged.path).then((aUpdateManifest) => {
             let appObject = AppsUtils.cloneAppObject(app);
             appObject.updateManifest = aUpdateManifest;
             this.notifyUpdateHandlers(appObject, aData, appFile.path);
@@ -2357,6 +2336,76 @@ onInstallSuccessAck: function onInstallSuccessAck(aManifestURL,
     this._writeFile(manFile, JSON.stringify(aJsonManifest));
   },
 
+  // Add an app that is already installed to the registry.
+  addInstalledApp: Task.async(function*(aApp, aManifest, aUpdateManifest) {
+    if (this.getAppLocalIdByManifestURL(aApp.manifestURL) !=
+        Ci.nsIScriptSecurityManager.NO_APP_ID) {
+      return;
+    }
+
+    let app = AppsUtils.cloneAppObject(aApp);
+
+    if (!AppsUtils.checkManifest(aManifest, app) ||
+        (aUpdateManifest && !AppsUtils.checkManifest(aUpdateManifest, app))) {
+      return;
+    }
+
+    app.name = aManifest.name;
+
+    app.csp = aManifest.csp || "";
+
+    app.appStatus = AppsUtils.getAppManifestStatus(aManifest);
+
+    app.removable = true;
+
+    // Reuse the app ID if the scheme is "app".
+    let uri = Services.io.newURI(app.origin, null, null);
+    if (uri.scheme == "app") {
+      app.id = uri.host;
+    } else {
+      app.id = this.makeAppId();
+    }
+
+    app.localId = this._nextLocalId();
+
+    app.basePath = OS.Path.dirname(this.appsFile);
+
+    app.progress = 0.0;
+    app.installState = "installed";
+    app.downloadAvailable = false;
+    app.downloading = false;
+    app.readyToApplyDownload = false;
+
+    if (aUpdateManifest && aUpdateManifest.size) {
+      app.downloadSize = aUpdateManifest.size;
+    }
+
+    app.manifestHash = AppsUtils.computeHash(JSON.stringify(aUpdateManifest ||
+                                                            aManifest));
+
+    let zipFile = WebappOSUtils.getPackagePath(app);
+    app.packageHash = yield this._computeFileHash(zipFile);
+
+    app.role = aManifest.role || "";
+
+    app.redirects = this.sanitizeRedirects(aManifest.redirects);
+
+    this.webapps[app.id] = app;
+
+    // Store the manifest in the manifest cache, so we don't need to re-read it
+    this._manifestCache[app.id] = app.manifest;
+
+    // Store the manifest and the updateManifest.
+    this._writeManifestFile(app.id, false, aManifest);
+    if (aUpdateManifest) {
+      this._writeManifestFile(app.id, true, aUpdateManifest);
+    }
+
+    this._saveApps().then(() => {
+      this.broadcastMessage("Webapps:AddApp", { id: app.id, app: app });
+    });
+  }),
+
   confirmInstall: function(aData, aProfileDir, aInstallSuccessCallback) {
     debug("confirmInstall");
 
@@ -2605,7 +2654,7 @@ onInstallSuccessAck: function onInstallSuccessAck(aManifestURL,
 
           let fileNames = ["manifest.webapp", "update.webapp", "manifest.json"];
           for (let fileName of fileNames) {
-            this._manifestCache[id] = yield this._loadJSONAsync(OS.Path.join(dir.path, fileName));
+            this._manifestCache[id] = yield AppsUtils.loadJSONAsync(OS.Path.join(dir.path, fileName));
             if (this._manifestCache[id]) {
               break;
             }
@@ -2896,39 +2945,30 @@ onInstallSuccessAck: function onInstallSuccessAck(aManifestURL,
    * @returns {String} the MD5 hash of the file
    */
   _computeFileHash: function(aFilePath) {
-    return Task.spawn(function*() {
+    let deferred = Promise.defer();
+
+    let file = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsIFile);
+    file.initWithPath(aFilePath);
+
+    NetUtil.asyncFetch(file, function(inputStream, status) {
+      if (!Components.isSuccessCode(status)) {
+        debug("Error reading " + aFilePath + ": " + e);
+        deferred.reject();
+        return;
+      }
+
       let hasher = Cc["@mozilla.org/security/hash;1"]
                      .createInstance(Ci.nsICryptoHash);
       // We want to use the MD5 algorithm.
       hasher.init(hasher.MD5);
 
-      const CHUNK_SIZE = 16384;
+      const PR_UINT32_MAX = 0xffffffff;
+      hasher.updateFromStream(inputStream, PR_UINT32_MAX);
 
       // Return the two-digit hexadecimal code for a byte.
       function toHexString(charCode) {
         return ("0" + charCode.toString(16)).slice(-2);
       }
-
-      let file;
-      try {
-        file = yield OS.File.open(aFilePath, { read: true });
-      } catch(e) {
-        debug("Error opening " + aFilePath + ": " + e);
-        return null;
-      }
-
-      try {
-        let array;
-        do {
-          array = yield file.read(CHUNK_SIZE);
-          hasher.update(array, array.length);
-        } while (array.length == CHUNK_SIZE);
-      } catch(e) {
-        debug("Error reading " + aFilePath + ": " + e);
-        return null;
-      }
-
-      yield file.close();
 
       // We're passing false to get the binary hash and not base64.
       let data = hasher.finish(false);
@@ -2936,8 +2976,10 @@ onInstallSuccessAck: function onInstallSuccessAck(aManifestURL,
       let hash = [toHexString(data.charCodeAt(i)) for (i in data)].join("");
       debug("File hash computed: " + hash);
 
-      return hash;
+      deferred.resolve(hash);
     });
+
+    return deferred.promise;
   },
 
   /**
@@ -2965,12 +3007,15 @@ onInstallSuccessAck: function onInstallSuccessAck(aManifestURL,
       aOldApp.manifestHash = aOldApp.staged.manifestHash;
       aOldApp.etag = aOldApp.staged.etag || aOldApp.etag;
       aOldApp.staged = {};
-      // Move the staged update manifest to a non staged one.
-      let dirPath = this._getAppDir(aId).path;
 
-      // We don't really mind much if this fails.
-      OS.File.move(OS.Path.join(dirPath, "staged-update.webapp"),
-                   OS.Path.join(dirPath, "update.webapp"));
+      // Move the staged update manifest to a non staged one.
+      try {
+        let staged = this._getAppDir(aId);
+        staged.append("staged-update.webapp");
+        staged.moveTo(staged.parent, "update.webapp");
+      } catch (ex) {
+        // We don't really mind much if this fails.
+      }
     }
 
     // Save the updated registry, and cleanup the tmp directory.
@@ -3088,7 +3133,7 @@ onInstallSuccessAck: function onInstallSuccessAck(aManifestURL,
     let deferred = Promise.defer();
 
     aCertDb.openSignedAppFileAsync(
-       Ci.nsIX509CertDB.AppMarketplaceProdPublicRoot, aZipFile,
+       TrustedRootCertificate.index, aZipFile,
        function(aRv, aZipReader) {
          deferred.resolve([aRv, aZipReader]);
        }

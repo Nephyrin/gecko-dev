@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <math.h>
 
+#include "prprf.h"
 #include "nsCxPusher.h"
 #include "DecoderTraits.h"
 #include "harfbuzz/hb.h"
@@ -43,6 +44,7 @@
 #include "mozilla/dom/ShadowRoot.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/EventListenerManager.h"
+#include "mozilla/EventStateManager.h"
 #include "mozilla/IMEStateManager.h"
 #include "mozilla/InternalMutationEvent.h"
 #include "mozilla/Likely.h"
@@ -75,7 +77,6 @@
 #include "nsDOMJSUtils.h"
 #include "nsDOMMutationObserver.h"
 #include "nsError.h"
-#include "nsEventStateManager.h"
 #include "nsFocusManager.h"
 #include "nsGenericHTMLElement.h"
 #include "nsGenericHTMLFrameElement.h"
@@ -198,10 +199,6 @@ nsIScriptSecurityManager *nsContentUtils::sSecurityManager;
 nsIParserService *nsContentUtils::sParserService = nullptr;
 nsNameSpaceManager *nsContentUtils::sNameSpaceManager;
 nsIIOService *nsContentUtils::sIOService;
-imgLoader *nsContentUtils::sImgLoader;
-imgLoader *nsContentUtils::sPrivateImgLoader;
-imgICache *nsContentUtils::sImgCache;
-imgICache *nsContentUtils::sPrivateImgCache;
 nsIConsoleService *nsContentUtils::sConsoleService;
 nsDataHashtable<nsISupportsHashKey, EventNameMapping>* nsContentUtils::sAtomEventTable = nullptr;
 nsDataHashtable<nsStringHashKey, EventNameMapping>* nsContentUtils::sStringEventTable = nullptr;
@@ -544,26 +541,6 @@ nsContentUtils::InitializeModifierStrings()
   sModifierSeparator = new nsString(modifierSeparator);  
 }
 
-bool nsContentUtils::sImgLoaderInitialized;
-
-void
-nsContentUtils::InitImgLoader()
-{
-  sImgLoaderInitialized = true;
-
-  // Ignore failure and just don't load images
-  sImgLoader = imgLoader::Create();
-  NS_ABORT_IF_FALSE(sImgLoader, "Creation should have succeeded");
-
-  sPrivateImgLoader = imgLoader::Create();
-  NS_ABORT_IF_FALSE(sPrivateImgLoader, "Creation should have succeeded");
-
-  NS_ADDREF(sImgCache = sImgLoader);
-  NS_ADDREF(sPrivateImgCache = sPrivateImgLoader);
-
-  sPrivateImgCache->RespectPrivacyNotifications();
-}
-
 bool
 nsContentUtils::InitializeEventTable() {
   NS_ASSERTION(!sAtomEventTable, "EventTable already initialized!");
@@ -574,7 +551,7 @@ nsContentUtils::InitializeEventTable() {
     { nsGkAtoms::on##name_, _id, _type, _struct },
 #define WINDOW_ONLY_EVENT EVENT
 #define NON_IDL_EVENT EVENT
-#include "nsEventNameList.h"
+#include "mozilla/EventNameList.h"
 #undef WINDOW_ONLY_EVENT
 #undef EVENT
     { nullptr }
@@ -606,7 +583,7 @@ nsContentUtils::InitializeTouchEventTable()
 #define EVENT(name_,  _id, _type, _struct)
 #define TOUCH_EVENT(name_,  _id, _type, _struct)      \
       { nsGkAtoms::on##name_, _id, _type, _struct },
-#include "nsEventNameList.h"
+#include "mozilla/EventNameList.h"
 #undef TOUCH_EVENT
 #undef EVENT
       { nullptr }
@@ -1462,10 +1439,6 @@ nsContentUtils::Shutdown()
   NS_IF_RELEASE(sIOService);
   NS_IF_RELEASE(sLineBreaker);
   NS_IF_RELEASE(sWordBreaker);
-  NS_IF_RELEASE(sImgLoader);
-  NS_IF_RELEASE(sPrivateImgLoader);
-  NS_IF_RELEASE(sImgCache);
-  NS_IF_RELEASE(sPrivateImgCache);
 #ifdef IBMBIDI
   NS_IF_RELEASE(sBidiKeyboard);
 #endif
@@ -2689,10 +2662,8 @@ nsContentUtils::CanLoadImage(nsIURI* aURI, nsISupports* aContext,
 imgLoader*
 nsContentUtils::GetImgLoaderForDocument(nsIDocument* aDoc)
 {
-  if (!sImgLoaderInitialized)
-    InitImgLoader();
   if (!aDoc)
-    return sImgLoader;
+    return imgLoader::Singleton();
   bool isPrivate = false;
   nsCOMPtr<nsILoadGroup> loadGroup = aDoc->GetDocumentLoadGroup();
   nsCOMPtr<nsIInterfaceRequestor> callbacks;
@@ -2706,29 +2677,24 @@ nsContentUtils::GetImgLoaderForDocument(nsIDocument* aDoc)
     nsCOMPtr<nsIChannel> channel = aDoc->GetChannel();
     isPrivate = channel && NS_UsePrivateBrowsing(channel);
   }
-  return isPrivate ? sPrivateImgLoader : sImgLoader;
+  return isPrivate ? imgLoader::PBSingleton() : imgLoader::Singleton();
 }
 
 // static
 imgLoader*
 nsContentUtils::GetImgLoaderForChannel(nsIChannel* aChannel)
 {
-  if (!sImgLoaderInitialized)
-    InitImgLoader();
   if (!aChannel)
-    return sImgLoader;
+    return imgLoader::Singleton();
   nsCOMPtr<nsILoadContext> context;
   NS_QueryNotificationCallbacks(aChannel, context);
-  return context && context->UsePrivateBrowsing() ? sPrivateImgLoader : sImgLoader;
+  return context && context->UsePrivateBrowsing() ? imgLoader::PBSingleton() : imgLoader::Singleton();
 }
 
 // static
 bool
 nsContentUtils::IsImageInCache(nsIURI* aURI, nsIDocument* aDocument)
 {
-    if (!sImgLoaderInitialized)
-        InitImgLoader();
-
     imgILoader* loader = GetImgLoaderForDocument(aDocument);
     nsCOMPtr<imgICache> cache = do_QueryInterface(loader);
 
@@ -2967,7 +2933,7 @@ nsContentUtils::GetEventArgNames(int32_t aNameSpaceID,
     *aArgCount = sizeof(names)/sizeof(names[0]); \
     *aArgArray = names;
 
-  // nsJSEventListener is what does the arg magic for onerror, and it does
+  // JSEventHandler is what does the arg magic for onerror, and it does
   // not seem to take the namespace into account.  So we let onerror in all
   // namespaces get the 3 arg names.
   if (aEventName == nsGkAtoms::onerror) {
@@ -3147,6 +3113,28 @@ nsContentUtils::ReportToConsoleNonLocalized(const nsAString& aErrorText,
   NS_ENSURE_SUCCESS(rv, rv);
 
   return sConsoleService->LogMessage(errorObject);
+}
+
+void
+nsContentUtils::LogMessageToConsole(const char* aMsg, ...)
+{
+  if (!sConsoleService) { // only need to bother null-checking here
+    CallGetService(NS_CONSOLESERVICE_CONTRACTID, &sConsoleService);
+    if (!sConsoleService) {
+      return;
+    }
+  }
+
+  va_list args;
+  va_start(args, aMsg);
+  char* formatted = PR_vsmprintf(aMsg, args);
+  va_end(args);
+  if (!formatted) {
+    return;
+  }
+
+  sConsoleService->LogStringMessage(NS_ConvertUTF8toUTF16(formatted).get());
+  PR_smprintf_free(formatted);
 }
 
 bool
@@ -5031,7 +5019,7 @@ nsContentUtils::SetDataTransferInEvent(WidgetDragEvent* aDragEvent)
            aDragEvent->message == NS_DRAGDROP_END) {
     // For the drop and dragend events, set the drop effect based on the
     // last value that the dropEffect had. This will have been set in
-    // nsEventStateManager::PostHandleEvent for the last dragenter or
+    // EventStateManager::PostHandleEvent for the last dragenter or
     // dragover event.
     uint32_t dropEffect;
     initialDataTransfer->GetDropEffectInt(&dropEffect);
@@ -5560,21 +5548,20 @@ nsContentUtils::GetUTFNonNullOrigin(nsIURI* aURI, nsString& aOrigin)
 }
 
 /* static */
-already_AddRefed<nsIDocument>
+nsIDocument*
 nsContentUtils::GetDocumentFromScriptContext(nsIScriptContext *aScriptContext)
 {
-  if (!aScriptContext)
+  if (!aScriptContext) {
     return nullptr;
-
-  nsCOMPtr<nsIDOMWindow> window =
-    do_QueryInterface(aScriptContext->GetGlobalObject());
-  nsCOMPtr<nsIDocument> doc;
-  if (window) {
-    nsCOMPtr<nsIDOMDocument> domdoc;
-    window->GetDocument(getter_AddRefs(domdoc));
-    doc = do_QueryInterface(domdoc);
   }
-  return doc.forget();
+
+  nsCOMPtr<nsPIDOMWindow> window =
+    do_QueryInterface(aScriptContext->GetGlobalObject());
+  if (!window) {
+    return nullptr;
+  }
+
+  return window->GetDoc();
 }
 
 /* static */
@@ -5654,10 +5641,9 @@ nsContentUtils::DispatchXULCommand(nsIContent* aTarget,
 
 // static
 nsresult
-nsContentUtils::WrapNative(JSContext *cx, JS::Handle<JSObject*> scope,
-                           nsISupports *native, nsWrapperCache *cache,
-                           const nsIID* aIID, JS::MutableHandle<JS::Value> vp,
-                           bool aAllowWrapping)
+nsContentUtils::WrapNative(JSContext *cx, nsISupports *native,
+                           nsWrapperCache *cache, const nsIID* aIID,
+                           JS::MutableHandle<JS::Value> vp, bool aAllowWrapping)
 {
   if (!native) {
     vp.setNull();
@@ -5665,7 +5651,7 @@ nsContentUtils::WrapNative(JSContext *cx, JS::Handle<JSObject*> scope,
     return NS_OK;
   }
 
-  JSObject *wrapper = xpc_FastGetCachedWrapper(cache, scope, vp);
+  JSObject *wrapper = xpc_FastGetCachedWrapper(cx, cache, vp);
   if (wrapper) {
     return NS_OK;
   }
@@ -5677,6 +5663,7 @@ nsContentUtils::WrapNative(JSContext *cx, JS::Handle<JSObject*> scope,
   }
 
   nsresult rv = NS_OK;
+  JS::Rooted<JSObject*> scope(cx, JS::CurrentGlobalOrNull(cx));
   AutoPushJSContext context(cx);
   rv = sXPConnect->WrapNativeToJSVal(context, scope, native, cache, aIID,
                                      aAllowWrapping, vp);
@@ -5721,8 +5708,7 @@ nsContentUtils::CreateBlobBuffer(JSContext* aCx,
   } else {
     return NS_ERROR_OUT_OF_MEMORY;
   }
-  JS::Rooted<JSObject*> scope(aCx, JS::CurrentGlobalOrNull(aCx));
-  return nsContentUtils::WrapNative(aCx, scope, blob, aBlob);
+  return nsContentUtils::WrapNative(aCx, blob, aBlob);
 }
 
 void
@@ -5845,7 +5831,7 @@ nsContentUtils::IsSubDocumentTabbable(nsIContent* aContent)
 
   // If the subdocument lives in another process, the frame is
   // tabbable.
-  if (nsEventStateManager::IsRemoteTarget(aContent)) {
+  if (EventStateManager::IsRemoteTarget(aContent)) {
     return true;
   }
 
@@ -6279,7 +6265,7 @@ bool
 nsContentUtils::IsRequestFullScreenAllowed()
 {
   return !sTrustedFullScreenOnly ||
-         nsEventStateManager::IsHandlingUserInput() ||
+         EventStateManager::IsHandlingUserInput() ||
          IsCallerChrome();
 }
 
@@ -6420,7 +6406,7 @@ nsContentUtils::IsInPointerLockContext(nsIDOMWindow* aWin)
   }
 
   nsCOMPtr<nsIDocument> pointerLockedDoc =
-    do_QueryReferent(nsEventStateManager::sPointerLockedDoc);
+    do_QueryReferent(EventStateManager::sPointerLockedDoc);
   if (!pointerLockedDoc || !pointerLockedDoc->GetWindow()) {
     return false;
   }

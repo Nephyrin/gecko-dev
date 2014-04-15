@@ -191,7 +191,6 @@ static uint32_t sPreviousSuspectedCount = 0;
 static uint32_t sCleanupsSinceLastGC = UINT32_MAX;
 static bool sNeedsFullCC = false;
 static bool sNeedsGCAfterCC = false;
-static nsJSContext *sContextList = nullptr;
 static bool sIncrementalCC = false;
 
 static nsScriptNameSpaceManager *gNameSpaceManager;
@@ -767,13 +766,6 @@ nsJSContext::nsJSContext(bool aGCOnDestruction,
 {
   EnsureStatics();
 
-  mNext = sContextList;
-  mPrev = &sContextList;
-  if (sContextList) {
-    sContextList->mPrev = &mNext;
-  }
-  sContextList = this;
-
   ++sContextCount;
 
   mContext = ::JS_NewContext(sRuntime, gStackSize);
@@ -795,11 +787,6 @@ nsJSContext::nsJSContext(bool aGCOnDestruction,
 
 nsJSContext::~nsJSContext()
 {
-  *mPrev = mNext;
-  if (mNext) {
-    mNext->mPrev = mPrev;
-  }
-
   mGlobalObjectRef = nullptr;
 
   DestroyJSContext();
@@ -1100,7 +1087,8 @@ nsJSContext::ConvertSupportsTojsvals(nsISupports* aArgs,
           NS_ASSERTION(prim == nullptr,
                        "Don't pass nsISupportsPrimitives - use nsIVariant!");
 #endif
-          rv = nsContentUtils::WrapNative(cx, aScope, arg, thisVal);
+          JSAutoCompartment ac(cx, aScope);
+          rv = nsContentUtils::WrapNative(cx, arg, thisVal);
         }
       }
     }
@@ -1288,10 +1276,10 @@ nsJSContext::AddSupportsPrimitiveTojsvals(nsISupports *aArg, JS::Value *aArgv)
 
       AutoFree iidGuard(iid); // Free iid upon destruction.
 
-      JS::Rooted<JSObject*> global(cx, GetWindowProxy());
+      JS::Rooted<JSObject*> scope(cx, GetWindowProxy());
       JS::Rooted<JS::Value> v(cx);
-      nsresult rv = nsContentUtils::WrapNative(cx, global,
-                                               data, iid, &v);
+      JSAutoCompartment ac(cx, scope);
+      nsresult rv = nsContentUtils::WrapNative(cx, data, iid, &v);
       NS_ENSURE_SUCCESS(rv, rv);
 
       *aArgv = v;
@@ -2773,11 +2761,7 @@ NS_DOMReadStructuredClone(JSContext* cx,
     nsRefPtr<ImageData> imageData = new ImageData(width, height,
                                                   dataArray.toObject());
     // Wrap it in a JS::Value.
-    JS::Rooted<JSObject*> global(cx, JS::CurrentGlobalOrNull(cx));
-    if (!global) {
-      return nullptr;
-    }
-    return imageData->WrapObject(cx, global);
+    return imageData->WrapObject(cx);
   }
 
   // Don't know what this is. Bail.
@@ -2806,9 +2790,10 @@ NS_DOMWriteStructuredClone(JSContext* cx,
 
   // Write the internals to the stream.
   JSAutoCompartment ac(cx, dataArray);
+  JS::Rooted<JS::Value> arrayValue(cx, JS::ObjectValue(*dataArray));
   return JS_WriteUint32Pair(writer, SCTAG_DOM_IMAGEDATA, 0) &&
          JS_WriteUint32Pair(writer, width, height) &&
-         JS_WriteTypedArray(writer, JS::ObjectValue(*dataArray));
+         JS_WriteTypedArray(writer, arrayValue);
 }
 
 void
@@ -2893,7 +2878,10 @@ nsJSContext::EnsureStatics()
   static JSStructuredCloneCallbacks cloneCallbacks = {
     NS_DOMReadStructuredClone,
     NS_DOMWriteStructuredClone,
-    NS_DOMStructuredCloneError
+    NS_DOMStructuredCloneError,
+    nullptr,
+    nullptr,
+    nullptr
   };
   JS_SetStructuredCloneCallbacks(sRuntime, &cloneCallbacks);
 

@@ -22,7 +22,6 @@
 #include "nsIInterfaceRequestorUtils.h"
 #include "nsFrameMessageManager.h"
 #include "nsIWebProgressListener.h"
-#include "nsDOMEventTargetHelper.h"
 #include "nsIPresShell.h"
 #include "nsIScriptObjectPrincipal.h"
 #include "nsWeakReference.h"
@@ -30,6 +29,7 @@
 #include "nsITooltipListener.h"
 #include "mozilla/Attributes.h"
 #include "mozilla/dom/TabContext.h"
+#include "mozilla/DOMEventTargetHelper.h"
 #include "mozilla/EventDispatcher.h"
 #include "mozilla/EventForwards.h"
 #include "mozilla/layers/CompositorTypes.h"
@@ -48,7 +48,7 @@ class TabChild;
 class ClonedMessageData;
 class TabChildBase;
 
-class TabChildGlobal : public nsDOMEventTargetHelper,
+class TabChildGlobal : public DOMEventTargetHelper,
                        public nsIContentFrameMessageManager,
                        public nsIScriptObjectPrincipal,
                        public nsIGlobalObject
@@ -57,7 +57,7 @@ public:
   TabChildGlobal(TabChildBase* aTabChild);
   void Init();
   NS_DECL_ISUPPORTS_INHERITED
-  NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(TabChildGlobal, nsDOMEventTargetHelper)
+  NS_DECL_CYCLE_COLLECTION_CLASS_INHERITED(TabChildGlobal, DOMEventTargetHelper)
   NS_FORWARD_SAFE_NSIMESSAGELISTENERMANAGER(mMessageManager)
   NS_FORWARD_SAFE_NSIMESSAGESENDER(mMessageManager)
   NS_IMETHOD SendSyncMessage(const nsAString& aMessageName,
@@ -103,19 +103,19 @@ public:
                               bool aUseCapture)
   {
     // By default add listeners only for trusted events!
-    return nsDOMEventTargetHelper::AddEventListener(aType, aListener,
-                                                    aUseCapture, false, 2);
+    return DOMEventTargetHelper::AddEventListener(aType, aListener,
+                                                  aUseCapture, false, 2);
   }
-  using nsDOMEventTargetHelper::AddEventListener;
+  using DOMEventTargetHelper::AddEventListener;
   NS_IMETHOD AddEventListener(const nsAString& aType,
                               nsIDOMEventListener* aListener,
                               bool aUseCapture, bool aWantsUntrusted,
                               uint8_t optional_argc) MOZ_OVERRIDE
   {
-    return nsDOMEventTargetHelper::AddEventListener(aType, aListener,
-                                                    aUseCapture,
-                                                    aWantsUntrusted,
-                                                    optional_argc);
+    return DOMEventTargetHelper::AddEventListener(aType, aListener,
+                                                  aUseCapture,
+                                                  aWantsUntrusted,
+                                                  optional_argc);
   }
 
   nsresult
@@ -430,6 +430,9 @@ public:
     }
 
     static TabChild* GetFrom(nsIPresShell* aPresShell);
+    static TabChild* GetFrom(uint64_t aLayersId);
+
+    void DidComposite();
 
     static inline TabChild*
     GetFrom(nsIDOMWindow* aWindow)
@@ -514,6 +517,7 @@ private:
     RenderFrameChild* mRemoteFrame;
     nsRefPtr<ContentChild> mManager;
     uint32_t mChromeFlags;
+    uint64_t mLayersId;
     nsIntRect mOuterRect;
     // When we're tracking a possible tap gesture, this is the "down"
     // point of the touchstart.

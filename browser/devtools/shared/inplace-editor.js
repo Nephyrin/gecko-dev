@@ -376,6 +376,11 @@ InplaceEditor.prototype = {
     this.input.setSelectionRange(newValue.start, newValue.end);
     this._doValidation();
 
+    // Call the user's change handler if available.
+    if (this.change) {
+      this.change(this.input.value.trim());
+    }
+
     return true;
   },
 
@@ -720,7 +725,8 @@ InplaceEditor.prototype = {
   _cycleCSSSuggestion:
   function InplaceEditor_cycleCSSSuggestion(aReverse, aNoSelect)
   {
-    let {label, preLabel} = this.popup.selectedItem;
+    // selectedItem can be null when nothing is selected in an empty editor.
+    let {label, preLabel} = this.popup.selectedItem || {label: "", preLabel: ""};
     if (aReverse) {
       this.popup.selectPreviousItem();
     } else {
@@ -872,7 +878,7 @@ InplaceEditor.prototype = {
       if (this.popup && this.popup.isOpen) {
         this.popup.hidePopup();
       }
-    } else if (!cycling) {
+    } else if (!cycling && !aEvent.metaKey && !aEvent.altKey && !aEvent.ctrlKey) {
       this._maybeSuggestCompletion();
     }
 

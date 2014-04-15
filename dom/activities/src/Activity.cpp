@@ -25,9 +25,9 @@ NS_IMPL_CYCLE_COLLECTION_TRACE_BEGIN_INHERITED(Activity, DOMRequest)
 NS_IMPL_CYCLE_COLLECTION_TRACE_END
 
 /* virtual */ JSObject*
-Activity::WrapObject(JSContext* aCx, JS::Handle<JSObject*> aScope)
+Activity::WrapObject(JSContext* aCx)
 {
-  return MozActivityBinding::Wrap(aCx, aScope, this);
+  return MozActivityBinding::Wrap(aCx, this);
 }
 
 nsresult
@@ -67,7 +67,7 @@ Activity::Initialize(nsPIDOMWindow* aWindow,
   NS_ENSURE_SUCCESS(rv, rv);
 
   JS::Rooted<JS::Value> optionsValue(aCx);
-  if (!aOptions.ToObject(aCx, JS::NullPtr(), &optionsValue)) {
+  if (!aOptions.ToObject(aCx, &optionsValue)) {
     return NS_ERROR_FAILURE;
   }
 

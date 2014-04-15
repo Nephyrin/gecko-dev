@@ -56,6 +56,9 @@ namespace js {
 class PerThreadData;
 class ThreadSafeContext;
 class AutoKeepAtoms;
+#ifdef JS_TRACE_LOGGING
+class TraceLogger;
+#endif
 
 /* Thread Local Storage slot for storing the runtime for a thread. */
 extern mozilla::ThreadLocal<PerThreadData*> TlsPerThreadData;
@@ -140,18 +143,6 @@ struct ConservativeGCData
      * nativeStackTop unless the latter is nullptr.
      */
     uintptr_t           *nativeStackTop;
-
-#if defined(JSGC_ROOT_ANALYSIS) && (JS_STACK_GROWTH_DIRECTION < 0)
-    /*
-     * Record old contents of the native stack from the last time there was a
-     * scan, to reduce the overhead involved in repeatedly rescanning the
-     * native stack during root analysis. oldStackData stores words in reverse
-     * order starting at oldStackEnd.
-     */
-    uintptr_t           *oldStackMin, *oldStackEnd;
-    uintptr_t           *oldStackData;
-    size_t              oldStackCapacity; // in sizeof(uintptr_t)
-#endif
 
     union {
         jmp_buf         jmpbuf;
@@ -549,6 +540,10 @@ class PerThreadData : public PerThreadDataFriendFields
     uintptr_t            jitStackLimit;
 
     inline void setJitStackLimit(uintptr_t limit);
+
+#ifdef JS_TRACE_LOGGING
+    TraceLogger         *traceLogger;
+#endif
 
     /*
      * asm.js maintains a stack of AsmJSModule activations (see AsmJS.h). This

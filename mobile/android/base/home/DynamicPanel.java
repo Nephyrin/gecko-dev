@@ -17,12 +17,14 @@ import org.mozilla.gecko.home.PanelLayout.DatasetHandler;
 import org.mozilla.gecko.home.PanelLayout.DatasetRequest;
 import org.mozilla.gecko.util.GeckoEventListener;
 import org.mozilla.gecko.util.ThreadUtils;
+import org.mozilla.gecko.util.UiAsyncTask;
 
 import android.app.Activity;
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.res.Configuration;
 import android.database.Cursor;
+import android.net.Uri;
 import android.os.Bundle;
 import android.support.v4.app.LoaderManager;
 import android.support.v4.app.LoaderManager.LoaderCallbacks;
@@ -31,6 +33,7 @@ import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.FrameLayout;
 
 /**
  * Fragment that displays dynamic content specified by a {@code PanelConfig}.
@@ -58,8 +61,21 @@ public class DynamicPanel extends HomeFragment
     // Dataset ID to be used by the loader
     private static final String DATASET_REQUEST = "dataset_request";
 
+    // The main view for this fragment. This contains the PanelLayout and PanelAuthLayout.
+    private FrameLayout mView;
+
     // The panel layout associated with this panel
-    private PanelLayout mLayout;
+    private PanelLayout mPanelLayout;
+
+    // The layout used to show authentication UI for this panel
+    private PanelAuthLayout mPanelAuthLayout;
+
+    // Cache used to keep track of whether or not the user has been authenticated.
+    private PanelAuthCache mPanelAuthCache;
+
+    // Hold a reference to the UiAsyncTask we use to check the state of the
+    // PanelAuthCache, so that we can cancel it if necessary.
+    private UiAsyncTask<Void, Void, Boolean> mAuthStateTask;
 
     // The configuration associated with this panel
     private PanelConfig mPanelConfig;
@@ -69,6 +85,20 @@ public class DynamicPanel extends HomeFragment
 
     // On URL open listener
     private OnUrlOpenListener mUrlOpenListener;
+
+    // The current UI mode in the fragment
+    private UIMode mUIMode;
+
+    /*
+     * Different UI modes to display depending on the authentication state.
+     *
+     * PANEL: Layout to display panel data.
+     * AUTH: Authentication UI.
+     */
+    private enum UIMode {
+        PANEL,
+        AUTH
+    }
 
     @Override
     public void onAttach(Activity activity) {
@@ -101,37 +131,44 @@ public class DynamicPanel extends HomeFragment
         if (mPanelConfig == null) {
             throw new IllegalStateException("Can't create a DynamicPanel without a PanelConfig");
         }
+
+        mPanelAuthCache = new PanelAuthCache(getActivity());
     }
 
     @Override
     public View onCreateView(LayoutInflater inflater, ViewGroup container, Bundle savedInstanceState) {
-        switch(mPanelConfig.getLayoutType()) {
-            case FRAME:
-                final PanelDatasetHandler datasetHandler = new PanelDatasetHandler();
-                mLayout = new FramePanelLayout(getActivity(), mPanelConfig, datasetHandler, mUrlOpenListener);
-                break;
-
-            default:
-                throw new IllegalStateException("Unrecognized layout type in DynamicPanel");
-        }
-
-        Log.d(LOGTAG, "Created layout of type: " + mPanelConfig.getLayoutType());
-
-        return mLayout;
+        mView = new FrameLayout(getActivity());
+        return mView;
     }
 
     @Override
     public void onViewCreated(View view, Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
+
+        // Restore whatever the UI mode the fragment had before
+        // a device rotation.
+        if (mUIMode != null) {
+            setUIMode(mUIMode);
+        }
+
+        mPanelAuthCache.setOnChangeListener(new PanelAuthChangeListener());
         GeckoAppShell.registerEventListener("HomePanels:RefreshDataset", this);
     }
 
     @Override
     public void onDestroyView() {
         super.onDestroyView();
-        mLayout = null;
+        mView = null;
+        mPanelLayout = null;
+        mPanelAuthLayout = null;
 
+        mPanelAuthCache.setOnChangeListener(null);
         GeckoAppShell.unregisterEventListener("HomePanels:RefreshDataset", this);
+
+        if (mAuthStateTask != null) {
+            mAuthStateTask.cancel(true);
+            mAuthStateTask = null;
+        }
     }
 
     @Override
@@ -159,7 +196,95 @@ public class DynamicPanel extends HomeFragment
     @Override
     protected void load() {
         Log.d(LOGTAG, "Loading layout");
-        mLayout.load();
+
+        if (requiresAuth()) {
+            mAuthStateTask = new UiAsyncTask<Void, Void, Boolean>(ThreadUtils.getBackgroundHandler()) {
+                @Override
+                public synchronized Boolean doInBackground(Void... params) {
+                    return mPanelAuthCache.isAuthenticated(mPanelConfig.getId());
+                }
+
+                @Override
+                public void onPostExecute(Boolean isAuthenticated) {
+                    mAuthStateTask = null;
+                    setUIMode(isAuthenticated ? UIMode.PANEL : UIMode.AUTH);
+                }
+            };
+            mAuthStateTask.execute();
+        } else {
+            setUIMode(UIMode.PANEL);
+        }
+    }
+
+    /**
+     * @return true if this panel requires authentication.
+     */
+    private boolean requiresAuth() {
+        return mPanelConfig.getAuthConfig() != null;
+    }
+
+    /**
+     * Lazily creates layout for panel data.
+     */
+    private void createPanelLayout() {
+        switch(mPanelConfig.getLayoutType()) {
+            case FRAME:
+                final PanelDatasetHandler datasetHandler = new PanelDatasetHandler();
+                mPanelLayout = new FramePanelLayout(getActivity(), mPanelConfig, datasetHandler, mUrlOpenListener);
+                break;
+
+            default:
+                throw new IllegalStateException("Unrecognized layout type in DynamicPanel");
+        }
+
+        Log.d(LOGTAG, "Created layout of type: " + mPanelConfig.getLayoutType());
+        mView.addView(mPanelLayout);
+    }
+
+    /**
+     * Lazily creates layout for authentication UI.
+     */
+    private void createPanelAuthLayout() {
+        mPanelAuthLayout = new PanelAuthLayout(getActivity(), mPanelConfig);
+        mView.addView(mPanelAuthLayout, 0);
+    }
+
+    private void setUIMode(UIMode mode) {
+        switch(mode) {
+            case PANEL:
+                if (mPanelAuthLayout != null) {
+                    mPanelAuthLayout.setVisibility(View.GONE);
+                }
+                if (mPanelLayout == null) {
+                    createPanelLayout();
+                }
+                mPanelLayout.setVisibility(View.VISIBLE);
+
+                // Only trigger a reload if the UI mode has changed
+                // (e.g. auth cache changes) and the fragment is allowed
+                // to load its contents. Any loaders associated with the
+                // panel layout will be automatically re-bound after a
+                // device rotation, no need to explicitly load it again.
+                if (mUIMode != mode && canLoad()) {
+                    mPanelLayout.load();
+                }
+                break;
+
+            case AUTH:
+                if (mPanelLayout != null) {
+                    mPanelLayout.setVisibility(View.GONE);
+                }
+                if (mPanelAuthLayout == null) {
+                    createPanelAuthLayout();
+                }
+                mPanelAuthLayout.setVisibility(View.VISIBLE);
+                break;
+
+            default:
+                throw new IllegalStateException("Unrecognized UIMode in DynamicPanel");
+        }
+
+        mUIMode = mode;
     }
 
     @Override
@@ -172,10 +297,6 @@ public class DynamicPanel extends HomeFragment
                 }
             });
         }
-    }
-
-    private static int generateLoaderId(String datasetId) {
-        return datasetId.hashCode();
     }
 
     /**
@@ -191,38 +312,19 @@ public class DynamicPanel extends HomeFragment
             return;
         }
 
+        final Activity activity = getActivity();
+        if (activity == null) {
+            return;
+        }
+
         Log.d(LOGTAG, "Refresh request for dataset: " + datasetId);
 
-        final int loaderId = generateLoaderId(datasetId);
-
-        final LoaderManager lm = getLoaderManager();
-        final Loader<?> loader = (Loader<?>) lm.getLoader(loaderId);
-
-        // Only restart a loader if there's already an active one
-        // for the given dataset ID. Do nothing otherwise.
-        if (loader != null) {
-            final PanelDatasetLoader datasetLoader = (PanelDatasetLoader) loader;
-            final DatasetRequest request = datasetLoader.getRequest();
-
-            // Ensure the refresh request doesn't affect the view's filter
-            // stack (i.e. use DATASET_LOAD type) but keep the current
-            // dataset ID and filter.
-            final DatasetRequest newRequest =
-                   new DatasetRequest(DatasetRequest.Type.DATASET_LOAD,
-                                      request.getDatasetId(),
-                                      request.getFilterDetail());
-
-            restartDatasetLoader(newRequest);
-        }
+        final ContentResolver cr = activity.getContentResolver();
+        cr.notifyChange(getDatasetNotificationUri(datasetId), null);
     }
 
-    private void restartDatasetLoader(DatasetRequest request) {
-        final Bundle bundle = new Bundle();
-        bundle.putParcelable(DATASET_REQUEST, request);
-
-        // Ensure one loader per dataset
-        final int loaderId = generateLoaderId(request.getDatasetId());
-        getLoaderManager().restartLoader(loaderId, bundle, mLoaderCallbacks);
+    private static Uri getDatasetNotificationUri(String datasetId) {
+        return Uri.withAppendedPath(HomeItems.CONTENT_URI, datasetId);
     }
 
     /**
@@ -240,19 +342,22 @@ public class DynamicPanel extends HomeFragment
                 return;
             }
 
-            restartDatasetLoader(request);
+            final Bundle bundle = new Bundle();
+            bundle.putParcelable(DATASET_REQUEST, request);
+
+            getLoaderManager().restartLoader(request.getViewIndex(),
+                                             bundle, mLoaderCallbacks);
         }
 
         @Override
-        public void resetDataset(String datasetId) {
-            Log.d(LOGTAG, "Resetting dataset: " + datasetId);
+        public void resetDataset(int viewIndex) {
+            Log.d(LOGTAG, "Resetting dataset: " + viewIndex);
 
             final LoaderManager lm = getLoaderManager();
-            final int loaderId = generateLoaderId(datasetId);
 
             // Release any resources associated with the dataset if
             // it's currently loaded in memory.
-            final Loader<?> datasetLoader = lm.getLoader(loaderId);
+            final Loader<?> datasetLoader = lm.getLoader(viewIndex);
             if (datasetLoader != null) {
                 datasetLoader.reset();
             }
@@ -263,7 +368,7 @@ public class DynamicPanel extends HomeFragment
      * Cursor loader for the panel datasets.
      */
     private static class PanelDatasetLoader extends SimpleCursorLoader {
-        private final DatasetRequest mRequest;
+        private DatasetRequest mRequest;
 
         public PanelDatasetLoader(Context context, DatasetRequest request) {
             super(context);
@@ -272,6 +377,21 @@ public class DynamicPanel extends HomeFragment
 
         public DatasetRequest getRequest() {
             return mRequest;
+        }
+
+        @Override
+        public void onContentChanged() {
+            // Ensure the refresh request doesn't affect the view's filter
+            // stack (i.e. use DATASET_LOAD type) but keep the current
+            // dataset ID and filter.
+            final DatasetRequest newRequest =
+                   new DatasetRequest(mRequest.getViewIndex(),
+                                      DatasetRequest.Type.DATASET_LOAD,
+                                      mRequest.getDatasetId(),
+                                      mRequest.getFilterDetail());
+
+            mRequest = newRequest;
+            super.onContentChanged();
         }
 
         @Override
@@ -291,7 +411,12 @@ public class DynamicPanel extends HomeFragment
             }
 
             // XXX: You can use CONTENT_FAKE_URI for development to pull items from fake_home_items.json.
-            return cr.query(HomeItems.CONTENT_URI, null, selection, selectionArgs, null);
+            final Cursor c = cr.query(HomeItems.CONTENT_URI, null, selection, selectionArgs, null);
+
+            final Uri notificationUri = getDatasetNotificationUri(mRequest.getDatasetId());
+            c.setNotificationUri(cr, notificationUri);
+
+            return c;
         }
     }
 
@@ -310,23 +435,37 @@ public class DynamicPanel extends HomeFragment
         @Override
         public void onLoadFinished(Loader<Cursor> loader, Cursor cursor) {
             final DatasetRequest request = getRequestFromLoader(loader);
-
             Log.d(LOGTAG, "Finished loader for request: " + request);
-            mLayout.deliverDataset(request, cursor);
+
+            if (mPanelLayout != null) {
+                mPanelLayout.deliverDataset(request, cursor);
+            }
         }
 
         @Override
         public void onLoaderReset(Loader<Cursor> loader) {
             final DatasetRequest request = getRequestFromLoader(loader);
             Log.d(LOGTAG, "Resetting loader for request: " + request);
-            if (mLayout != null) {
-                mLayout.releaseDataset(request.getDatasetId());
+
+            if (mPanelLayout != null) {
+                mPanelLayout.releaseDataset(request.getViewIndex());
             }
         }
 
         private DatasetRequest getRequestFromLoader(Loader<Cursor> loader) {
             final PanelDatasetLoader datasetLoader = (PanelDatasetLoader) loader;
             return datasetLoader.getRequest();
+        }
+    }
+
+    private class PanelAuthChangeListener implements PanelAuthCache.OnChangeListener {
+        @Override
+        public void onChange(String panelId, boolean isAuthenticated) {
+            if (!mPanelConfig.getId().equals(panelId)) {
+                return;
+            }
+
+            setUIMode(isAuthenticated ? UIMode.PANEL : UIMode.AUTH);
         }
     }
 }

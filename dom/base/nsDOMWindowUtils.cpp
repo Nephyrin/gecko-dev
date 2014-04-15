@@ -16,7 +16,6 @@
 #include "nsGlobalWindow.h"
 #include "nsIDocument.h"
 #include "nsFocusManager.h"
-#include "nsEventStateManager.h"
 #include "nsFrameManager.h"
 #include "nsRefreshDriver.h"
 #include "mozilla/dom/Touch.h"
@@ -34,6 +33,7 @@
 #include "nsJSEnvironment.h"
 #include "nsJSUtils.h"
 
+#include "mozilla/EventStateManager.h"
 #include "mozilla/MiscEvents.h"
 #include "mozilla/MouseEvents.h"
 #include "mozilla/TextEvents.h"
@@ -67,6 +67,7 @@
 #include "mozilla/dom/Element.h"
 #include "mozilla/dom/file/FileHandle.h"
 #include "mozilla/dom/FileHandleBinding.h"
+#include "mozilla/dom/TabChild.h"
 #include "mozilla/dom/IDBFactoryBinding.h"
 #include "mozilla/dom/indexedDB/IndexedDatabaseManager.h"
 #include "mozilla/dom/quota/PersistenceType.h"
@@ -86,6 +87,7 @@
 #include "nsIInterfaceRequestorUtils.h"
 #include "GeckoProfiler.h"
 #include "mozilla/Preferences.h"
+#include "nsIContentIterator.h"
 
 #ifdef XP_WIN
 #undef GetClassName
@@ -322,49 +324,6 @@ nsDOMWindowUtils::GetViewportInfo(uint32_t aDisplayWidth,
   return NS_OK;
 }
 
-static void
-MaybeReflowForInflationScreenWidthChange(nsPresContext *aPresContext)
-{
-  if (aPresContext) {
-    nsIPresShell* presShell = aPresContext->GetPresShell();
-    bool fontInflationWasEnabled = presShell->FontSizeInflationEnabled();
-    presShell->NotifyFontSizeInflationEnabledIsDirty();
-    bool changed = false;
-    if (presShell && presShell->FontSizeInflationEnabled() &&
-        presShell->FontSizeInflationMinTwips() != 0) {
-      aPresContext->ScreenWidthInchesForFontInflation(&changed);
-    }
-
-    changed = changed ||
-      (fontInflationWasEnabled != presShell->FontSizeInflationEnabled());
-    if (changed) {
-      nsCOMPtr<nsIDocShell> docShell = aPresContext->GetDocShell();
-      if (docShell) {
-        nsCOMPtr<nsIContentViewer> cv;
-        docShell->GetContentViewer(getter_AddRefs(cv));
-        nsCOMPtr<nsIMarkupDocumentViewer> mudv = do_QueryInterface(cv);
-        if (mudv) {
-          nsTArray<nsCOMPtr<nsIMarkupDocumentViewer> > array;
-          mudv->AppendSubtree(array);
-          for (uint32_t i = 0, iEnd = array.Length(); i < iEnd; ++i) {
-            nsCOMPtr<nsIPresShell> shell;
-            nsCOMPtr<nsIContentViewer> cv = do_QueryInterface(array[i]);
-            cv->GetPresShell(getter_AddRefs(shell));
-            if (shell) {
-              nsIFrame *rootFrame = shell->GetRootFrame();
-              if (rootFrame) {
-                shell->FrameNeedsReflow(rootFrame,
-                                        nsIPresShell::eStyleChange,
-                                        NS_FRAME_IS_DIRTY);
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-}
-
 NS_IMETHODIMP
 nsDOMWindowUtils::SetDisplayPortForElement(float aXPx, float aYPx,
                                            float aWidthPx, float aHeightPx,
@@ -379,11 +338,6 @@ nsDOMWindowUtils::SetDisplayPortForElement(float aXPx, float aYPx,
   if (!presShell) {
     return NS_ERROR_FAILURE;
   }
-
-  nsRect displayport(nsPresContext::CSSPixelsToAppUnits(aXPx),
-                     nsPresContext::CSSPixelsToAppUnits(aYPx),
-                     nsPresContext::CSSPixelsToAppUnits(aWidthPx),
-                     nsPresContext::CSSPixelsToAppUnits(aHeightPx));
 
   if (!aElement) {
     return NS_ERROR_INVALID_ARG;
@@ -405,25 +359,20 @@ nsDOMWindowUtils::SetDisplayPortForElement(float aXPx, float aYPx,
     return NS_OK;
   }
 
+  nsRect displayport(nsPresContext::CSSPixelsToAppUnits(aXPx),
+                     nsPresContext::CSSPixelsToAppUnits(aYPx),
+                     nsPresContext::CSSPixelsToAppUnits(aWidthPx),
+                     nsPresContext::CSSPixelsToAppUnits(aHeightPx));
+
   content->SetProperty(nsGkAtoms::DisplayPort,
                        new DisplayPortPropertyData(displayport, aPriority),
                        nsINode::DeleteProperty<DisplayPortPropertyData>);
 
   nsIFrame* rootScrollFrame = presShell->GetRootScrollFrame();
-  if (rootScrollFrame) {
-    if (content == rootScrollFrame->GetContent()) {
-      // We are setting a root displayport for a document.
-      // The pres shell needs a special flag set.
-      presShell->SetIgnoreViewportScrolling(true);
-
-      // When the "font.size.inflation.minTwips" preference is set, the
-      // layout depends on the size of the screen.  Since when the size
-      // of the screen changes, the root displayport also changes, we
-      // hook in the needed updates here rather than adding a
-      // separate notification just for this change.
-      nsPresContext* presContext = GetPresContext();
-      MaybeReflowForInflationScreenWidthChange(presContext);
-    }
+  if (rootScrollFrame && content == rootScrollFrame->GetContent()) {
+    // We are setting a root displayport for a document.
+    // The pres shell needs a special flag set.
+    presShell->SetIgnoreViewportScrolling(true);
   }
 
   nsIFrame* rootFrame = presShell->FrameManager()->GetRootFrame();
@@ -448,6 +397,88 @@ nsDOMWindowUtils::SetDisplayPortForElement(float aXPx, float aYPx,
       }
     }
   }
+
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsDOMWindowUtils::SetDisplayPortMarginsForElement(float aLeftMargin,
+                                                  float aTopMargin,
+                                                  float aRightMargin,
+                                                  float aBottomMargin,
+                                                  uint32_t aAlignmentX,
+                                                  uint32_t aAlignmentY,
+                                                  nsIDOMElement* aElement,
+                                                  uint32_t aPriority)
+{
+  if (!nsContentUtils::IsCallerChrome()) {
+    return NS_ERROR_DOM_SECURITY_ERR;
+  }
+
+  nsIPresShell* presShell = GetPresShell();
+  if (!presShell) {
+    return NS_ERROR_FAILURE;
+  }
+
+  if (!aElement) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  nsCOMPtr<nsIContent> content = do_QueryInterface(aElement);
+
+  if (!content) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  if (content->GetCurrentDoc() != presShell->GetDocument()) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  // Note order change of arguments between our function signature and
+  // LayerMargin constructor.
+  LayerMargin displayportMargins(aTopMargin,
+                                 aRightMargin,
+                                 aBottomMargin,
+                                 aLeftMargin);
+
+  nsLayoutUtils::SetDisplayPortMargins(content, presShell, displayportMargins,
+                                       aAlignmentX, aAlignmentY, aPriority);
+
+  return NS_OK;
+}
+
+
+NS_IMETHODIMP
+nsDOMWindowUtils::SetDisplayPortBaseForElement(int32_t aX,
+                                               int32_t aY,
+                                               int32_t aWidth,
+                                               int32_t aHeight,
+                                               nsIDOMElement* aElement)
+{
+  if (!nsContentUtils::IsCallerChrome()) {
+    return NS_ERROR_DOM_SECURITY_ERR;
+  }
+
+  nsIPresShell* presShell = GetPresShell();
+  if (!presShell) {
+    return NS_ERROR_FAILURE;
+  }
+
+  if (!aElement) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  nsCOMPtr<nsIContent> content = do_QueryInterface(aElement);
+
+  if (!content) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  if (content->GetCurrentDoc() != presShell->GetDocument()) {
+    return NS_ERROR_INVALID_ARG;
+  }
+
+  nsLayoutUtils::SetDisplayPortBase(content, nsRect(aX, aY, aWidth, aHeight));
 
   return NS_OK;
 }
@@ -1546,6 +1577,91 @@ nsDOMWindowUtils::NodesFromRect(float aX, float aY,
 
   return doc->NodesFromRectHelper(aX, aY, aTopSize, aRightSize, aBottomSize, aLeftSize, 
                                   aIgnoreRootScrollFrame, aFlushLayout, aReturn);
+}
+
+NS_IMETHODIMP
+nsDOMWindowUtils::GetTranslationNodes(nsIDOMNode* aRoot,
+                                      nsITranslationNodeList** aRetVal)
+{
+  if (!nsContentUtils::IsCallerChrome()) {
+    return NS_ERROR_DOM_SECURITY_ERR;
+  }
+
+  NS_ENSURE_ARG_POINTER(aRetVal);
+  nsCOMPtr<nsIContent> root = do_QueryInterface(aRoot);
+  NS_ENSURE_STATE(root);
+  nsCOMPtr<nsIDocument> doc = GetDocument();
+  NS_ENSURE_STATE(doc);
+
+  if (root->OwnerDoc() != doc) {
+    return NS_ERROR_DOM_WRONG_DOCUMENT_ERR;
+  }
+
+  nsTHashtable<nsPtrHashKey<nsIContent>> translationNodesHash(1000);
+  nsRefPtr<nsTranslationNodeList> list = new nsTranslationNodeList;
+
+  uint32_t limit = 15000;
+
+  // We begin iteration with content->GetNextNode because we want to explictly
+  // skip the root tag from being a translation node.
+  nsIContent* content = root;
+  while ((limit > 0) && (content = content->GetNextNode(root))) {
+    if (!content->IsHTML()) {
+      continue;
+    }
+
+    nsIAtom* localName = content->Tag();
+
+    // Skip elements that usually contain non-translatable text content.
+    if (localName == nsGkAtoms::script ||
+        localName == nsGkAtoms::iframe ||
+        localName == nsGkAtoms::frameset ||
+        localName == nsGkAtoms::frame ||
+        localName == nsGkAtoms::code ||
+        localName == nsGkAtoms::noscript ||
+        localName == nsGkAtoms::style) {
+      continue;
+    }
+
+    // An element is a translation node if it contains
+    // at least one text node that has meaningful data
+    // for translation
+    for (nsIContent* child = content->GetFirstChild();
+         child;
+         child = child->GetNextSibling()) {
+
+      if (child->HasTextForTranslation()) {
+        translationNodesHash.PutEntry(content);
+
+        bool isBlockFrame = false;
+        nsIFrame* frame = content->GetPrimaryFrame();
+        if (frame) {
+          isBlockFrame = frame->IsFrameOfType(nsIFrame::eBlockFrame);
+        }
+
+        bool isTranslationRoot = isBlockFrame;
+        if (!isBlockFrame) {
+          // If an element is not a block element, it still
+          // can be considered a translation root if the parent
+          // of this element didn't make into the list of nodes
+          // to be translated.
+          bool parentInList = false;
+          nsIContent* parent = content->GetParent();
+          if (parent) {
+            parentInList = translationNodesHash.Contains(parent);
+          }
+          isTranslationRoot = !parentInList;
+        }
+
+        list->AppendElement(content->AsDOMNode(), isTranslationRoot);
+        --limit;
+        break;
+      }
+    }
+  }
+
+  *aRetVal = list.forget().take();
+  return NS_OK;
 }
 
 static TemporaryRef<DataSourceSurface>
@@ -2728,7 +2844,7 @@ nsDOMWindowUtils::GetCursorType(int16_t *aCursor)
 
   bool isSameDoc = false;
   do {
-    if (nsEventStateManager::sMouseOverDocument == doc) {
+    if (EventStateManager::sMouseOverDocument == doc) {
       isSameDoc = true;
       break;
     }
@@ -2999,10 +3115,9 @@ GetFileOrBlob(const nsAString& aName, JS::Handle<JS::Value> aBlobParts,
   nsDOMMultipartFile* domFile =
     static_cast<nsDOMMultipartFile*>(static_cast<nsIDOMFile*>(file.get()));
 
-  JS::AutoValueVector args(aCx);
-  MOZ_ALWAYS_TRUE(args.resize(2));
-  args[0] = aBlobParts;
-  args[1] = aParameters;
+  JS::AutoValueArray<2> args(aCx);
+  args[0].set(aBlobParts);
+  args[1].set(aParameters);
 
   rv = domFile->InitBlob(aCx, aOptionalArgCount, args.begin(), GetXPConnectNative);
   NS_ENSURE_SUCCESS(rv, rv);
@@ -3262,6 +3377,49 @@ nsDOMWindowUtils::GetPlugins(JSContext* cx, JS::MutableHandle<JS::Value> aPlugin
   return NS_OK;
 }
 
+static void
+MaybeReflowForInflationScreenWidthChange(nsPresContext *aPresContext)
+{
+  if (aPresContext) {
+    nsIPresShell* presShell = aPresContext->GetPresShell();
+    bool fontInflationWasEnabled = presShell->FontSizeInflationEnabled();
+    presShell->NotifyFontSizeInflationEnabledIsDirty();
+    bool changed = false;
+    if (presShell && presShell->FontSizeInflationEnabled() &&
+        presShell->FontSizeInflationMinTwips() != 0) {
+      aPresContext->ScreenWidthInchesForFontInflation(&changed);
+    }
+
+    changed = changed ||
+      (fontInflationWasEnabled != presShell->FontSizeInflationEnabled());
+    if (changed) {
+      nsCOMPtr<nsIDocShell> docShell = aPresContext->GetDocShell();
+      if (docShell) {
+        nsCOMPtr<nsIContentViewer> cv;
+        docShell->GetContentViewer(getter_AddRefs(cv));
+        nsCOMPtr<nsIMarkupDocumentViewer> mudv = do_QueryInterface(cv);
+        if (mudv) {
+          nsTArray<nsCOMPtr<nsIMarkupDocumentViewer> > array;
+          mudv->AppendSubtree(array);
+          for (uint32_t i = 0, iEnd = array.Length(); i < iEnd; ++i) {
+            nsCOMPtr<nsIPresShell> shell;
+            nsCOMPtr<nsIContentViewer> cv = do_QueryInterface(array[i]);
+            cv->GetPresShell(getter_AddRefs(shell));
+            if (shell) {
+              nsIFrame *rootFrame = shell->GetRootFrame();
+              if (rootFrame) {
+                shell->FrameNeedsReflow(rootFrame,
+                                        nsIPresShell::eStyleChange,
+                                        NS_FRAME_IS_DIRTY);
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 NS_IMETHODIMP
 nsDOMWindowUtils::SetScrollPositionClampingScrollPortSize(float aWidth, float aHeight)
 {
@@ -3281,6 +3439,14 @@ nsDOMWindowUtils::SetScrollPositionClampingScrollPortSize(float aWidth, float aH
   presShell->SetScrollPositionClampingScrollPortSize(
     nsPresContext::CSSPixelsToAppUnits(aWidth),
     nsPresContext::CSSPixelsToAppUnits(aHeight));
+
+  // When the "font.size.inflation.minTwips" preference is set, the
+  // layout depends on the size of the screen.  Since when the size
+  // of the screen changes, the scroll position clamping scroll port
+  // size also changes, we hook in the needed updates here rather
+  // than adding a separate notification just for this change.
+  nsPresContext* presContext = GetPresContext();
+  MaybeReflowForInflationScreenWidthChange(presContext);
 
   return NS_OK;
 }
@@ -3493,7 +3659,7 @@ nsDOMWindowUtils::GetIsHandlingUserInput(bool* aHandlingUserInput)
     return NS_ERROR_DOM_SECURITY_ERR;
   }
 
-  *aHandlingUserInput = nsEventStateManager::IsHandlingUserInput();
+  *aHandlingUserInput = EventStateManager::IsHandlingUserInput();
 
   return NS_OK;
 }
@@ -3525,6 +3691,12 @@ nsDOMWindowUtils::GetIsParentWindowMainWidgetVisible(bool* aIsVisible)
   nsCOMPtr<nsIWidget> parentWidget;
   nsIDocShell *docShell = window->GetDocShell();
   if (docShell) {
+    if (TabChild *tabChild = TabChild::GetFrom(docShell)) {
+      if (!tabChild->SendIsParentWindowMainWidgetVisible(aIsVisible))
+        return NS_ERROR_FAILURE;
+      return NS_OK;
+    }
+
     nsCOMPtr<nsIDocShellTreeOwner> parentTreeOwner;
     docShell->GetTreeOwner(getter_AddRefs(parentTreeOwner));
     nsCOMPtr<nsIBaseWindow> parentWindow(do_GetInterface(parentTreeOwner));
@@ -3777,4 +3949,41 @@ nsDOMWindowUtils::SetAudioVolume(float aVolume)
   NS_ENSURE_STATE(window);
 
   return window->SetAudioVolume(aVolume);
+}
+
+NS_INTERFACE_MAP_BEGIN(nsTranslationNodeList)
+  NS_INTERFACE_MAP_ENTRY(nsISupports)
+  NS_INTERFACE_MAP_ENTRY(nsITranslationNodeList)
+NS_INTERFACE_MAP_END
+
+NS_IMPL_ADDREF(nsTranslationNodeList)
+NS_IMPL_RELEASE(nsTranslationNodeList)
+
+NS_IMETHODIMP
+nsTranslationNodeList::Item(uint32_t aIndex, nsIDOMNode** aRetVal)
+{
+  NS_ENSURE_ARG_POINTER(aRetVal);
+  NS_IF_ADDREF(*aRetVal = mNodes.SafeElementAt(aIndex));
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsTranslationNodeList::IsTranslationRootAtIndex(uint32_t aIndex, bool* aRetVal)
+{
+  NS_ENSURE_ARG_POINTER(aRetVal);
+  if (aIndex >= mLength) {
+    *aRetVal = false;
+    return NS_OK;
+  }
+
+  *aRetVal = mNodeIsRoot.ElementAt(aIndex);
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+nsTranslationNodeList::GetLength(uint32_t* aRetVal)
+{
+  NS_ENSURE_ARG_POINTER(aRetVal);
+  *aRetVal = mLength;
+  return NS_OK;
 }
