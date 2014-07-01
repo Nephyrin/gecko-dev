@@ -114,6 +114,7 @@
 #include "nsStyleSheetService.h"
 #include "gfxImageSurface.h"
 #include "gfxContext.h"
+#include "gfxUtils.h"
 #include "nsSMILAnimationController.h"
 #include "SVGContentUtils.h"
 #include "nsSVGEffects.h"
@@ -3737,6 +3738,8 @@ public:
   }
 
 private:
+  ~PaintTimerCallBack() {}
+
   PresShell* mShell;
 };
 
@@ -4134,6 +4137,8 @@ PresShell::FlushPendingNotifications(mozilla::ChangesToFlush aFlush)
   NS_ASSERTION(!isSafeToFlush || mViewManager, "Must have view manager");
   // Make sure the view manager stays alive.
   nsRefPtr<nsViewManager> viewManagerDeathGrip = mViewManager;
+  bool didStyleFlush = false;
+  bool didLayoutFlush = false;
   if (isSafeToFlush && mViewManager) {
     // Processing pending notifications can kill us, and some callers only
     // hold weak refs when calling FlushPendingNotifications().  :(
@@ -4223,6 +4228,8 @@ PresShell::FlushPendingNotifications(mozilla::ChangesToFlush aFlush)
       mPresContext->RestyleManager()->ProcessPendingRestyles();
     }
 
+    didStyleFlush = true;
+
 
     // There might be more pending constructors now, but we're not going to
     // worry about them.  They can't be triggered during reflow, so we should
@@ -4230,6 +4237,7 @@ PresShell::FlushPendingNotifications(mozilla::ChangesToFlush aFlush)
 
     if (flushType >= (mSuppressInterruptibleReflows ? Flush_Layout : Flush_InterruptibleLayout) &&
         !mIsDestroying) {
+      didLayoutFlush = true;
       mFrameConstructor->RecalcQuotesAndCounters();
       mViewManager->FlushDelayedResize(true);
       if (ProcessReflowCommands(flushType < Flush_Layout) && mContentToScrollTo) {
@@ -4240,11 +4248,6 @@ PresShell::FlushPendingNotifications(mozilla::ChangesToFlush aFlush)
           mContentToScrollTo = nullptr;
         }
       }
-    } else if (!mIsDestroying && mSuppressInterruptibleReflows &&
-               flushType == Flush_InterruptibleLayout) {
-      // We suppressed this flush, but the document thinks it doesn't
-      // need to flush anymore.  Let it know what's really going on.
-      mDocument->SetNeedLayoutFlush();
     }
 
     if (flushType >= Flush_Layout) {
@@ -4252,6 +4255,19 @@ PresShell::FlushPendingNotifications(mozilla::ChangesToFlush aFlush)
         mViewManager->UpdateWidgetGeometry();
       }
     }
+  }
+
+  if (!didStyleFlush && flushType >= Flush_Style && !mIsDestroying) {
+    mDocument->SetNeedStyleFlush();
+  }
+
+  if (!didLayoutFlush && !mIsDestroying &&
+      (flushType >=
+       (mSuppressInterruptibleReflows ? Flush_Layout : Flush_InterruptibleLayout))) {
+    // We suppressed this flush due to mSuppressInterruptibleReflows or
+    // !isSafeToFlush, but the document thinks it doesn't
+    // need to flush anymore.  Let it know what's really going on.
+    mDocument->SetNeedLayoutFlush();
   }
 }
 
@@ -9520,68 +9536,6 @@ PresShell::CloneStyleSet(nsStyleSet* aSet)
   return clone;
 }
 
-#ifdef DEBUG_Eli
-static nsresult
-DumpToPNG(nsIPresShell* shell, nsAString& name) {
-  int32_t width=1000, height=1000;
-  nsRect r(0, 0, shell->GetPresContext()->DevPixelsToAppUnits(width),
-                 shell->GetPresContext()->DevPixelsToAppUnits(height));
-
-  nsRefPtr<gfxImageSurface> imgSurface =
-     new gfxImageSurface(gfxIntSize(width, height),
-                         gfxImageFormat::ARGB32);
-
-  nsRefPtr<gfxContext> imgContext = new gfxContext(imgSurface);
-
-  nsRefPtr<gfxASurface> surface =
-    gfxPlatform::GetPlatform()->
-    CreateOffscreenSurface(IntSize(width, height),
-      gfxASurface::ContentFromFormat(gfxImageFormat::ARGB32));
-  NS_ENSURE_TRUE(surface, NS_ERROR_OUT_OF_MEMORY);
-
-  nsRefPtr<gfxContext> context = new gfxContext(surface);
-
-  shell->RenderDocument(r, 0, NS_RGB(255, 255, 0), context);
-
-  imgContext->DrawSurface(surface, gfxSize(width, height));
-
-  nsCOMPtr<imgIEncoder> encoder = do_CreateInstance("@mozilla.org/image/encoder;2?type=image/png");
-  NS_ENSURE_TRUE(encoder, NS_ERROR_FAILURE);
-  encoder->InitFromData(imgSurface->Data(), imgSurface->Stride() * height,
-                        width, height, imgSurface->Stride(),
-                        imgIEncoder::INPUT_FORMAT_HOSTARGB, EmptyString());
-
-  // XXX not sure if this is the right way to write to a file
-  nsCOMPtr<nsIFile> file = do_CreateInstance("@mozilla.org/file/local;1");
-  NS_ENSURE_TRUE(file, NS_ERROR_FAILURE);
-  rv = file->InitWithPath(name);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  uint64_t length64;
-  rv = encoder->Available(&length64);
-  NS_ENSURE_SUCCESS(rv, rv);
-  if (length64 > UINT32_MAX)
-    return NS_ERROR_FILE_TOO_BIG;
-
-  uint32_t length = (uint32_t)length64;
-
-  nsCOMPtr<nsIOutputStream> outputStream;
-  rv = NS_NewLocalFileOutputStream(getter_AddRefs(outputStream), file);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  nsCOMPtr<nsIOutputStream> bufferedOutputStream;
-  rv = NS_NewBufferedOutputStream(getter_AddRefs(bufferedOutputStream),
-                                  outputStream, length);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  uint32_t numWritten;
-  rv = bufferedOutputStream->WriteFrom(encoder, length, &numWritten);
-  NS_ENSURE_SUCCESS(rv, rv);
-
-  return NS_OK;
-}
-#endif
-
 // After an incremental reflow, we verify the correctness by doing a
 // full reflow into a fresh frame tree.
 bool
@@ -9666,7 +9620,7 @@ PresShell::VerifyIncrementalReflow()
     root2->List(stdout, 0);
   }
 
-#ifdef DEBUG_Eli
+#if 0
   // Sample code for dumping page to png
   // XXX Needs to be made more flexible
   if (!ok) {
@@ -9675,12 +9629,12 @@ PresShell::VerifyIncrementalReflow()
     stra.AppendLiteral("C:\\mozilla\\mozilla\\debug\\filea");
     stra.AppendInt(num);
     stra.AppendLiteral(".png");
-    DumpToPNG(sh, stra);
+    gfxUtils::WriteAsPNG(sh, stra);
     nsString strb;
     strb.AppendLiteral("C:\\mozilla\\mozilla\\debug\\fileb");
     strb.AppendInt(num);
     strb.AppendLiteral(".png");
-    DumpToPNG(this, strb);
+    gfxUtils::WriteAsPNG(sh, strb);
     ++num;
   }
 #endif

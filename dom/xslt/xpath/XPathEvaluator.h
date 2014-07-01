@@ -21,6 +21,7 @@ namespace mozilla {
 namespace dom {
 
 class GlobalObject;
+class XPathExpression;
 class XPathResult;
 
 /**
@@ -28,6 +29,8 @@ class XPathResult;
  */
 class XPathEvaluator MOZ_FINAL : public nsIDOMXPathEvaluator
 {
+    ~XPathEvaluator();
+
 public:
     XPathEvaluator(nsIDocument* aDocument = nullptr);
 
@@ -45,7 +48,7 @@ public:
     }
     static already_AddRefed<XPathEvaluator>
         Constructor(const GlobalObject& aGlobal, ErrorResult& rv);
-    already_AddRefed<nsIDOMXPathExpression>
+    XPathExpression*
         CreateExpression(const nsAString& aExpression,
                          nsIDOMXPathNSResolver* aResolver,
                          ErrorResult& rv);

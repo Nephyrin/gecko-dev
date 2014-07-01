@@ -610,6 +610,9 @@ private:
     virtual bool
     RecvBackUpXResources(const FileDescriptor& aXSocketFd) MOZ_OVERRIDE;
 
+    virtual bool
+    RecvOpenAnonymousTemporaryFile(FileDescriptor* aFD) MOZ_OVERRIDE;
+
     virtual PFileDescriptorSetParent*
     AllocPFileDescriptorSetParent(const mozilla::ipc::FileDescriptor&) MOZ_OVERRIDE;
 
@@ -686,8 +689,8 @@ public:
   ParentIdleListener(mozilla::dom::ContentParent* aParent, uint64_t aObserver)
     : mParent(aParent), mObserver(aObserver)
   {}
-  virtual ~ParentIdleListener() {}
 private:
+  virtual ~ParentIdleListener() {}
   nsRefPtr<mozilla::dom::ContentParent> mParent;
   uint64_t mObserver;
 };

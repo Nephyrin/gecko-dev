@@ -1949,6 +1949,53 @@ Parser<SyntaxParseHandler>::checkFunctionDefinition(HandlePropertyName funName,
     return true;
 }
 
+#ifdef JS_HAS_TEMPLATE_STRINGS
+template <typename ParseHandler>
+typename ParseHandler::Node
+Parser<ParseHandler>::templateLiteral()
+{
+    Node pn = noSubstitutionTemplate();
+    if (!pn) {
+        report(ParseError, false, null(),
+                JSMSG_SYNTAX_ERROR);
+        return null();
+    }
+    Node nodeList = handler.newList(PNK_TEMPLATE_STRING_LIST, pn);
+    TokenKind tt;
+    do {
+        pn = expr();
+        if (!pn) {
+            report(ParseError, false, null(),
+                    JSMSG_SYNTAX_ERROR);
+            return null();
+        }
+        handler.addList(nodeList, pn);
+        tt = tokenStream.getToken();
+        if (tt != TOK_RC) {
+            report(ParseError, false, null(),
+                    JSMSG_SYNTAX_ERROR);
+            return null();
+        }
+        tt = tokenStream.getToken(TokenStream::TemplateTail);
+        if (tt == TOK_ERROR) {
+            report(ParseError, false, null(),
+                    JSMSG_SYNTAX_ERROR);
+            return null();
+        }
+
+        pn = noSubstitutionTemplate();
+        if (!pn) {
+            report(ParseError, false, null(),
+                    JSMSG_SYNTAX_ERROR);
+            return null();
+        }
+
+        handler.addList(nodeList, pn);
+    } while (tt == TOK_TEMPLATE_HEAD);
+    return nodeList;
+}
+#endif
+
 template <typename ParseHandler>
 typename ParseHandler::Node
 Parser<ParseHandler>::functionDef(HandlePropertyName funName, const TokenStream::Position &start,
@@ -2670,11 +2717,19 @@ Parser<ParseHandler>::matchLabel(MutableHandle<PropertyName*> label)
 
 template <typename ParseHandler>
 bool
-Parser<ParseHandler>::reportRedeclaration(Node pn, bool isConst, JSAtom *atom)
+Parser<ParseHandler>::reportRedeclaration(Node pn, bool isConst, HandlePropertyName name)
 {
-    JSAutoByteString name;
-    if (AtomToPrintableString(context, atom, &name))
-        report(ParseError, false, pn, JSMSG_REDECLARED_VAR, isConst ? "const" : "variable", name.ptr());
+    JSAutoByteString printable;
+    if (!AtomToPrintableString(context, name, &printable))
+        return false;
+
+    StmtInfoPC *stmt = LexicalLookup(pc, name, nullptr, (StmtInfoPC *)nullptr);
+    if (stmt && stmt->type == STMT_CATCH) {
+        report(ParseError, false, pn, JSMSG_REDECLARED_CATCH_IDENTIFIER, printable.ptr());
+    } else {
+        report(ParseError, false, pn, JSMSG_REDECLARED_VAR, isConst ? "const" : "variable",
+               printable.ptr());
+    }
     return false;
 }
 
@@ -2953,20 +3008,26 @@ Parser<ParseHandler>::bindVarOrConst(BindData<ParseHandler> *data,
         if (!parser->report(ParseExtraWarning, false, pn, JSMSG_VAR_HIDES_ARG, bytes.ptr()))
             return false;
     } else {
+        bool inCatchBody = (stmt && stmt->type == STMT_CATCH);
         bool error = (isConstDecl ||
                       dn_kind == Definition::CONST ||
                       (dn_kind == Definition::LET &&
-                       (stmt->type != STMT_CATCH || OuterLet(pc, stmt, name))));
+                       (!inCatchBody || OuterLet(pc, stmt, name))));
 
         if (parser->options().extraWarningsOption
             ? data->op != JSOP_DEFVAR || dn_kind != Definition::VAR
             : error)
         {
             JSAutoByteString bytes;
+            if (!AtomToPrintableString(cx, name, &bytes))
+                return false;
+
             ParseReportKind reporter = error ? ParseError : ParseExtraWarning;
-            if (!AtomToPrintableString(cx, name, &bytes) ||
-                !parser->report(reporter, false, pn, JSMSG_REDECLARED_VAR,
-                                Definition::kindString(dn_kind), bytes.ptr()))
+            if (!(inCatchBody
+                  ? parser->report(reporter, false, pn,
+                                   JSMSG_REDECLARED_CATCH_IDENTIFIER, bytes.ptr())
+                  : parser->report(reporter, false, pn, JSMSG_REDECLARED_VAR,
+                                   Definition::kindString(dn_kind), bytes.ptr())))
             {
                 return false;
             }
@@ -3561,6 +3622,25 @@ Parser<FullParseHandler>::letDeclaration()
             JS_ASSERT(pc->staticScope == stmt->staticScope);
         } else {
             if (pc->atBodyLevel()) {
+                /*
+                 * When bug 589199 is fixed, let variables will be stored in
+                 * the slots of a new scope chain object, encountered just
+                 * before the global object in the overall chain.  This extra
+                 * object is present in the scope chain for all code in that
+                 * global, including self-hosted code.  But self-hosted code
+                 * must be usable against *any* global object, including ones
+                 * with other let variables -- variables possibly placed in
+                 * conflicting slots.  Forbid top-level let declarations to
+                 * prevent such conflicts from ever occurring.
+                 */
+                if (options().selfHostingMode &&
+                    !pc->sc->isFunctionBox() &&
+                    stmt == pc->topScopeStmt)
+                {
+                    report(ParseError, false, null(), JSMSG_SELFHOSTED_TOP_LEVEL_LET);
+                    return null();
+                }
+
                 /*
                  * ES4 specifies that let at top level and at body-block scope
                  * does not shadow var, so convert back to var.
@@ -4781,13 +4861,37 @@ Parser<ParseHandler>::yieldExpression()
 
         pc->lastYieldOffset = begin;
 
-        ParseNodeKind kind = tokenStream.matchToken(TOK_MUL) ? PNK_YIELD_STAR : PNK_YIELD;
-
-        // ES6 generators require a value.
-        Node exprNode = assignExpr();
-        if (!exprNode)
+        Node exprNode;
+        ParseNodeKind kind = PNK_YIELD;
+        switch (tokenStream.peekTokenSameLine(TokenStream::Operand)) {
+          case TOK_ERROR:
             return null();
-
+          // TOK_EOL is special; it implements the [no LineTerminator here]
+          // quirk in the grammar.
+          case TOK_EOL:
+          // The rest of these make up the complete set of tokens that can
+          // appear after any of the places where AssignmentExpression is used
+          // throughout the grammar.  Conveniently, none of them can also be the
+          // start an expression.
+          case TOK_EOF:
+          case TOK_SEMI:
+          case TOK_RC:
+          case TOK_RB:
+          case TOK_RP:
+          case TOK_COLON:
+          case TOK_COMMA:
+            // No value.
+            exprNode = null();
+            break;
+          case TOK_MUL:
+            kind = PNK_YIELD_STAR;
+            tokenStream.consumeKnownToken(TOK_MUL);
+            // Fall through.
+          default:
+            exprNode = assignExpr();
+            if (!exprNode)
+                return null();
+        }
         return handler.newUnary(kind, JSOP_NOP, begin, exprNode);
       }
 
@@ -4838,11 +4942,6 @@ Parser<ParseHandler>::yieldExpression()
           case TOK_COMMA:
             // No value.
             exprNode = null();
-            // ES6 does not permit yield without an operand.  We should
-            // encourage users of yield expressions of this kind to pass an
-            // operand, to bring users closer to standard syntax.
-            if (!reportWithOffset(ParseWarning, false, pos().begin, JSMSG_YIELD_WITHOUT_OPERAND))
-                return null();
             break;
           default:
             exprNode = assignExpr();
@@ -6891,6 +6990,20 @@ template <typename ParseHandler>
 typename ParseHandler::Node
 Parser<ParseHandler>::stringLiteral()
 {
+    return handler.newStringLiteral(stopStringCompression(), pos());
+}
+
+#ifdef JS_HAS_TEMPLATE_STRINGS
+template <typename ParseHandler>
+typename ParseHandler::Node
+Parser<ParseHandler>::noSubstitutionTemplate()
+{
+    return handler.newTemplateStringLiteral(stopStringCompression(), pos());
+}
+#endif
+
+template <typename ParseHandler>
+JSAtom * Parser<ParseHandler>::stopStringCompression() {
     JSAtom *atom = tokenStream.currentToken().atom();
 
     // Large strings are fast to parse but slow to compress. Stop compression on
@@ -6899,9 +7012,10 @@ Parser<ParseHandler>::stringLiteral()
     const size_t HUGE_STRING = 50000;
     if (sct && sct->active() && atom->length() >= HUGE_STRING)
         sct->abort();
-
-    return handler.newStringLiteral(atom, pos());
+    return atom;
 }
+
+
 
 template <typename ParseHandler>
 typename ParseHandler::Node
@@ -7305,7 +7419,10 @@ Parser<ParseHandler>::primaryExpr(TokenKind tt)
         return parenExprOrGeneratorComprehension();
 
 #ifdef JS_HAS_TEMPLATE_STRINGS
-      case TOK_TEMPLATE_STRING:
+      case TOK_TEMPLATE_HEAD:
+        return templateLiteral();
+      case TOK_NO_SUBS_TEMPLATE:
+        return noSubstitutionTemplate();
 #endif
       case TOK_STRING:
         return stringLiteral();

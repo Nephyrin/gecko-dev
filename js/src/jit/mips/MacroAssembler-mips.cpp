@@ -2298,6 +2298,12 @@ MacroAssemblerMIPSCompat::branchTestObject(Condition cond, const BaseIndex &src,
     ma_b(SecondScratchReg, ImmTag(JSVAL_TAG_OBJECT), label, cond);
 }
 
+void
+MacroAssemblerMIPSCompat::testObjectSet(Condition cond, const ValueOperand &value, Register dest)
+{
+    MOZ_ASSERT(cond == Equal || cond == NotEqual);
+    ma_cmp_set(dest, value.typeReg(), ImmType(JSVAL_TYPE_OBJECT), cond);
+}
 
 void
 MacroAssemblerMIPSCompat::branchTestString(Condition cond, const ValueOperand &value, Label *label)
@@ -2318,6 +2324,27 @@ MacroAssemblerMIPSCompat::branchTestString(Condition cond, const BaseIndex &src,
     MOZ_ASSERT(cond == Equal || cond == NotEqual);
     extractTag(src, SecondScratchReg);
     ma_b(SecondScratchReg, ImmTag(JSVAL_TAG_STRING), label, cond);
+}
+
+void
+MacroAssemblerMIPSCompat::branchTestSymbol(Condition cond, const ValueOperand &value, Label *label)
+{
+    branchTestSymbol(cond, value.typeReg(), label);
+}
+
+void
+MacroAssemblerMIPSCompat::branchTestSymbol(Condition cond, const Register &tag, Label *label)
+{
+    MOZ_ASSERT(cond == Equal || cond == NotEqual);
+    ma_b(tag, ImmTag(JSVAL_TAG_SYMBOL), label, cond);
+}
+
+void
+MacroAssemblerMIPSCompat::branchTestSymbol(Condition cond, const BaseIndex &src, Label *label)
+{
+    MOZ_ASSERT(cond == Equal || cond == NotEqual);
+    extractTag(src, SecondScratchReg);
+    ma_b(SecondScratchReg, ImmTag(JSVAL_TAG_SYMBOL), label, cond);
 }
 
 void
@@ -3152,7 +3179,7 @@ MacroAssemblerMIPSCompat::callWithABIPre(uint32_t *stackAdjust, bool callFromAsm
                     usedArgSlots_ * sizeof(intptr_t) :
                     NumIntArgRegs * sizeof(intptr_t);
 
-    uint32_t alignmentAtPrologue = callFromAsmJS ? AlignmentAtAsmJSPrologue : 0;
+    uint32_t alignmentAtPrologue = callFromAsmJS ? AsmJSFrameSize : 0;
 
     if (dynamicAlignment_) {
         *stackAdjust += ComputeByteAlignment(*stackAdjust, StackAlignment);

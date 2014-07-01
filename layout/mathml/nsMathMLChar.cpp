@@ -616,6 +616,14 @@ private:
   nsTArray<nsPropertiesTable> mPropertiesTableList;
 };
 
+namespace mozilla {
+template<>
+struct HasDangerousPublicDestructor<nsGlyphTableList>
+{
+  static const bool value = true;
+};
+}
+
 NS_IMPL_ISUPPORTS(nsGlyphTableList, nsIObserver)
 
 // -----------------------------------------------------------------------------
@@ -1956,7 +1964,7 @@ void nsDisplayMathMLCharDebug::Paint(nsDisplayListBuilder* aBuilder,
                                      nsRenderingContext* aCtx)
 {
   // for visual debug
-  int skipSides = 0;
+  Sides skipSides;
   nsPresContext* presContext = mFrame->PresContext();
   nsStyleContext* styleContext = mFrame->StyleContext();
   nsRect rect = mRect + ToReferenceFrame();

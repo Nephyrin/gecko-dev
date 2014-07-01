@@ -2528,12 +2528,13 @@ Intern(JSContext *cx, unsigned argc, jsval *vp)
     if (!str)
         return false;
 
-    size_t length;
-    const jschar *chars = JS_GetStringCharsAndLength(cx, str, &length);
-    if (!chars)
+    AutoStableStringChars strChars(cx);
+    if (!strChars.initTwoByte(cx, str))
         return false;
 
-    if (!JS_InternUCStringN(cx, chars, length))
+    Range<const jschar> chars = strChars.twoByteRange();
+
+    if (!JS_InternUCStringN(cx, chars.start().get(), chars.length()))
         return false;
 
     args.rval().setUndefined();
@@ -2957,7 +2958,7 @@ EvalInWorker(JSContext *cx, unsigned argc, jsval *vp)
     jschar *chars = (jschar *) js_malloc(str->length() * sizeof(jschar));
     if (!chars)
         return false;
-    PodCopy(chars, str->chars(), str->length());
+    CopyChars(chars, *str);
 
     WorkerInput *input = js_new<WorkerInput>(cx->runtime(), chars, str->length());
     if (!input)
@@ -3545,15 +3546,24 @@ Compile(JSContext *cx, unsigned argc, jsval *vp)
     }
 
     RootedObject global(cx, JS::CurrentGlobalOrNull(cx));
-    JSString *scriptContents = args[0].toString();
+    JSFlatString *scriptContents = args[0].toString()->ensureFlat(cx);
+    if (!scriptContents)
+        return false;
+
+    AutoStableStringChars stableChars(cx);
+    if (!stableChars.initTwoByte(cx, scriptContents))
+        return false;
+
     JS::AutoSaveContextOptions asco(cx);
     JS::ContextOptionsRef(cx).setNoScriptRval(true);
     JS::CompileOptions options(cx);
     options.setIntroductionType("js shell compile")
            .setFileAndLine("<string>", 1)
            .setCompileAndGo(true);
-    bool ok = JS_CompileUCScript(cx, global, JS_GetStringCharsZ(cx, scriptContents),
-                                 JS_GetStringLength(scriptContents), options);
+
+    const jschar *chars = stableChars.twoByteRange().start().get();
+    bool ok = JS_CompileUCScript(cx, global, chars,
+                                 scriptContents->length(), options);
     args.rval().setUndefined();
     return ok;
 }
@@ -3576,14 +3586,22 @@ Parse(JSContext *cx, unsigned argc, jsval *vp)
         return false;
     }
 
-    JSString *scriptContents = args[0].toString();
+    JSFlatString *scriptContents = args[0].toString()->ensureFlat(cx);
+    if (!scriptContents)
+        return false;
+
+    AutoStableStringChars stableChars(cx);
+    if (!stableChars.initTwoByte(cx, scriptContents))
+        return false;
+
+    size_t length = scriptContents->length();
+    const jschar *chars = stableChars.twoByteRange().start().get();
+
     CompileOptions options(cx);
     options.setIntroductionType("js shell parse")
            .setFileAndLine("<string>", 1)
            .setCompileAndGo(false);
-    Parser<FullParseHandler> parser(cx, &cx->tempLifoAlloc(), options,
-                                    JS_GetStringCharsZ(cx, scriptContents),
-                                    JS_GetStringLength(scriptContents),
+    Parser<FullParseHandler> parser(cx, &cx->tempLifoAlloc(), options, chars, length,
                                     /* foldConstants = */ true, nullptr, nullptr);
 
     ParseNode *pn = parser.parse(nullptr);
@@ -3615,14 +3633,20 @@ SyntaxParse(JSContext *cx, unsigned argc, jsval *vp)
         return false;
     }
 
-    JSString *scriptContents = args[0].toString();
+    JSFlatString *scriptContents = args[0].toString()->ensureFlat(cx);
+    if (!scriptContents)
+        return false;
     CompileOptions options(cx);
     options.setIntroductionType("js shell syntaxParse")
            .setFileAndLine("<string>", 1)
            .setCompileAndGo(false);
 
-    const jschar *chars = JS_GetStringCharsZ(cx, scriptContents);
-    size_t length = JS_GetStringLength(scriptContents);
+    AutoStableStringChars stableChars(cx);
+    if (!stableChars.initTwoByte(cx, scriptContents))
+        return false;
+
+    const jschar *chars = stableChars.twoByteRange().start().get();
+    size_t length = scriptContents->length();
     Parser<frontend::SyntaxParseHandler> parser(cx, &cx->tempLifoAlloc(),
                                                 options, chars, length, false, nullptr, nullptr);
 
@@ -4501,6 +4525,11 @@ ToLatin1(JSContext *cx, unsigned argc, Value *vp)
     CallArgs args = CallArgsFromVp(argc, vp);
     if (!args.get(0).isString() || !args[0].toString()->isLinear()) {
         args.rval().setUndefined();
+        return true;
+    }
+
+    if (args[0].toString()->hasLatin1Chars()) {
+        args.rval().set(args[0]);
         return true;
     }
 
@@ -5956,13 +5985,12 @@ SetRuntimeOptions(JSRuntime *rt, const OptionParser &op)
     if (const char *str = op.getStringOption("ion-gvn")) {
         if (strcmp(str, "off") == 0) {
             jit::js_JitOptions.disableGvn = true;
-        } else if (strcmp(str, "pessimistic") == 0) {
-            jit::js_JitOptions.forceGvnKind = true;
-            jit::js_JitOptions.forcedGvnKind = jit::GVN_Pessimistic;
-        } else if (strcmp(str, "optimistic") == 0) {
-            jit::js_JitOptions.forceGvnKind = true;
-            jit::js_JitOptions.forcedGvnKind = jit::GVN_Optimistic;
-        } else {
+        } else if (strcmp(str, "on") != 0 &&
+                   strcmp(str, "optimistic") != 0 &&
+                   strcmp(str, "pessimistic") != 0)
+        {
+            // We accept "pessimistic" and "optimistic" as synonyms for "on"
+            // for backwards compatibility.
             return OptionFailure("ion-gvn", str);
         }
     }
@@ -6073,6 +6101,11 @@ SetRuntimeOptions(JSRuntime *rt, const OptionParser &op)
     }
 
 #endif // JS_ION
+
+#if defined(JS_CODEGEN_ARM)
+    if (const char *str = op.getStringOption("arm-hwcap"))
+        jit::ParseARMHwCapFlags(str);
+#endif
 
 #if defined(JS_ARM_SIMULATOR)
     if (op.getBoolOption("arm-sim-icache-checks"))
@@ -6240,8 +6273,7 @@ main(int argc, char **argv, char **envp)
         || !op.addStringOption('\0', "ion-gvn", "[mode]",
                                "Specify Ion global value numbering:\n"
                                "  off: disable GVN\n"
-                               "  pessimistic: use pessimistic GVN\n"
-                               "  optimistic: (default) use optimistic GVN")
+                               "  on:  enable GVN (default)\n")
         || !op.addStringOption('\0', "ion-licm", "on/off",
                                "Loop invariant code motion (default: on, off to disable)")
         || !op.addStringOption('\0', "ion-edgecase-analysis", "on/off",
@@ -6284,6 +6316,7 @@ main(int argc, char **argv, char **envp)
                              "to test JIT codegen (no-op on platforms other than x86 and x64).")
         || !op.addBoolOption('\0', "fuzzing-safe", "Don't expose functions that aren't safe for "
                              "fuzzers to call")
+        || !op.addBoolOption('\0', "latin1-strings", "Enable Latin1 strings (default: off)")
 #ifdef DEBUG
         || !op.addBoolOption('\0', "dump-entrained-variables", "Print variables which are "
                              "unnecessarily entrained by inner functions")
@@ -6293,6 +6326,10 @@ main(int argc, char **argv, char **envp)
 #endif
         || !op.addIntOption('\0', "available-memory", "SIZE",
                             "Select GC settings based on available memory (MB)", 0)
+#if defined(JS_CODEGEN_ARM)
+        || !op.addStringOption('\0', "arm-hwcap", "[features]",
+                               "Specify ARM code generation features, or 'help' to list all features.")
+#endif
 #if defined(JS_ARM_SIMULATOR)
         || !op.addBoolOption('\0', "arm-sim-icache-checks", "Enable icache flush checks in the ARM "
                              "simulator.")
@@ -6351,6 +6388,11 @@ main(int argc, char **argv, char **envp)
 #endif
 
 #endif // DEBUG
+
+    // Set this option before initializing the JSRuntime, so that Latin1 strings
+    // are used for strings allocated during initialization.
+    if (op.getBoolOption("latin1-strings"))
+        js::EnableLatin1Strings = true;
 
 #ifdef JS_THREADSAFE
     // The fake thread count must be set before initializing the Runtime,
