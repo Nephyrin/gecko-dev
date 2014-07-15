@@ -223,6 +223,7 @@
 #include "nsContentPermissionHelper.h"
 #include "mozilla/dom/DOMStringList.h"
 #include "nsWindowMemoryReporter.h"
+#include "nsLocation.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -4221,22 +4222,34 @@ nsDocument::LoadAdditionalStyleSheet(additionalSheetType aType, nsIURI* aSheetUR
     true, getter_AddRefs(sheet));
   NS_ENSURE_SUCCESS(rv, rv);
 
-  mAdditionalSheets[aType].AppendObject(sheet);
   sheet->SetOwningDocument(this);
   MOZ_ASSERT(sheet->IsApplicable());
+
+  return AddAdditionalStyleSheet(aType, sheet);
+}
+
+nsresult
+nsDocument::AddAdditionalStyleSheet(additionalSheetType aType, nsIStyleSheet* aSheet)
+{
+  if (mAdditionalSheets[aType].Contains(aSheet))
+    return NS_ERROR_INVALID_ARG;
+
+  if (!aSheet->IsApplicable())
+    return NS_ERROR_INVALID_ARG;
+
+  mAdditionalSheets[aType].AppendObject(aSheet);
 
   BeginUpdate(UPDATE_STYLE);
   nsCOMPtr<nsIPresShell> shell = GetShell();
   if (shell) {
     nsStyleSet::sheetType type = ConvertAdditionalSheetType(aType);
-    shell->StyleSet()->AppendStyleSheet(type, sheet);
+    shell->StyleSet()->AppendStyleSheet(type, aSheet);
   }
 
   // Passing false, so documet.styleSheets.length will not be affected by
   // these additional sheets.
-  NotifyStyleSheetAdded(sheet, false);
+  NotifyStyleSheetAdded(aSheet, false);
   EndUpdate(UPDATE_STYLE);
-
   return NS_OK;
 }
 
@@ -6534,7 +6547,7 @@ nsDocument::GetLocation(nsIDOMLocation **_retval)
   return NS_OK;
 }
 
-already_AddRefed<nsIDOMLocation>
+already_AddRefed<nsLocation>
 nsIDocument::GetLocation() const
 {
   nsCOMPtr<nsIDOMWindow> w = do_QueryInterface(mScriptGlobalObject);
@@ -6545,7 +6558,7 @@ nsIDocument::GetLocation() const
 
   nsCOMPtr<nsIDOMLocation> loc;
   w->GetLocation(getter_AddRefs(loc));
-  return loc.forget();
+  return loc.forget().downcast<nsLocation>();
 }
 
 Element*
@@ -11326,8 +11339,6 @@ public:
     mDocument(do_GetWeakReference(aElement->OwnerDoc())),
     mUserInputOrChromeCaller(aUserInputOrChromeCaller) {}
 
-  virtual ~nsPointerLockPermissionRequest() {}
-
   NS_DECL_ISUPPORTS
   NS_DECL_NSICONTENTPERMISSIONREQUEST
 
@@ -11387,6 +11398,9 @@ public:
   nsWeakPtr mElement;
   nsWeakPtr mDocument;
   bool mUserInputOrChromeCaller;
+
+protected:
+  virtual ~nsPointerLockPermissionRequest() {}
 };
 
 NS_IMPL_ISUPPORTS_INHERITED(nsPointerLockPermissionRequest,
@@ -11874,6 +11888,10 @@ SizeOfStyleSheetsElementIncludingThis(nsIStyleSheet* aStyleSheet,
                                       MallocSizeOf aMallocSizeOf,
                                       void* aData)
 {
+  if (!aStyleSheet->GetOwningDocument()) {
+    // Avoid over-reporting shared sheets.
+    return 0;
+  }
   return aStyleSheet->SizeOfIncludingThis(aMallocSizeOf);
 }
 

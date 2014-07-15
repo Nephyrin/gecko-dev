@@ -55,9 +55,6 @@ class ChunkPool
     /* Must be called either during the GC or with the GC lock taken. */
     inline void put(Chunk *chunk);
 
-    /* Must be called with the GC lock taken. */
-    void expireAndFree(JSRuntime *rt, bool releaseAll);
-
     class Enum {
       public:
         Enum(ChunkPool &pool) : pool(pool), chunkp(&pool.emptyChunkListHead) {}
@@ -131,7 +128,7 @@ class GCRuntime
 {
   public:
     explicit GCRuntime(JSRuntime *rt);
-    bool init(uint32_t maxbytes);
+    bool init(uint32_t maxbytes, uint32_t maxNurseryBytes);
     void finish();
 
     inline int zeal();
@@ -321,9 +318,8 @@ class GCRuntime
 
     bool isGcNeeded() { return isNeeded; }
 
-    double computeHeapGrowthFactor(size_t lastBytes) const;
-    size_t computeTriggerBytes(double growthFactor, size_t lastBytes,
-                               JSGCInvocationKind gckind) const;
+    double computeHeapGrowthFactor(size_t lastBytes);
+    size_t computeTriggerBytes(double growthFactor, size_t lastBytes, JSGCInvocationKind gckind);
     size_t allocationThreshold() { return allocThreshold; }
 
     JSGCMode gcMode() const { return mode; }
@@ -359,7 +355,7 @@ class GCRuntime
      * Return the list of chunks that can be released outside the GC lock.
      * Must be called either during the GC or with the GC lock taken.
      */
-    Chunk *expireChunkPool(bool releaseAll);
+    Chunk *expireChunkPool(bool shrinkBuffers, bool releaseAll);
     void expireAndFreeChunkPool(bool releaseAll);
     void freeChunkList(Chunk *chunkListHead);
     void prepareToFreeChunk(ChunkInfo &info);
@@ -394,7 +390,7 @@ class GCRuntime
     bool releaseObservedTypes();
     void endSweepingZoneGroup();
     bool sweepPhase(SliceBudget &sliceBudget);
-    void endSweepPhase(bool lastGC);
+    void endSweepPhase(JSGCInvocationKind gckind, bool lastGC);
     void sweepZones(FreeOp *fop, bool lastGC);
     void decommitArenasFromAvailableList(Chunk **availableListHeadp);
     void decommitArenas();
@@ -513,9 +509,6 @@ class GCRuntime
 
     /* Whether all compartments are being collected in first GC slice. */
     bool                  isFull;
-
-    /* The kind of the last collection. */
-    JSGCInvocationKind    lastKind;
 
     /* The reason that an interrupt-triggered GC should be called. */
     JS::gcreason::Reason  triggerReason;

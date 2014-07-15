@@ -27,14 +27,11 @@
 
 #include "cert.h"
 #include "pkix/enumclass.h"
-#include "pkix/ScopedPtr.h"
 #include "seccomon.h"
 #include "secport.h"
 #include "stdint.h"
 
 namespace mozilla { namespace pkix {
-
-typedef ScopedPtr<CERTCertList, CERT_DestroyCertList> ScopedCERTCertList;
 
 MOZILLA_PKIX_ENUM_CLASS EndEntityOrCA { MustBeEndEntity = 0, MustBeCA = 1 };
 
@@ -105,6 +102,21 @@ private:
   void operator=(const CertID&) /*= delete*/;
 };
 
+class DERArray
+{
+public:
+  // Returns the number of DER-encoded items in the array.
+  virtual size_t GetLength() const = 0;
+
+  // Returns a weak (non-owning) pointer the ith DER-encoded item in the array
+  // (0-indexed). The result is guaranteed to be non-null if i < GetLength(),
+  // and the result is guaranteed to be nullptr if i >= GetLength().
+  virtual const SECItem* GetDER(size_t i) const = 0;
+protected:
+  DERArray() { }
+  virtual ~DERArray() { }
+};
+
 // Applications control the behavior of path building and verification by
 // implementing the TrustDomain interface. The TrustDomain is used for all
 // cryptography and for determining which certificates are trusted or
@@ -134,8 +146,16 @@ public:
   class IssuerChecker
   {
   public:
+    // potentialIssuerDER is the complete DER encoding of the certificate to
+    // be checked as a potential issuer.
+    //
+    // If additionalNameConstraints is not nullptr then it must point to an
+    // encoded NameConstraints extension value; in that case, those name
+    // constraints will be checked in addition to any any name constraints
+    // contained in potentialIssuerDER.
     virtual SECStatus Check(const SECItem& potentialIssuerDER,
-                            /*out*/ bool& keepGoing) = 0;
+               /*optional*/ const SECItem* additionalNameConstraints,
+                    /*out*/ bool& keepGoing) = 0;
   protected:
     IssuerChecker();
     virtual ~IssuerChecker();
@@ -195,17 +215,35 @@ public:
   virtual SECStatus VerifySignedData(const CERTSignedData& signedData,
                                      const SECItem& subjectPublicKeyInfo) = 0;
 
+  // Called as soon as we think we have a valid chain but before revocation
+  // checks are done. This function can be used to compute additional checks,
+  // especilaly checks that require the entire certificate chain. This callback
+  // can also be used to save a copy of the built certificate chain for later
+  // use.
+  //
+  // This function may be called multiple times, regardless of whether it
+  // returns SECSuccess or SECFailure. It is guaranteed that BuildCertChain
+  // will not return SECSuccess unless the last call to IsChainValid returns
+  // SECSuccess. Further, it is guaranteed that when BuildCertChain returns
+  // SECSuccess the last chain passed to IsChainValid is the valid chain that
+  // should be used for further operations that require the whole chain.
+  //
+  // Keep in mind, in particular, that if the application saves a copy of the
+  // certificate chain the last invocation of IsChainValid during a validation,
+  // it is still possible for BuildCertChain to fail (return SECFailure), in
+  // which case the application must not assume anything about the validity of
+  // the last certificate chain passed to IsChainValid; especially, it would be
+  // very wrong to assume that the certificate chain is valid.
+  //
+  // certChain.GetDER(0) is the trust anchor.
+  virtual SECStatus IsChainValid(const DERArray& certChain) = 0;
+
   // issuerCertToDup is only non-const so CERT_DupCertificate can be called on
   // it.
   virtual SECStatus CheckRevocation(EndEntityOrCA endEntityOrCA,
                                     const CertID& certID, PRTime time,
                        /*optional*/ const SECItem* stapledOCSPresponse,
                        /*optional*/ const SECItem* aiaExtension) = 0;
-
-  // Called as soon as we think we have a valid chain but before revocation
-  // checks are done. Called to compute additional chain level checks, by the
-  // TrustDomain.
-  virtual SECStatus IsChainValid(const CERTCertList* certChain) = 0;
 
 protected:
   TrustDomain() { }

@@ -26,6 +26,7 @@
 
 #include "pkix/bind.h"
 #include "pkix/pkix.h"
+#include "pkix/ScopedPtr.h"
 #include "pkixcheck.h"
 #include "pkixder.h"
 #include "pkixutil.h"
@@ -330,7 +331,7 @@ DecodeBasicConstraints(der::Input& input, /*out*/ bool& isCA,
 Result
 CheckBasicConstraints(EndEntityOrCA endEntityOrCA,
                       const SECItem* encodedBasicConstraints,
-                      der::Version version, TrustLevel trustLevel,
+                      const der::Version version, TrustLevel trustLevel,
                       unsigned int subCACount)
 {
   bool isCA = false;
@@ -411,12 +412,10 @@ PORT_FreeArena_false(PLArenaPool* arena) {
 }
 
 Result
-CheckNameConstraints(const BackCert& cert)
+CheckNameConstraints(const SECItem& encodedNameConstraints,
+                     const BackCert& firstChild,
+                     KeyPurposeId requiredEKUIfPresent)
 {
-  if (!cert.GetNameConstraints()) {
-    return Success;
-  }
-
   ScopedPtr<PLArenaPool, PORT_FreeArena_false>
     arena(PORT_NewArena(DER_DEFAULT_CHUNKSIZE));
   if (!arena) {
@@ -425,13 +424,12 @@ CheckNameConstraints(const BackCert& cert)
 
   // Owned by arena
   const CERTNameConstraints* constraints =
-    CERT_DecodeNameConstraintsExtension(arena.get(), cert.GetNameConstraints());
+    CERT_DecodeNameConstraintsExtension(arena.get(), &encodedNameConstraints);
   if (!constraints) {
     return MapSECStatus(SECFailure);
   }
 
-  for (const BackCert* child = cert.childCert; child;
-       child = child->childCert) {
+  for (const BackCert* child = &firstChild; child; child = child->childCert) {
     ScopedPtr<CERTCertificate, CERT_DestroyCertificate>
       nssCert(CERT_NewTempCertificate(CERT_GetDefaultCertDB(),
                                       const_cast<SECItem*>(&child->GetDER()),
@@ -440,7 +438,8 @@ CheckNameConstraints(const BackCert& cert)
       return MapSECStatus(SECFailure);
     }
 
-    bool includeCN = child->includeCN == BackCert::IncludeCN::Yes;
+    bool includeCN = child->endEntityOrCA == EndEntityOrCA::MustBeEndEntity &&
+                     requiredEKUIfPresent == KeyPurposeId::id_kp_serverAuth;
     // owned by arena
     const CERTGeneralName*
       names(CERT_GetConstrainedCertificateNames(nssCert.get(), arena.get(),
@@ -627,7 +626,6 @@ Result
 CheckIssuerIndependentProperties(TrustDomain& trustDomain,
                                  const BackCert& cert,
                                  PRTime time,
-                                 EndEntityOrCA endEntityOrCA,
                                  KeyUsage requiredKeyUsageIfPresent,
                                  KeyPurposeId requiredEKUIfPresent,
                                  const CertPolicyId& requiredPolicy,
@@ -635,6 +633,8 @@ CheckIssuerIndependentProperties(TrustDomain& trustDomain,
                 /*optional out*/ TrustLevel* trustLevelOut)
 {
   Result rv;
+
+  const EndEntityOrCA endEntityOrCA = cert.endEntityOrCA;
 
   TrustLevel trustLevel;
   rv = MapSECStatus(trustDomain.GetCertTrust(endEntityOrCA, requiredPolicy,

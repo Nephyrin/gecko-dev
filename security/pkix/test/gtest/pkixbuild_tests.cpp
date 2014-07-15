@@ -128,14 +128,16 @@ private:
   SECStatus FindIssuer(const SECItem& encodedIssuerName,
                        IssuerChecker& checker, PRTime time)
   {
-    mozilla::pkix::ScopedCERTCertList
+    ScopedCERTCertList
       candidates(CERT_CreateSubjectCertList(nullptr, CERT_GetDefaultCertDB(),
                                             &encodedIssuerName, time, true));
     if (candidates) {
       for (CERTCertListNode* n = CERT_LIST_HEAD(candidates);
            !CERT_LIST_END(n, candidates); n = CERT_LIST_NEXT(n)) {
         bool keepGoing;
-        SECStatus srv = checker.Check(n->cert->derCert, keepGoing);
+        SECStatus srv = checker.Check(n->cert->derCert,
+                                      nullptr/*additionalNameConstraints*/,
+                                      keepGoing);
         if (srv != SECSuccess) {
           return SECFailure;
         }
@@ -162,7 +164,7 @@ private:
     return SECSuccess;
   }
 
-  virtual SECStatus IsChainValid(const CERTCertList*)
+  virtual SECStatus IsChainValid(const DERArray&)
   {
     return SECSuccess;
   }
@@ -173,7 +175,7 @@ private:
 
 public:
   ScopedSECKEYPrivateKey leafCAKey;
-  CERTCertificate* GetLeafeCACert() const
+  CERTCertificate* GetLeafCACert() const
   {
     return certChainTail[PR_ARRAY_SIZE(certChainTail) - 1].get();
   }
@@ -200,20 +202,18 @@ protected:
 
 TEST_F(pkixbuild, MaxAcceptableCertChainLength)
 {
-  ScopedCERTCertList results;
   ASSERT_SECSuccess(BuildCertChain(trustDomain,
-                                   trustDomain.GetLeafeCACert()->derCert,
+                                   trustDomain.GetLeafCACert()->derCert,
                                    now, EndEntityOrCA::MustBeCA,
                                    KeyUsage::noParticularKeyUsageRequired,
                                    KeyPurposeId::id_kp_serverAuth,
                                    CertPolicyId::anyPolicy,
-                                   nullptr, // stapled OCSP response
-                                   results));
+                                   nullptr/*stapledOCSPResponse*/));
 
   ScopedSECKEYPrivateKey privateKey;
   ScopedCERTCertificate cert;
   ASSERT_TRUE(CreateCert(arena.get(),
-                         trustDomain.GetLeafeCACert()->subjectName,
+                         trustDomain.GetLeafCACert()->subjectName,
                          "CN=Direct End-Entity",
                          EndEntityOrCA::MustBeEndEntity,
                          trustDomain.leafCAKey.get(), privateKey, cert));
@@ -222,18 +222,15 @@ TEST_F(pkixbuild, MaxAcceptableCertChainLength)
                                    KeyUsage::noParticularKeyUsageRequired,
                                    KeyPurposeId::id_kp_serverAuth,
                                    CertPolicyId::anyPolicy,
-                                   nullptr, // stapled OCSP response
-                                   results));
+                                   nullptr/*stapledOCSPResponse*/));
 }
 
 TEST_F(pkixbuild, BeyondMaxAcceptableCertChainLength)
 {
-  ScopedCERTCertList results;
-
   ScopedSECKEYPrivateKey caPrivateKey;
   ScopedCERTCertificate caCert;
   ASSERT_TRUE(CreateCert(arena.get(),
-                         trustDomain.GetLeafeCACert()->subjectName,
+                         trustDomain.GetLeafCACert()->subjectName,
                          "CN=CA Too Far", EndEntityOrCA::MustBeCA,
                          trustDomain.leafCAKey.get(),
                          caPrivateKey, caCert));
@@ -244,8 +241,7 @@ TEST_F(pkixbuild, BeyondMaxAcceptableCertChainLength)
                                    KeyUsage::noParticularKeyUsageRequired,
                                    KeyPurposeId::id_kp_serverAuth,
                                    CertPolicyId::anyPolicy,
-                                   nullptr, // stapled OCSP response
-                                   results));
+                                   nullptr/*stapledOCSPResponse*/));
 
   ScopedSECKEYPrivateKey privateKey;
   ScopedCERTCertificate cert;
@@ -260,6 +256,5 @@ TEST_F(pkixbuild, BeyondMaxAcceptableCertChainLength)
                                    KeyUsage::noParticularKeyUsageRequired,
                                    KeyPurposeId::id_kp_serverAuth,
                                    CertPolicyId::anyPolicy,
-                                   nullptr, // stapled OCSP response
-                                   results));
+                                   nullptr/*stapledOCSPResponse*/));
 }

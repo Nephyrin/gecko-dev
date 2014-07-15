@@ -1,4 +1,5 @@
 /* -*- Mode: C++; tab-width: 2; indent-tabs-mode: nil; c-basic-offset: 2 -*- */
+/* vim: set ts=2 sts=2 sw=2 et tw=80: */
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -89,6 +90,8 @@
 #include "GeckoProfiler.h"
 #include "mozilla/Preferences.h"
 #include "nsIContentIterator.h"
+#include "nsIDOMStyleSheet.h"
+#include "nsIStyleSheet.h"
 #include "nsContentPermissionHelper.h"
 
 #ifdef XP_WIN
@@ -685,6 +688,23 @@ GetButtonsFlagForButton(int32_t aButton)
   }
 }
 
+nsView*
+nsDOMWindowUtils::GetViewToDispatchEvent(nsPresContext* presContext, nsIPresShell** presShell)
+{
+  if (presContext && presShell) {
+    *presShell = presContext->PresShell();
+    if (*presShell) {
+      NS_ADDREF(*presShell);
+      if (nsViewManager* viewManager = (*presShell)->GetViewManager()) {
+        if (nsView* view = viewManager->GetRootView()) {
+          return view;
+        }
+      }
+    }
+  }
+  return nullptr;
+}
+
 NS_IMETHODIMP
 nsDOMWindowUtils::SendMouseEventCommon(const nsAString& aType,
                                        float aX,
@@ -753,44 +773,42 @@ nsDOMWindowUtils::SendMouseEventCommon(const nsAString& aType,
 
   nsEventStatus status;
   if (aToWindow) {
-    nsCOMPtr<nsIPresShell> presShell = presContext->PresShell();
-    if (!presShell)
+    nsCOMPtr<nsIPresShell> presShell;
+    nsView* view = GetViewToDispatchEvent(presContext, getter_AddRefs(presShell));
+    if (!presShell || !view) {
       return NS_ERROR_FAILURE;
-    nsViewManager* viewManager = presShell->GetViewManager();
-    if (!viewManager)
-      return NS_ERROR_FAILURE;
-    nsView* view = viewManager->GetRootView();
-    if (!view)
-      return NS_ERROR_FAILURE;
-
+    }
     status = nsEventStatus_eIgnore;
     return presShell->HandleEvent(view->GetFrame(), &event, false, &status);
   }
   nsresult rv = widget->DispatchEvent(&event, status);
-  *aPreventDefault = (status == nsEventStatus_eConsumeNoDefault);
+  if (aPreventDefault) {
+    *aPreventDefault = (status == nsEventStatus_eConsumeNoDefault);
+  }
 
   return rv;
 }
 
 NS_IMETHODIMP
-nsDOMWindowUtils::SendPointerEvent(const nsAString& aType,
-                                   float aX,
-                                   float aY,
-                                   int32_t aButton,
-                                   int32_t aClickCount,
-                                   int32_t aModifiers,
-                                   bool aIgnoreRootScrollFrame,
-                                   float aPressure,
-                                   unsigned short aInputSourceArg,
-                                   int32_t aPointerId,
-                                   int32_t aWidth,
-                                   int32_t aHeight,
-                                   int32_t tiltX,
-                                   int32_t tiltY,
-                                   bool aIsPrimary,
-                                   bool aIsSynthesized,
-                                   uint8_t aOptionalArgCount,
-                                   bool* aPreventDefault)
+nsDOMWindowUtils::SendPointerEventCommon(const nsAString& aType,
+                                         float aX,
+                                         float aY,
+                                         int32_t aButton,
+                                         int32_t aClickCount,
+                                         int32_t aModifiers,
+                                         bool aIgnoreRootScrollFrame,
+                                         float aPressure,
+                                         unsigned short aInputSourceArg,
+                                         int32_t aPointerId,
+                                         int32_t aWidth,
+                                         int32_t aHeight,
+                                         int32_t aTiltX,
+                                         int32_t aTiltY,
+                                         bool aIsPrimary,
+                                         bool aIsSynthesized,
+                                         uint8_t aOptionalArgCount,
+                                         bool aToWindow,
+                                         bool* aPreventDefault)
 {
   MOZ_RELEASE_ASSERT(nsContentUtils::IsCallerChrome());
 
@@ -830,8 +848,8 @@ nsDOMWindowUtils::SendPointerEvent(const nsAString& aType,
   event.pointerId = aPointerId;
   event.width = aWidth;
   event.height = aHeight;
-  event.tiltX = tiltX;
-  event.tiltY = tiltY;
+  event.tiltX = aTiltX;
+  event.tiltY = aTiltY;
   event.isPrimary = aIsPrimary;
   event.clickCount = aClickCount;
   event.time = PR_IntervalNow();
@@ -846,10 +864,82 @@ nsDOMWindowUtils::SendPointerEvent(const nsAString& aType,
   event.ignoreRootScrollFrame = aIgnoreRootScrollFrame;
 
   nsEventStatus status;
+  if (aToWindow) {
+    nsCOMPtr<nsIPresShell> presShell;
+    nsView* view = GetViewToDispatchEvent(presContext, getter_AddRefs(presShell));
+    if (!presShell || !view) {
+      return NS_ERROR_FAILURE;
+    }
+    status = nsEventStatus_eIgnore;
+    return presShell->HandleEvent(view->GetFrame(), &event, false, &status);
+  }
   nsresult rv = widget->DispatchEvent(&event, status);
-  *aPreventDefault = (status == nsEventStatus_eConsumeNoDefault);
+  if (aPreventDefault) {
+    *aPreventDefault = (status == nsEventStatus_eConsumeNoDefault);
+  }
 
   return rv;
+}
+
+NS_IMETHODIMP
+nsDOMWindowUtils::SendPointerEvent(const nsAString& aType,
+                                   float aX,
+                                   float aY,
+                                   int32_t aButton,
+                                   int32_t aClickCount,
+                                   int32_t aModifiers,
+                                   bool aIgnoreRootScrollFrame,
+                                   float aPressure,
+                                   unsigned short aInputSourceArg,
+                                   int32_t aPointerId,
+                                   int32_t aWidth,
+                                   int32_t aHeight,
+                                   int32_t aTiltX,
+                                   int32_t aTiltY,
+                                   bool aIsPrimary,
+                                   bool aIsSynthesized,
+                                   uint8_t aOptionalArgCount,
+                                   bool* aPreventDefault)
+{
+  PROFILER_LABEL("nsDOMWindowUtils", "SendPointerEvent",
+                 js::ProfileEntry::Category::EVENTS);
+
+  return SendPointerEventCommon(aType, aX, aY, aButton, aClickCount,
+                                aModifiers, aIgnoreRootScrollFrame,
+                                aPressure, aInputSourceArg, aPointerId,
+                                aWidth, aHeight, aTiltX, aTiltY,
+                                aIsPrimary, aIsSynthesized,
+                                aOptionalArgCount, false, aPreventDefault);
+}
+
+NS_IMETHODIMP
+nsDOMWindowUtils::SendPointerEventToWindow(const nsAString& aType,
+                                           float aX,
+                                           float aY,
+                                           int32_t aButton,
+                                           int32_t aClickCount,
+                                           int32_t aModifiers,
+                                           bool aIgnoreRootScrollFrame,
+                                           float aPressure,
+                                           unsigned short aInputSourceArg,
+                                           int32_t aPointerId,
+                                           int32_t aWidth,
+                                           int32_t aHeight,
+                                           int32_t aTiltX,
+                                           int32_t aTiltY,
+                                           bool aIsPrimary,
+                                           bool aIsSynthesized,
+                                           uint8_t aOptionalArgCount)
+{
+  PROFILER_LABEL("nsDOMWindowUtils", "SendPointerEventToWindow",
+                 js::ProfileEntry::Category::EVENTS);
+
+  return SendPointerEventCommon(aType, aX, aY, aButton, aClickCount,
+                                aModifiers, aIgnoreRootScrollFrame,
+                                aPressure, aInputSourceArg, aPointerId,
+                                aWidth, aHeight, aTiltX, aTiltY,
+                                aIsPrimary, aIsSynthesized,
+                                aOptionalArgCount, true, nullptr);
 }
 
 NS_IMETHODIMP
@@ -1039,21 +1129,11 @@ nsDOMWindowUtils::SendTouchEventCommon(const nsAString& aType,
 
   nsEventStatus status;
   if (aToWindow) {
-    nsCOMPtr<nsIPresShell> presShell = presContext->PresShell();
-    if (!presShell) {
+    nsCOMPtr<nsIPresShell> presShell;
+    nsView* view = GetViewToDispatchEvent(presContext, getter_AddRefs(presShell));
+    if (!presShell || !view) {
       return NS_ERROR_FAILURE;
     }
-
-    nsViewManager* viewManager = presShell->GetViewManager();
-    if (!viewManager) {
-      return NS_ERROR_FAILURE;
-    }
-
-    nsView* view = viewManager->GetRootView();
-    if (!view) {
-      return NS_ERROR_FAILURE;
-    }
-
     status = nsEventStatus_eIgnore;
     *aPreventDefault = (status == nsEventStatus_eConsumeNoDefault);
     return presShell->HandleEvent(view->GetFrame(), &event, false, &status);
@@ -1162,7 +1242,9 @@ nsDOMWindowUtils::SendKeyEvent(const nsAString& aType,
 
   event.refPoint.x = event.refPoint.y = 0;
   event.time = PR_IntervalNow();
-  event.mFlags.mIsSynthesizedForTests = true;
+  if (!(aAdditionalFlags & KEY_FLAG_NOT_SYNTHESIZED_FOR_TESTS)) {
+    event.mFlags.mIsSynthesizedForTests = true;
+  }
 
   if (aAdditionalFlags & KEY_FLAG_PREVENT_DEFAULT) {
     event.mFlags.mDefaultPrevented = true;
@@ -3367,6 +3449,28 @@ nsDOMWindowUtils::LoadSheet(nsIURI *aSheetURI, uint32_t aSheetType)
 }
 
 NS_IMETHODIMP
+nsDOMWindowUtils::AddSheet(nsIDOMStyleSheet *aSheet, uint32_t aSheetType)
+{
+  MOZ_RELEASE_ASSERT(nsContentUtils::IsCallerChrome());
+
+  NS_ENSURE_ARG_POINTER(aSheet);
+  NS_ENSURE_ARG(aSheetType == AGENT_SHEET ||
+                aSheetType == USER_SHEET ||
+                aSheetType == AUTHOR_SHEET);
+
+  nsCOMPtr<nsIDocument> doc = GetDocument();
+  NS_ENSURE_TRUE(doc, NS_ERROR_FAILURE);
+
+  nsIDocument::additionalSheetType type = convertSheetType(aSheetType);
+  nsCOMPtr<nsIStyleSheet> sheet = do_QueryInterface(aSheet);
+  NS_ENSURE_TRUE(sheet, NS_ERROR_FAILURE);
+  if (sheet->GetOwningDocument()) {
+    return NS_ERROR_INVALID_ARG;
+  }
+  return doc->AddAdditionalStyleSheet(type, sheet);
+}
+
+NS_IMETHODIMP
 nsDOMWindowUtils::RemoveSheet(nsIURI *aSheetURI, uint32_t aSheetType)
 {
   MOZ_RELEASE_ASSERT(nsContentUtils::IsCallerChrome());
@@ -3586,6 +3690,74 @@ nsDOMWindowUtils::GetOMTAStyle(nsIDOMElement* aElement,
     aResult.Truncate();
   }
 
+  return NS_OK;
+}
+
+namespace {
+
+class HandlingUserInputHelper MOZ_FINAL : public nsIJSRAIIHelper
+{
+public:
+  HandlingUserInputHelper(bool aHandlingUserInput);
+
+  NS_DECL_ISUPPORTS
+  NS_DECL_NSIJSRAIIHELPER
+
+private:
+  ~HandlingUserInputHelper();
+
+  bool mHandlingUserInput;
+  bool mDestructCalled;
+};
+
+NS_IMPL_ISUPPORTS(HandlingUserInputHelper, nsIJSRAIIHelper)
+
+HandlingUserInputHelper::HandlingUserInputHelper(bool aHandlingUserInput)
+  : mHandlingUserInput(aHandlingUserInput),
+    mDestructCalled(false)
+{
+  if (aHandlingUserInput) {
+    EventStateManager::StartHandlingUserInput();
+  }
+}
+
+HandlingUserInputHelper::~HandlingUserInputHelper()
+{
+  // We assert, but just in case, make sure we notify the ESM.
+  MOZ_ASSERT(mDestructCalled);
+  if (!mDestructCalled) {
+    Destruct();
+  }
+}
+
+NS_IMETHODIMP
+HandlingUserInputHelper::Destruct()
+{
+  if (NS_WARN_IF(mDestructCalled)) {
+    return NS_ERROR_FAILURE;
+  }
+
+  mDestructCalled = true;
+  if (mHandlingUserInput) {
+    EventStateManager::StopHandlingUserInput();
+  }
+
+  return NS_OK;
+}
+
+} // unnamed namespace
+
+NS_IMETHODIMP
+nsDOMWindowUtils::SetHandlingUserInput(bool aHandlingUserInput,
+                                       nsIJSRAIIHelper** aHelper)
+{
+  if (!nsContentUtils::IsCallerChrome()) {
+    return NS_ERROR_DOM_SECURITY_ERR;
+  }
+
+  nsRefPtr<HandlingUserInputHelper> helper(
+    new HandlingUserInputHelper(aHandlingUserInput));
+  helper.forget(aHelper);
   return NS_OK;
 }
 

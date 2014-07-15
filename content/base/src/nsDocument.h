@@ -441,7 +441,6 @@ class nsDOMStyleSheetList : public mozilla::dom::StyleSheetList,
 {
 public:
   nsDOMStyleSheetList(nsIDocument *aDocument);
-  virtual ~nsDOMStyleSheetList();
 
   NS_DECL_ISUPPORTS_INHERITED
 
@@ -462,6 +461,8 @@ public:
   IndexedGetter(uint32_t aIndex, bool& aFound) MOZ_OVERRIDE;
 
 protected:
+  virtual ~nsDOMStyleSheetList();
+
   int32_t       mLength;
   nsIDocument*  mDocument;
 };
@@ -808,6 +809,7 @@ public:
                                             bool aApplicable) MOZ_OVERRIDE;
 
   virtual nsresult LoadAdditionalStyleSheet(additionalSheetType aType, nsIURI* aSheetURI) MOZ_OVERRIDE;
+  virtual nsresult AddAdditionalStyleSheet(additionalSheetType aType, nsIStyleSheet* aSheet) MOZ_OVERRIDE;
   virtual void RemoveAdditionalStyleSheet(additionalSheetType aType, nsIURI* sheetURI) MOZ_OVERRIDE;
   virtual nsIStyleSheet* FirstAdditionalAuthorSheet() MOZ_OVERRIDE;
 
