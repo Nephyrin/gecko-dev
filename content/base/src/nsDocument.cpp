@@ -1463,11 +1463,13 @@ public:
     MOZ_COUNT_CTOR(SelectorCacheKeyDeleter);
   }
 
+protected:
   ~SelectorCacheKeyDeleter()
   {
     MOZ_COUNT_DTOR(SelectorCacheKeyDeleter);
   }
 
+public:
   NS_IMETHOD Run()
   {
     return NS_OK;
@@ -11339,7 +11341,7 @@ public:
     mDocument(do_GetWeakReference(aElement->OwnerDoc())),
     mUserInputOrChromeCaller(aUserInputOrChromeCaller) {}
 
-  NS_DECL_ISUPPORTS
+  NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_NSICONTENTPERMISSIONREQUEST
 
   NS_IMETHOD Run()

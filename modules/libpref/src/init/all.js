@@ -357,9 +357,11 @@ pref("media.navigator.enabled", true);
 #endif
 #endif
 
-pref("media.tabstreaming.width", 320);
-pref("media.tabstreaming.height", 240);
-pref("media.tabstreaming.time_per_frame", 40);
+// do not enable screensharing before addressing security concerns: Bug 1035577
+// do not enable screensharing before implementing app/window sharing: Bug 1036653
+// do not enable screensharing before source constraints are finalized: Bug 1033885
+// do not enable screensharing before UX is ready: Bug 1035577
+pref("media.getusermedia.screensharing.enabled", false);
 
 // TextTrack support
 pref("media.webvtt.enabled", true);
@@ -432,6 +434,10 @@ pref("gfx.hidpi.enabled", 2);
 // Whether to enable LayerScope tool and default listening port
 pref("gfx.layerscope.enabled", false);
 pref("gfx.layerscope.port", 23456);
+
+// Log severe performance warnings to the error console and profiles.
+// This should be use to quickly find which slow paths are used by test cases.
+pref("gfx.perf-warnings.enabled", false);
 
 // 0 = Off, 1 = Full, 2 = Tagged Images Only.
 // See eCMSMode in gfx/thebes/gfxPlatform.h
@@ -648,6 +654,10 @@ pref("devtools.dump.emit", false);
 pref("devtools.discovery.log", false);
 // Disable scanning for DevTools devices via WiFi
 pref("devtools.remote.wifi.scan", false);
+// Hide UI options for controlling device visibility over WiFi
+// N.B.: This does not set whether the device can be discovered via WiFi, only
+// whether the UI control to make such a choice is shown to the user
+pref("devtools.remote.wifi.visible", false);
 
 // view source
 pref("view_source.syntax_highlight", true);
@@ -894,6 +904,12 @@ pref("javascript.options.mem.gc_dynamic_heap_growth", true);
 pref("javascript.options.mem.gc_dynamic_mark_slice", true);
 pref("javascript.options.mem.gc_allocation_threshold_mb", 30);
 pref("javascript.options.mem.gc_decommit_threshold_mb", 32);
+#ifdef JSGC_GENERATIONAL
+pref("javascript.options.mem.gc_min_empty_chunk_count", 1);
+#else
+pref("javascript.options.mem.gc_min_empty_chunk_count", 0);
+#endif
+pref("javascript.options.mem.gc_max_empty_chunk_count", 30);
 
 pref("javascript.options.showInConsole", false);
 
@@ -4219,6 +4235,9 @@ pref("dom.voicemail.defaultServiceId", 0);
 // DOM Inter-App Communication API.
 pref("dom.inter-app-communication-api.enabled", false);
 
+// Disable mapped array buffer by default.
+pref("dom.mapped_arraybuffer.enabled", false);
+
 // The tables used for Safebrowsing phishing and malware checks.
 pref("urlclassifier.malwareTable", "goog-malware-shavar,test-malware-simple");
 pref("urlclassifier.phishTable", "goog-phish-shavar,test-phish-simple");
@@ -4229,7 +4248,7 @@ pref("urlclassifier.disallow_completions", "test-malware-simple,test-phish-simpl
 // The table and update/gethash URLs for Safebrowsing phishing and malware
 // checks.
 pref("urlclassifier.trackingTable", "mozpub-track-digest256");
-pref("browser.trackingprotection.updateURL", "https://tracking.services.mozilla.com/update?client=SAFEBROWSING_ID&appver=%VERSION%&pver=2.2");
+pref("browser.trackingprotection.updateURL", "https://tracking.services.mozilla.com/downloads?client=SAFEBROWSING_ID&appver=%VERSION%&pver=2.2");
 pref("browser.trackingprotection.gethashURL", "https://tracking.services.mozilla.com/gethash?client=SAFEBROWSING_ID&appver=%VERSION%&pver=2.2");
 
 // Turn off Spatial navigation by default.
