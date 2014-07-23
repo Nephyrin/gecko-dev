@@ -168,6 +168,9 @@ function checkPayloadInfo(payload, reason) {
     if (isWindows || isOSX) {
       do_check_true("adapterVendorID" in payload.info);
       do_check_true("adapterDeviceID" in payload.info);
+      if (isWindows) {
+        do_check_true("adapterSubsysID" in payload.info);
+      }
     }
   }
   catch (x) {
@@ -442,7 +445,10 @@ add_task(function* test_simplePing() {
   gRequestIterator = Iterator(new Request());
 
   yield sendPing();
-  decodeRequestPayload(yield gRequestIterator.next());
+  let request = yield gRequestIterator.next();
+  let payload = decodeRequestPayload(request);
+
+  checkPayloadInfo(payload, "test-ping");
 });
 
 // Saves the current session histograms, reloads them, perfoms a ping
@@ -455,8 +461,19 @@ add_task(function* test_saveLoadPing() {
   yield TelemetryPing.testSaveHistograms(histogramsFile);
   yield TelemetryPing.testLoadHistograms(histogramsFile);
   yield sendPing();
-  checkPayload((yield gRequestIterator.next()), "test-ping", 1);
-  checkPayload((yield gRequestIterator.next()), "saved-session", 1);
+
+  // Get requests received by dummy server.
+  let request1 = yield gRequestIterator.next();
+  let request2 = yield gRequestIterator.next();
+
+  // Check we have the correct two requests. Ordering is not guaranteed.
+  if (request1.path.contains("test-ping")) {
+    checkPayload(request1, "test-ping", 1);
+    checkPayload(request2, "saved-session", 1);
+  } else {
+    checkPayload(request1, "saved-session", 1);
+    checkPayload(request2, "test-ping", 1);
+  }
 });
 
 // Checks that an expired histogram file is deleted when loaded.

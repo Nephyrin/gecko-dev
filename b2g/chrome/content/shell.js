@@ -816,11 +816,9 @@ let IndexedDBPromptHelper = {
   }
 }
 
-function RemoteDebugger() {}
-RemoteDebugger.prototype = {
+let RemoteDebugger = {
   _promptDone: false,
   _promptAnswer: false,
-  _listener: null,
 
   prompt: function debugger_prompt() {
     this._promptDone = false;
@@ -900,86 +898,88 @@ RemoteDebugger.prototype = {
   }
 };
 
-let USBRemoteDebugger = new RemoteDebugger();
+let USBRemoteDebugger = {
 
-Object.defineProperty(USBRemoteDebugger, "isDebugging", {
-  get: function() {
+  get isDebugging() {
     if (!this._listener) {
       return false;
     }
 
     return DebuggerServer._connections &&
            Object.keys(DebuggerServer._connections).length > 0;
+  },
+
+  start: function() {
+    if (this._listener) {
+      return;
+    }
+
+    RemoteDebugger.initServer();
+
+    let portOrPath =
+      Services.prefs.getCharPref("devtools.debugger.unix-domain-socket") ||
+      "/data/local/debugger-socket";
+
+    try {
+      debug("Starting USB debugger on " + portOrPath);
+      this._listener = DebuggerServer.openListener(portOrPath);
+      // Temporary event, until bug 942756 lands and offers a way to know
+      // when the server is up and running.
+      Services.obs.notifyObservers(null, 'debugger-server-started', null);
+    } catch (e) {
+      debug('Unable to start USB debugger server: ' + e);
+    }
+  },
+
+  stop: function() {
+    if (!this._listener) {
+      return;
+    }
+
+    try {
+      this._listener.close();
+      this._listener = null;
+    } catch (e) {
+      debug('Unable to stop USB debugger server: ' + e);
+    }
   }
-});
 
-USBRemoteDebugger.start = function() {
-  if (this._listener) {
-    return;
-  }
-
-  this.initServer();
-
-  let portOrPath =
-    Services.prefs.getCharPref("devtools.debugger.unix-domain-socket") ||
-    "/data/local/debugger-socket";
-
-  try {
-    debug("Starting USB debugger on " + portOrPath);
-    this._listener = DebuggerServer.openListener(portOrPath);
-    // Temporary event, until bug 942756 lands and offers a way to know
-    // when the server is up and running.
-    Services.obs.notifyObservers(null, 'debugger-server-started', null);
-  } catch (e) {
-    debug('Unable to start USB debugger server: ' + e);
-  }
 };
 
-USBRemoteDebugger.stop = function() {
-  if (!this._listener) {
-    return;
+let WiFiRemoteDebugger = {
+
+  start: function() {
+    if (this._listener) {
+      return;
+    }
+
+    RemoteDebugger.initServer();
+
+    try {
+      debug("Starting WiFi debugger");
+      this._listener = DebuggerServer.openListener(-1);
+      let port = this._listener.port;
+      debug("Started WiFi debugger on " + port);
+      discovery.addService("devtools", { port: port });
+    } catch (e) {
+      debug('Unable to start WiFi debugger server: ' + e);
+    }
+  },
+
+  stop: function() {
+    if (!this._listener) {
+      return;
+    }
+
+    try {
+      discovery.removeService("devtools");
+      this._listener.close();
+      this._listener = null;
+    } catch (e) {
+      debug('Unable to stop WiFi debugger server: ' + e);
+    }
   }
 
-  try {
-    this._listener.close();
-    this._listener = null;
-  } catch (e) {
-    debug('Unable to stop USB debugger server: ' + e);
-  }
-};
-
-let WiFiRemoteDebugger = new RemoteDebugger();
-
-WiFiRemoteDebugger.start = function() {
-  if (this._listener) {
-    return;
-  }
-
-  this.initServer();
-
-  try {
-    debug("Starting WiFi debugger");
-    this._listener = DebuggerServer.openListener(-1);
-    let port = this._listener.port;
-    debug("Started WiFi debugger on " + port);
-    discovery.addService("devtools", { port: port });
-  } catch (e) {
-    debug('Unable to start WiFi debugger server: ' + e);
-  }
-};
-
-WiFiRemoteDebugger.stop = function() {
-  if (!this._listener) {
-    return;
-  }
-
-  try {
-    discovery.removeService("devtools");
-    this._listener.close();
-    this._listener = null;
-  } catch (e) {
-    debug('Unable to stop WiFi debugger server: ' + e);
-  }
 };
 
 let KeyboardHelper = {
@@ -1273,7 +1273,7 @@ window.addEventListener('ContentStart', function update_onContentStart() {
   // We must set the size in KB, and keep a bit of free space.
   let size = Math.floor(stats.totalBytes / 1024) - 1024;
   Services.prefs.setIntPref("browser.cache.disk.capacity", size);
-}) ()
+})();
 #endif
 
 // Calling this observer will cause a shutdown an a profile reset.

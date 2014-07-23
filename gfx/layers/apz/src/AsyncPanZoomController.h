@@ -537,6 +537,12 @@ protected:
 
 private:
   /**
+   * Cancel animations all the way up the overscroll handoff chain if possible,
+   * or just the local APZC if not.
+   */
+  void CancelAnimationForHandoffChain();
+
+  /**
    * Helper to set the current state. Holds the monitor before actually setting
    * it and fires content controller events based on state changes. Always set
    * the state using this call, do not set it directly.
@@ -897,6 +903,12 @@ public:
 
   void FlushRepaintForOverscrollHandoff();
 
+  /**
+   * If overscrolled, start a snap-back animation and return true.
+   * Otherwise return false.
+   */
+  bool SnapBackIfOverscrolled();
+
 private:
   FrameMetrics::ViewID mScrollParentId;
 
@@ -907,6 +919,12 @@ private:
    */
   bool CallDispatchScroll(const ScreenPoint& aStartPoint, const ScreenPoint& aEndPoint,
                           uint32_t aOverscrollHandoffChainIndex);
+
+  /**
+   * A similar helper function for calling
+   * APZCTreeManager::SnapBackOverscrolledApzc().
+   */
+  void CallSnapBackOverscrolledApzc();
 
   /**
    * Try to overscroll by 'aOverscroll'.

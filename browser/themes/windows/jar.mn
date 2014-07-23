@@ -95,6 +95,13 @@ browser.jar:
         skin/classic/browser/webRTC-shareMicrophone-16.png
         skin/classic/browser/webRTC-shareMicrophone-64.png
         skin/classic/browser/webRTC-sharingMicrophone-16.png
+        skin/classic/browser/webRTC-shareScreen-16.png               (../shared/webrtc/webRTC-shareScreen-16.png)
+        skin/classic/browser/webRTC-shareScreen-64.png               (../shared/webrtc/webRTC-shareScreen-64.png)
+        skin/classic/browser/webRTC-sharingScreen-16.png             (../shared/webrtc/webRTC-sharingScreen-16.png)
+        skin/classic/browser/webRTC-indicator.css                    (../shared/webrtc/indicator.css)
+        skin/classic/browser/webRTC-camera-white-16.png              (../shared/webrtc/camera-white-16.png)
+        skin/classic/browser/webRTC-microphone-white-16.png          (../shared/webrtc/microphone-white-16.png)
+        skin/classic/browser/webRTC-screen-white-16.png              (../shared/webrtc/screen-white-16.png)
         skin/classic/browser/customizableui/background-noise-toolbar.png  (customizableui/background-noise-toolbar.png)
         skin/classic/browser/customizableui/customizeFavicon.ico  (../shared/customizableui/customizeFavicon.ico)
         skin/classic/browser/customizableui/customize-illustration.png  (../shared/customizableui/customize-illustration.png)
@@ -133,6 +140,7 @@ browser.jar:
 *       skin/classic/browser/newtab/newTab.css                       (newtab/newTab.css)
         skin/classic/browser/newtab/controls.png                     (../shared/newtab/controls.png)
         skin/classic/browser/newtab/controls@2x.png                  (../shared/newtab/controls@2x.png)
+        skin/classic/browser/newtab/texture.png                      (../shared/newtab/texture.png)
         skin/classic/browser/places/places.css                       (places/places.css)
 *       skin/classic/browser/places/organizer.css                    (places/organizer.css)
         skin/classic/browser/places/bookmark.png                     (places/bookmark.png)
@@ -504,6 +512,13 @@ browser.jar:
         skin/classic/aero/browser/webRTC-shareMicrophone-16.png
         skin/classic/aero/browser/webRTC-shareMicrophone-64.png
         skin/classic/aero/browser/webRTC-sharingMicrophone-16.png
+        skin/classic/aero/browser/webRTC-shareScreen-16.png               (../shared/webrtc/webRTC-shareScreen-16.png)
+        skin/classic/aero/browser/webRTC-shareScreen-64.png               (../shared/webrtc/webRTC-shareScreen-64.png)
+        skin/classic/aero/browser/webRTC-sharingScreen-16.png             (../shared/webrtc/webRTC-sharingScreen-16.png)
+        skin/classic/aero/browser/webRTC-indicator.css                    (../shared/webrtc/indicator.css)
+        skin/classic/aero/browser/webRTC-camera-white-16.png              (../shared/webrtc/camera-white-16.png)
+        skin/classic/aero/browser/webRTC-microphone-white-16.png          (../shared/webrtc/microphone-white-16.png)
+        skin/classic/aero/browser/webRTC-screen-white-16.png              (../shared/webrtc/screen-white-16.png)
         skin/classic/aero/browser/customizableui/background-noise-toolbar.png  (customizableui/background-noise-toolbar.png)
         skin/classic/aero/browser/customizableui/customize-illustration.png  (../shared/customizableui/customize-illustration.png)
         skin/classic/aero/browser/customizableui/customize-illustration-rtl.png  (../shared/customizableui/customize-illustration-rtl.png)
@@ -544,6 +559,7 @@ browser.jar:
 *       skin/classic/aero/browser/newtab/newTab.css                  (newtab/newTab.css)
         skin/classic/aero/browser/newtab/controls.png                (../shared/newtab/controls.png)
         skin/classic/aero/browser/newtab/controls@2x.png             (../shared/newtab/controls@2x.png)
+        skin/classic/aero/browser/newtab/texture.png                 (../shared/newtab/texture.png)
 *       skin/classic/aero/browser/places/places.css                  (places/places-aero.css)
 *       skin/classic/aero/browser/places/organizer.css               (places/organizer-aero.css)
         skin/classic/aero/browser/places/bookmark.png                (places/bookmark-aero.png)

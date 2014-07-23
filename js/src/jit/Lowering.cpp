@@ -1741,6 +1741,7 @@ LIRGenerator::visitToDouble(MToDouble *convert)
         return lowerConstantDouble(0, convert);
 
       case MIRType_Undefined:
+      case MIRType_Symbol:
         JS_ASSERT(conversion != MToDouble::NumbersOnly);
         return lowerConstantDouble(GenericNaN(), convert);
 
@@ -1790,6 +1791,7 @@ LIRGenerator::visitToFloat32(MToFloat32 *convert)
         return lowerConstantFloat32(0, convert);
 
       case MIRType_Undefined:
+      case MIRType_Symbol:
         JS_ASSERT(conversion != MToFloat32::NumbersOnly);
         return lowerConstantFloat32(GenericNaN(), convert);
 
@@ -1962,7 +1964,7 @@ LIRGenerator::visitToString(MToString *ins)
       }
 
       default:
-        // Float32 and objects are not supported.
+        // Float32, symbols, and objects are not supported.
         MOZ_ASSUME_UNREACHABLE("unexpected type");
     }
 }
@@ -2214,13 +2216,24 @@ bool
 LIRGenerator::visitInterruptCheck(MInterruptCheck *ins)
 {
     // Implicit interrupt checks require asm.js signal handlers to be installed.
-    if (GetIonContext()->runtime->signalHandlersInstalled()) {
+    if (GetIonContext()->runtime->canUseSignalHandlers()) {
         LInterruptCheckImplicit *lir = new(alloc()) LInterruptCheckImplicit();
         return add(lir, ins) && assignSafepoint(lir, ins);
     }
 
     LInterruptCheck *lir = new(alloc()) LInterruptCheck();
     return add(lir, ins) && assignSafepoint(lir, ins);
+}
+
+bool
+LIRGenerator::visitAsmJSInterruptCheck(MAsmJSInterruptCheck *ins)
+{
+    gen->setPerformsAsmJSCall();
+
+    LAsmJSInterruptCheck *lir = new(alloc()) LAsmJSInterruptCheck(temp(),
+                                                                  ins->interruptExit(),
+                                                                  ins->funcDesc());
+    return add(lir, ins);
 }
 
 bool
@@ -3556,9 +3569,8 @@ LIRGenerator::visitAsmJSCall(MAsmJSCall *ins)
         args[ins->dynamicCalleeOperandIndex()] = useFixed(ins->callee().dynamic(), CallTempReg0);
 
     LInstruction *lir = new(alloc()) LAsmJSCall(args, ins->numOperands());
-    if (ins->type() == MIRType_None) {
+    if (ins->type() == MIRType_None)
         return add(lir, ins);
-    }
     return defineReturn(lir, ins);
 }
 

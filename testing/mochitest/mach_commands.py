@@ -24,7 +24,6 @@ from mach.decorators import (
     Command,
 )
 
-from mach.logging import StructuredHumanFormatter
 
 ADB_NOT_FOUND = '''
 The %s command requires the adb binary to be on your path.
@@ -57,6 +56,16 @@ If you do not have a non-debug gaia profile, you can build one:
 The profile should be generated in a directory called 'profile'.
 '''.lstrip()
 
+ENG_BUILD_REQUIRED = '''
+The %s command requires an engineering build. It may be the case that
+VARIANT=user or PRODUCTION=1 were set. Try re-building with VARIANT=eng:
+
+    $ VARIANT=eng ./build.sh
+
+There should be an app called 'test-container.gaiamobile.org' located in
+%s.
+'''.lstrip()
+
 # Maps test flavors to mochitest suite type.
 FLAVORS = {
     'mochitest': 'plain',
@@ -65,11 +74,6 @@ FLAVORS = {
     'a11y': 'a11y',
     'webapprt-chrome': 'webapprt-chrome',
 }
-
-class UnexpectedFilter(logging.Filter):
-    def filter(self, record):
-        msg = getattr(record, 'params', {}).get('msg', '')
-        return 'TEST-UNEXPECTED-' in msg
 
 
 class MochitestRunner(MozbuildObject):
@@ -157,18 +161,6 @@ class MochitestRunner(MozbuildObject):
 
         options.consoleLevel = 'INFO'
         if conditions.is_b2g_desktop(self):
-
-            options.profile = options.profile or os.environ.get('GAIA_PROFILE')
-            if not options.profile:
-                print(GAIA_PROFILE_NOT_FOUND % 'mochitest-b2g-desktop')
-                return 1
-
-            if os.path.isfile(os.path.join(options.profile, 'extensions', \
-                    'httpd@gaiamobile.org')):
-                print(GAIA_PROFILE_IS_DEBUG % ('mochitest-b2g-desktop',
-                                               options.profile))
-                return 1
-
             options.desktop = True
             options.app = self.get_binary_path()
             if not options.app.endswith('-bin'):
@@ -236,8 +228,6 @@ class MochitestRunner(MozbuildObject):
             print('No failure file present. Did you run mochitests before?')
             return 1
 
-        from StringIO import StringIO
-
         # runtests.py is ambiguous, so we load the file/module manually.
         if 'mochitest' not in sys.modules:
             import imp
@@ -246,7 +236,6 @@ class MochitestRunner(MozbuildObject):
                 imp.load_module('mochitest', fh, path,
                     ('.py', 'r', imp.PY_SOURCE))
 
-        import mozinfo
         import mochitest
         from manifestparser import TestManifest
         from mozbuild.testing import TestResolver
@@ -379,30 +368,14 @@ class MochitestRunner(MozbuildObject):
         # We need this to enable colorization of output.
         self.log_manager.enable_unstructured()
 
-        # Output processing is a little funky here. The old make targets
-        # grepped the log output from TEST-UNEXPECTED-* and printed these lines
-        # after test execution. Ideally the test runner would expose a Python
-        # API for obtaining test results and we could just format failures
-        # appropriately. Unfortunately, it doesn't yet do that. So, we capture
-        # all output to a buffer then "grep" the buffer after test execution.
-        # Bug 858197 tracks a Python API that would facilitate this.
-        test_output = StringIO()
-        handler = logging.StreamHandler(test_output)
-        handler.addFilter(UnexpectedFilter())
-        handler.setFormatter(StructuredHumanFormatter(0, write_times=False))
-        logging.getLogger().addHandler(handler)
-
         result = runner.runTests(options)
 
-        # Need to remove our buffering handler before we echo failures or else
-        # it will catch them again!
-        logging.getLogger().removeHandler(handler)
         self.log_manager.disable_unstructured()
-
-        if test_output.getvalue():
+        if runner.message_logger.errors:
             result = 1
-            for line in test_output.getvalue().splitlines():
-                self.log(logging.INFO, 'unexpected', {'msg': line}, '{msg}')
+            runner.message_logger.logger.warning("The following tests failed:")
+            for error in runner.message_logger.errors:
+                runner.message_logger.logger.log_raw(error)
 
         return result
 
@@ -765,7 +738,7 @@ class B2GCommands(MachCommandBase):
     def __init__(self, context):
         MachCommandBase.__init__(self, context)
 
-        for attr in ('b2g_home', 'xre_path', 'device_name'):
+        for attr in ('b2g_home', 'xre_path', 'device_name', 'get_build_var'):
             setattr(self, attr, getattr(context, attr, None))
 
     @Command('mochitest-remote', category='testing',
@@ -773,6 +746,14 @@ class B2GCommands(MachCommandBase):
         conditions=[conditions.is_b2g, is_emulator])
     @B2GCommand
     def run_mochitest_remote(self, test_paths, **kwargs):
+        if self.get_build_var:
+            host_webapps_dir = os.path.join(self.get_build_var('TARGET_OUT_DATA'),
+                                            'local', 'webapps')
+            if not os.path.isdir(os.path.join(host_webapps_dir,
+                                              'test-container.gaiamobile.org')):
+                print(ENG_BUILD_REQUIRED % ('mochitest-remote', host_webapps_dir))
+                return 1
+
         from mozbuild.controller.building import BuildDriver
 
         if self.device_name.startswith('emulator'):
@@ -795,6 +776,17 @@ class B2GCommands(MachCommandBase):
         description='Run a b2g desktop mochitest.')
     @B2GCommand
     def run_mochitest_b2g_desktop(self, test_paths, **kwargs):
+        kwargs['profile'] = kwargs.get('profile') or os.environ.get('GAIA_PROFILE')
+        if not kwargs['profile'] or not os.path.isdir(kwargs['profile']):
+            print(GAIA_PROFILE_NOT_FOUND % 'mochitest-b2g-desktop')
+            return 1
+
+        if os.path.isfile(os.path.join(kwargs['profile'], 'extensions',
+                                       'httpd@gaiamobile.org')):
+            print(GAIA_PROFILE_IS_DEBUG % ('mochitest-b2g-desktop',
+                                           kwargs['profile']))
+            return 1
+
         from mozbuild.controller.building import BuildDriver
 
         self._ensure_state_subdir_exists('.')

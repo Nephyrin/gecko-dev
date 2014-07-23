@@ -97,23 +97,8 @@ BasicCompositor::CreateRenderTargetFromSource(const IntRect &aRect,
                                               const CompositingRenderTarget *aSource,
                                               const IntPoint &aSourcePoint)
 {
-  RefPtr<DrawTarget> target = mDrawTarget->CreateSimilarDrawTarget(aRect.Size(), SurfaceFormat::B8G8R8A8);
-  RefPtr<BasicCompositingRenderTarget> rt = new BasicCompositingRenderTarget(target, aRect);
-
-  DrawTarget *source;
-  if (aSource) {
-    const BasicCompositingRenderTarget* sourceSurface =
-      static_cast<const BasicCompositingRenderTarget*>(aSource);
-    source = sourceSurface->mDrawTarget;
-  } else {
-    source = mDrawTarget;
-  }
-
-  RefPtr<SourceSurface> snapshot = source->Snapshot();
-
-  IntRect sourceRect(aSourcePoint, aRect.Size());
-  rt->mDrawTarget->CopySurface(snapshot, sourceRect, IntPoint(0, 0));
-  return rt.forget();
+  MOZ_CRASH("Shouldn't be called!");
+  return nullptr;
 }
 
 TemporaryRef<DataTextureSource>
@@ -150,12 +135,11 @@ DrawSurfaceWithTextureCoords(DrawTarget *aDest,
   sourceRect.Round();
 
   // Compute a transform that maps sourceRect to aDestRect.
-  gfxMatrix transform =
+  Matrix matrix =
     gfxUtils::TransformRectToRect(sourceRect,
-                                  gfxPoint(aDestRect.x, aDestRect.y),
-                                  gfxPoint(aDestRect.XMost(), aDestRect.y),
-                                  gfxPoint(aDestRect.XMost(), aDestRect.YMost()));
-  Matrix matrix = ToMatrix(transform);
+                                  gfx::IntPoint(aDestRect.x, aDestRect.y),
+                                  gfx::IntPoint(aDestRect.XMost(), aDestRect.y),
+                                  gfx::IntPoint(aDestRect.XMost(), aDestRect.YMost()));
 
   // Only use REPEAT if aTextureCoords is outside (0, 0, 1, 1).
   gfx::Rect unitRect(0, 0, 1, 1);
@@ -278,7 +262,7 @@ BasicCompositor::DrawQuad(const gfx::Rect& aRect,
     dest->SetTransform(destTransform);
 
     // Get the bounds post-transform.
-    To3DMatrix(aTransform, new3DTransform);
+    new3DTransform = To3DMatrix(aTransform);
     gfxRect bounds = new3DTransform.TransformBounds(ThebesRect(aRect));
     bounds.IntersectRect(bounds, gfxRect(offset.x, offset.y, buffer->GetSize().width, buffer->GetSize().height));
 

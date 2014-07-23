@@ -496,10 +496,10 @@ public:
     // If we shouldn't continue the fling, let's just stop and repaint.
     if (!shouldContinueFlingX && !shouldContinueFlingY) {
       APZC_LOG("%p ending fling animation. overscrolled=%d\n", &mApzc, mApzc.IsOverscrolled());
-      // If we are in overscroll, schedule the snap-back animation that relieves it.
-      if (mApzc.IsOverscrolled()) {
-        mDeferredTasks.append(NewRunnableMethod(&mApzc, &AsyncPanZoomController::StartSnapBack));
-      }
+      // This APZC or an APZC further down the handoff chain may be be overscrolled.
+      // Start a snap-back animation on the overscrolled APZC.
+      mDeferredTasks.append(NewRunnableMethod(&mApzc,
+          &AsyncPanZoomController::CallSnapBackOverscrolledApzc));
       return false;
     }
 
@@ -654,6 +654,11 @@ public:
   OverscrollSnapBackAnimation(AsyncPanZoomController& aApzc)
     : mApzc(aApzc)
   {
+    // Make sure the initial velocity is zero. This is normally the case
+    // since we've just stopped a fling, but in some corner cases involving
+    // handoff it could not be.
+    mApzc.mX.SetVelocity(0);
+    mApzc.mY.SetVelocity(0);
   }
 
   virtual bool Sample(FrameMetrics& aFrameMetrics,
@@ -813,6 +818,18 @@ AsyncPanZoomController::GetTouchStartTolerance()
   return static_cast<AxisLockMode>(gfxPrefs::APZAxisLockMode());
 }
 
+void
+AsyncPanZoomController::CancelAnimationForHandoffChain()
+{
+  APZCTreeManager* treeManagerLocal = mTreeManager;
+  if (treeManagerLocal && treeManagerLocal->CancelAnimationsForOverscrollHandoffChain()) {
+    return;
+  }
+  NS_WARNING("Overscroll handoff chain was empty in CancelAnimationForHandoffChain! This should not be the case.");
+  // Graceful handling of error condition
+  CancelAnimation();
+}
+
 nsEventStatus AsyncPanZoomController::ReceiveInputEvent(const InputData& aEvent) {
   AssertOnControllerThread();
 
@@ -824,6 +841,22 @@ nsEventStatus AsyncPanZoomController::ReceiveInputEvent(const InputData& aEvent)
   if (aEvent.AsMultiTouchInput().mType == MultiTouchInput::MULTITOUCH_START) {
     block = StartNewTouchBlock(false);
     APZC_LOG("%p started new touch block %p\n", this, block);
+
+    // We want to cancel animations here as soon as possible (i.e. without waiting for
+    // content responses) because a finger has gone down and we don't want to keep moving
+    // the content under the finger. However, to prevent "future" touchstart events from
+    // interfering with "past" animations (i.e. from a previous touch block that is still
+    // being processed) we only do this animation-cancellation if there are no older
+    // touch blocks still in the queue.
+    if (block == CurrentTouchBlock()) {
+      if (GetVelocityVector().Length() > gfxPrefs::APZFlingStopOnTapThreshold()) {
+        // If we're already in a fast fling, then we want the touch event to stop the fling
+        // and to disallow the touch event from being used as part of a fling.
+        block->DisallowSingleTap();
+      }
+      CancelAnimationForHandoffChain();
+    }
+
     if (mFrameMetrics.mMayHaveTouchListeners || mFrameMetrics.mMayHaveTouchCaret) {
       // Content may intercept the touch events and prevent-default them. So we schedule
       // a timeout to give content time to do that.
@@ -952,19 +985,8 @@ nsEventStatus AsyncPanZoomController::OnTouchStart(const MultiTouchInput& aEvent
 
   switch (mState) {
     case FLING:
-      if (GetVelocityVector().Length() > gfxPrefs::APZFlingStopOnTapThreshold()) {
-        // This is ugly. Hopefully bug 1009733 can reorganize how events
-        // flow through APZC and change it so that events are handed to the
-        // gesture listener *after* we deal with them here. This should allow
-        // removal of this ugly code.
-        nsRefPtr<GestureEventListener> listener = GetGestureEventListener();
-        if (listener) {
-          listener->CancelSingleTouchDown();
-        }
-      }
-      // Fall through.
     case ANIMATING_ZOOM:
-      CancelAnimation();
+      CancelAnimationForHandoffChain();
       // Fall through.
     case NOTHING: {
       mX.StartTouch(point.x, aEvent.mTime);
@@ -1130,7 +1152,7 @@ nsEventStatus AsyncPanZoomController::OnTouchEnd(const MultiTouchInput& aEvent) 
 nsEventStatus AsyncPanZoomController::OnTouchCancel(const MultiTouchInput& aEvent) {
   APZC_LOG("%p got a touch-cancel in state %d\n", this, mState);
   OnTouchEndOrCancel();
-  SetState(NOTHING);
+  CancelAnimation();
   return nsEventStatus_eConsumeNoDefault;
 }
 
@@ -1290,7 +1312,7 @@ nsEventStatus AsyncPanZoomController::OnPanMayBegin(const PanGestureInput& aEven
 
   mX.StartTouch(aEvent.mPanStartPoint.x, aEvent.mTime);
   mY.StartTouch(aEvent.mPanStartPoint.y, aEvent.mTime);
-  CancelAnimation();
+  CancelAnimationForHandoffChain();
 
   return nsEventStatus_eConsumeNoDefault;
 }
@@ -1407,7 +1429,9 @@ nsEventStatus AsyncPanZoomController::GenerateSingleTap(const ScreenIntPoint& aP
   if (controller) {
     CSSPoint geckoScreenPoint;
     if (ConvertToGecko(aPoint, &geckoScreenPoint)) {
-      int32_t modifiers = WidgetModifiersToDOMModifiers(aModifiers);
+      if (!CurrentTouchBlock()->SetSingleTapOccurred()) {
+        return nsEventStatus_eIgnore;
+      }
       // Because this may be being running as part of APZCTreeManager::ReceiveInputEvent,
       // calling controller->HandleSingleTap directly might mean that content receives
       // the single tap message before the corresponding touch-up. To avoid that we
@@ -1415,9 +1439,9 @@ nsEventStatus AsyncPanZoomController::GenerateSingleTap(const ScreenIntPoint& aP
       // See bug 965381 for the issue this was causing.
       controller->PostDelayedTask(
         NewRunnableMethod(controller.get(), &GeckoContentController::HandleSingleTap,
-                          geckoScreenPoint, modifiers, GetGuid()),
+                          geckoScreenPoint, WidgetModifiersToDOMModifiers(aModifiers),
+                          GetGuid()),
         0);
-      CurrentTouchBlock()->SetSingleTapOccurred();
       return nsEventStatus_eConsumeNoDefault;
     }
   }
@@ -1748,6 +1772,13 @@ bool AsyncPanZoomController::CallDispatchScroll(const ScreenPoint& aStartPoint, 
                                           aOverscrollHandoffChainIndex);
 }
 
+void AsyncPanZoomController::CallSnapBackOverscrolledApzc() {
+  APZCTreeManager* treeManagerLocal = mTreeManager;
+  if (treeManagerLocal) {
+    treeManagerLocal->SnapBackOverscrolledApzc(this);
+  }
+}
+
 void AsyncPanZoomController::TrackTouch(const MultiTouchInput& aEvent) {
   ScreenIntPoint prevTouchPoint(mX.GetPos(), mY.GetPos());
   ScreenIntPoint touchPoint = GetFirstTouchScreenPoint(aEvent);
@@ -1780,6 +1811,10 @@ void AsyncPanZoomController::CancelAnimation() {
   APZC_LOG("%p running CancelAnimation in state %d\n", this, mState);
   SetState(NOTHING);
   mAnimation = nullptr;
+  // Since there is no animation in progress now the axes should
+  // have no velocity either.
+  mX.SetVelocity(0);
+  mY.SetVelocity(0);
   // Setting the state to nothing and cancelling the animation can
   // preempt normal mechanisms for relieving overscroll, so we need to clear
   // overscroll here.
@@ -1932,6 +1967,16 @@ void AsyncPanZoomController::FlushRepaintForOverscrollHandoff() {
   ReentrantMonitorAutoEnter lock(mMonitor);
   RequestContentRepaint();
   UpdateSharedCompositorFrameMetrics();
+}
+
+bool AsyncPanZoomController::SnapBackIfOverscrolled() {
+  ReentrantMonitorAutoEnter lock(mMonitor);
+  if (IsOverscrolled()) {
+    APZC_LOG("%p is overscrolled, starting snap-back\n", this);
+    StartSnapBack();
+    return true;
+  }
+  return false;
 }
 
 bool AsyncPanZoomController::IsPannable() const {
@@ -2321,6 +2366,15 @@ void AsyncPanZoomController::NotifyLayersUpdated(const FrameMetrics& aLayerMetri
     mFrameMetrics = aLayerMetrics;
     mLastDispatchedPaintMetrics = aLayerMetrics;
     ShareCompositorFrameMetrics();
+
+    if (mFrameMetrics.GetDisplayPortMargins() != LayerMargin()) {
+      // A non-zero display port margin here indicates a displayport has
+      // been set by a previous APZC for the content at this guid. The
+      // scrollable rect may have changed since then, making the margins
+      // wrong, so we need to calculate a new display port.
+      APZC_LOG("%p detected non-empty margins which probably need updating\n", this);
+      needContentRepaint = true;
+    }
   } else {
     // If we're not taking the aLayerMetrics wholesale we still need to pull
     // in some things into our local mFrameMetrics because these things are

@@ -25,7 +25,7 @@ const {GetTemplatesJSON, GetAddonsJSON} = require("devtools/webide/remote-resour
 const Strings = Services.strings.createBundle("chrome://webide/content/webide.properties");
 
 const HTML = "http://www.w3.org/1999/xhtml";
-const HELP_URL = "https://developer.mozilla.org/Firefox_OS/Using_the_App_Manager#Troubleshooting";
+const HELP_URL = "https://developer.mozilla.org/docs/Tools/WebIDE/Troubleshooting";
 
 // download template index early
 GetTemplatesJSON(true);
@@ -207,9 +207,10 @@ let UI = {
   setupBusyTimeout: function() {
     this.cancelBusyTimeout();
     this._busyTimeout = setTimeout(() => {
+      let busyPromise = this._busyPromise;
       this.unbusy();
       UI.reportError("error_operationTimeout", this._busyOperationDescription);
-      this._busyPromise.reject("promise timeout: " + this._busyOperationDescription);
+      busyPromise.reject("promise timeout: " + this._busyOperationDescription);
     }, 30000);
   },
 
@@ -810,8 +811,12 @@ let Cmds = {
       runtimeAppsNode.firstChild.remove();
     }
 
-    for (let i = 0; i < AppManager.webAppsStore.object.all.length; i++) {
-      let app = AppManager.webAppsStore.object.all[i];
+    let sortedApps = AppManager.webAppsStore.object.all;
+    sortedApps = sortedApps.sort((a, b) => {
+      return a.name > b.name;
+    });
+    for (let i = 0; i < sortedApps.length; i++) {
+      let app = sortedApps[i];
       let panelItemNode = document.createElement("toolbarbutton");
       panelItemNode.className = "panel-item";
       panelItemNode.setAttribute("label", app.name);

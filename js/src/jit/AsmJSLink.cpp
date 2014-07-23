@@ -255,7 +255,15 @@ LinkModuleToHeap(JSContext *cx, AsmJSModule &module, Handle<ArrayBufferObject*> 
         return LinkFail(cx, msg.get());
     }
 
-    if (!ArrayBufferObject::prepareForAsmJS(cx, heap))
+    // If we've generated the code with signal handlers in mind (for bounds
+    // checks on x64 and for interrupt callback requesting on all platforms),
+    // we need to be able to use signals at runtime. In particular, a module
+    // can have been created using signals and cached, and executed without
+    // signals activated.
+    if (module.usesSignalHandlersForInterrupt() && !cx->canUseSignalHandlers())
+        return LinkFail(cx, "Code generated with signal handlers but signals are deactivated");
+
+    if (!ArrayBufferObject::prepareForAsmJS(cx, heap, module.usesSignalHandlersForOOB()))
         return LinkFail(cx, "Unable to prepare ArrayBuffer for asm.js use");
 
     module.initHeap(heap, cx);
@@ -360,6 +368,13 @@ CallAsmJS(JSContext *cx, unsigned argc, Value *vp)
     //  - a pointer to the module from which it was returned
     //  - its index in the ordered list of exported functions
     AsmJSModule &module = FunctionToEnclosingModule(callee);
+
+    // Enable/disable profiling in the asm.js module to match the current global
+    // profiling state. Don't do this if the module is already active on the
+    // stack since this would leave the module in a state where profiling is
+    // enabled but the stack isn't unwindable.
+    if (module.profilingEnabled() != cx->runtime()->spsProfiler.enabled() && !module.active())
+        module.setProfilingEnabled(cx->runtime()->spsProfiler.enabled());
 
     // An exported function points to the code as well as the exported
     // function's signature, which implies the dynamic coercions performed on

@@ -325,6 +325,7 @@ WEBIDL_FILES = [
     'SimpleGestureEvent.webidl',
     'SourceBuffer.webidl',
     'SourceBufferList.webidl',
+    'Storage.webidl',
     'StorageEvent.webidl',
     'StorageType.webidl',
     'StyleSheet.webidl',
@@ -590,6 +591,7 @@ if CONFIG['MOZ_B2G_RIL']:
         'MozMobileConnectionInfo.webidl',
         'MozMobileNetworkInfo.webidl',
         'MozVoicemail.webidl',
+        'MozVoicemailStatus.webidl'
     ]
 
 if CONFIG['MOZ_NFC']:
