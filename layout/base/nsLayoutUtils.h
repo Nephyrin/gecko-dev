@@ -1170,13 +1170,13 @@ public:
    * 'min-width', and 'max-width' properties, and its padding, border,
    * and margin.
    */
-  enum IntrinsicWidthType { MIN_WIDTH, PREF_WIDTH };
+  enum IntrinsicISizeType { MIN_ISIZE, PREF_ISIZE };
   enum {
     IGNORE_PADDING = 0x01
   };
   static nscoord IntrinsicForContainer(nsRenderingContext* aRenderingContext,
                                        nsIFrame* aFrame,
-                                       IntrinsicWidthType aType,
+                                       IntrinsicISizeType aType,
                                        uint32_t aFlags = 0);
 
   /*
@@ -1292,12 +1292,12 @@ public:
                                                        nscoord maxWidth, nscoord maxHeight,
                                                        nscoord tentWidth, nscoord tentHeight);
 
-  // Implement nsIFrame::GetPrefWidth in terms of nsIFrame::AddInlinePrefWidth
-  static nscoord PrefWidthFromInline(nsIFrame* aFrame,
+  // Implement nsIFrame::GetPrefISize in terms of nsIFrame::AddInlinePrefISize
+  static nscoord PrefISizeFromInline(nsIFrame* aFrame,
                                      nsRenderingContext* aRenderingContext);
 
-  // Implement nsIFrame::GetMinWidth in terms of nsIFrame::AddInlineMinWidth
-  static nscoord MinWidthFromInline(nsIFrame* aFrame,
+  // Implement nsIFrame::GetMinISize in terms of nsIFrame::AddInlineMinISize
+  static nscoord MinISizeFromInline(nsIFrame* aFrame,
                                     nsRenderingContext* aRenderingContext);
 
   // Get a suitable foreground color for painting aProperty for aFrame.
@@ -2198,20 +2198,25 @@ public:
   static bool WantSubAPZC();
 
   /**
+   * Returns true if we're using asynchronous scrolling (either through
+   * APZ or the android frontend).
+   */
+  static bool UsesAsyncScrolling();
+
+  /**
    * Log a key/value pair for APZ testing during a paint.
-   * @param aPresShell The pres shell that identifies where to log to. The data
-   *                   will be written to the APZTestData associated with the
-   *                   pres shell's layer manager.
+   * @param aManager   The data will be written to the APZTestData associated 
+   *                   with this layer manager.
    * @param aScrollId Identifies the scroll frame to which the data pertains.
    * @param aKey The key under which to log the data.
    * @param aValue The value of the data to be logged.
    */
-  static void LogTestDataForPaint(nsIPresShell* aPresShell,
+  static void LogTestDataForPaint(mozilla::layers::LayerManager* aManager,
                                   ViewID aScrollId,
                                   const std::string& aKey,
                                   const std::string& aValue) {
     if (IsAPZTestLoggingEnabled()) {
-      DoLogTestDataForPaint(aPresShell, aScrollId, aKey, aValue);
+      DoLogTestDataForPaint(aManager, aScrollId, aKey, aValue);
     }
   }
 
@@ -2221,12 +2226,12 @@ public:
    * value. The type passed must support streaming to an std::ostream.
    */
   template <typename Value>
-  static void LogTestDataForPaint(nsIPresShell* aPresShell,
+  static void LogTestDataForPaint(mozilla::layers::LayerManager* aManager,
                                   ViewID aScrollId,
                                   const std::string& aKey,
                                   const Value& aValue) {
     if (IsAPZTestLoggingEnabled()) {
-      DoLogTestDataForPaint(aPresShell, aScrollId, aKey,
+      DoLogTestDataForPaint(aManager, aScrollId, aKey,
           mozilla::ToString(aValue));
     }
   }
@@ -2268,7 +2273,7 @@ private:
   /**
    * Helper function for LogTestDataForPaint().
    */
-  static void DoLogTestDataForPaint(nsIPresShell* aPresShell,
+  static void DoLogTestDataForPaint(mozilla::layers::LayerManager* aManager,
                                     ViewID aScrollId,
                                     const std::string& aKey,
                                     const std::string& aValue);

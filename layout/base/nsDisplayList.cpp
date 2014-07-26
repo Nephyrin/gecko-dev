@@ -65,6 +65,22 @@ using namespace mozilla::dom;
 using namespace mozilla::layout;
 typedef FrameMetrics::ViewID ViewID;
 
+#ifdef DEBUG
+static bool
+SpammyLayoutWarningsEnabled()
+{
+  static bool sValue = false;
+  static bool sValueInitialized = false;
+
+  if (!sValueInitialized) {
+    Preferences::GetBool("layout.spammy_warnings.enabled", &sValue);
+    sValueInitialized = true;
+  }
+
+  return sValue;
+}
+#endif
+
 static inline nsIFrame*
 GetTransformRootFrame(nsIFrame* aFrame)
 {
@@ -558,7 +574,8 @@ void nsDisplayListBuilder::MarkOutOfFlowFrameForDisplay(nsIFrame* aDirtyFrame,
                                                         const nsRect& aDirtyRect)
 {
   nsRect dirtyRectRelativeToDirtyFrame = aDirtyRect;
-  if (nsLayoutUtils::IsFixedPosFrameInDisplayPort(aFrame)) {
+  if (nsLayoutUtils::IsFixedPosFrameInDisplayPort(aFrame) &&
+      IsPaintingToWindow()) {
     NS_ASSERTION(aDirtyFrame == aFrame->GetParent(), "Dirty frame should be viewport frame");
     // position: fixed items are reflowed into and only drawn inside the
     // viewport, or the scroll position clamping scrollport size, if one is
@@ -634,7 +651,7 @@ static void RecordFrameMetrics(nsIFrame* aForFrame,
     nsRect dp;
     if (nsLayoutUtils::GetDisplayPort(content, &dp)) {
       metrics.mDisplayPort = CSSRect::FromAppUnits(dp);
-      nsLayoutUtils::LogTestDataForPaint(presShell, scrollId, "displayport",
+      nsLayoutUtils::LogTestDataForPaint(aRoot->Manager(), scrollId, "displayport",
           metrics.mDisplayPort);
     }
     if (nsLayoutUtils::GetCriticalDisplayPort(content, &dp)) {
@@ -1253,13 +1270,6 @@ void nsDisplayList::PaintForFrame(nsDisplayListBuilder* aBuilder,
   bool isRoot = presContext->IsRootContentDocument();
 
   nsIFrame* rootScrollFrame = presShell->GetRootScrollFrame();
-  bool usingDisplayport = false;
-  if (rootScrollFrame) {
-    nsIContent* content = rootScrollFrame->GetContent();
-    if (content) {
-      usingDisplayport = nsLayoutUtils::GetDisplayPort(content, nullptr);
-    }
-  }
 
   nsRect viewport(aBuilder->ToReferenceFrame(aForFrame), aForFrame->GetSize());
 
@@ -1267,11 +1277,24 @@ void nsDisplayList::PaintForFrame(nsDisplayListBuilder* aBuilder,
                      aBuilder->FindReferenceFrameFor(aForFrame),
                      root, viewport,
                      !isRoot, isRoot, containerParameters);
+
+  // NS_WARNING is debug-only, so don't even bother checking the conditions in
+  // a release build.
+#ifdef DEBUG
+  bool usingDisplayport = false;
+  if (rootScrollFrame) {
+    nsIContent* content = rootScrollFrame->GetContent();
+    if (content) {
+      usingDisplayport = nsLayoutUtils::GetDisplayPort(content, nullptr);
+    }
+  }
   if (usingDisplayport &&
-      !(root->GetContentFlags() & Layer::CONTENT_OPAQUE)) {
+      !(root->GetContentFlags() & Layer::CONTENT_OPAQUE) &&
+      SpammyLayoutWarningsEnabled()) {
     // See bug 693938, attachment 567017
     NS_WARNING("Transparent content with displayports can be expensive.");
   }
+#endif
 
   layerManager->SetRoot(root);
   layerBuilder->WillEndTransaction();
@@ -2937,6 +2960,7 @@ nsDisplayWrapList::nsDisplayWrapList(nsDisplayListBuilder* aBuilder,
                                      nsIFrame* aFrame, nsDisplayList* aList)
   : nsDisplayItem(aBuilder, aFrame)
   , mOverrideZIndex(0)
+  , mHasZIndexOverride(false)
 {
   MOZ_COUNT_CTOR(nsDisplayWrapList);
 
@@ -2983,6 +3007,7 @@ nsDisplayWrapList::nsDisplayWrapList(nsDisplayListBuilder* aBuilder,
                                      nsIFrame* aFrame, nsDisplayItem* aItem)
   : nsDisplayItem(aBuilder, aFrame)
   , mOverrideZIndex(0)
+  , mHasZIndexOverride(false)
 {
   MOZ_COUNT_CTOR(nsDisplayWrapList);
 
@@ -3600,9 +3625,20 @@ nsDisplaySubDocument::ComputeVisibility(nsDisplayListBuilder* aBuilder,
   bool visible = mList.ComputeVisibilityForSublist(
     aBuilder, &childVisibleRegion, boundedRect,
     usingDisplayPort ? mFrame : nullptr);
-  // We don't allow this computation to influence aVisibleRegion, on the
-  // assumption that the layer can be asynchronously scrolled so we'll
-  // definitely need all the content under it.
+
+#ifndef MOZ_WIDGET_ANDROID
+  // If APZ is enabled then don't allow this computation to influence
+  // aVisibleRegion, on the assumption that the layer can be asynchronously
+  // scrolled so we'll definitely need all the content under it.
+  if (!gfxPrefs::AsyncPanZoomEnabled()) {
+    bool snap;
+    nsRect bounds = GetBounds(aBuilder, &snap);
+    nsRegion removed;
+    removed.Sub(bounds, childVisibleRegion);
+
+    aBuilder->SubtractFromVisibleRegion(aVisibleRegion, removed);
+  }
+#endif
 
   return visible;
 }
@@ -3887,6 +3923,9 @@ bool
 nsDisplayScrollLayer::ComputeVisibility(nsDisplayListBuilder* aBuilder,
                                         nsRegion* aVisibleRegion)
 {
+  if (aBuilder->IsForPluginGeometry()) {
+    return nsDisplayWrapList::ComputeVisibility(aBuilder, aVisibleRegion);
+  }
   nsRect displayport;
   bool usingDisplayPort =
     nsLayoutUtils::GetDisplayPort(mScrolledFrame->GetContent(), &displayport);
@@ -3898,9 +3937,19 @@ nsDisplayScrollLayer::ComputeVisibility(nsDisplayListBuilder* aBuilder,
   bool visible = mList.ComputeVisibilityForSublist(
     aBuilder, &childVisibleRegion, boundedRect,
     usingDisplayPort ? mScrollFrame : nullptr);
-  // We don't allow this computation to influence aVisibleRegion, on the
-  // assumption that the layer can be asynchronously scrolled so we'll
-  // definitely need all the content under it.
+
+#ifndef MOZ_WIDGET_ANDROID
+  // If APZ is enabled then don't allow this computation to influence
+  // aVisibleRegion, on the assumption that the layer can be asynchronously
+  // scrolled so we'll definitely need all the content under it.
+  if (!gfxPrefs::AsyncPanZoomEnabled()) {
+    bool snap;
+    nsRect bounds = GetBounds(aBuilder, &snap);
+    nsRegion removed;
+    removed.Sub(bounds, childVisibleRegion);
+    aBuilder->SubtractFromVisibleRegion(aVisibleRegion, removed);
+  }
+#endif
 
   return visible;
 }
