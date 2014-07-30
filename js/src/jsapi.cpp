@@ -12,6 +12,7 @@
 
 #include "mozilla/FloatingPoint.h"
 #include "mozilla/PodOperations.h"
+#include "mozilla/UniquePtr.h"
 
 #include <ctype.h>
 #include <stdarg.h>
@@ -101,6 +102,7 @@ using namespace js::types;
 using mozilla::Maybe;
 using mozilla::PodCopy;
 using mozilla::PodZero;
+using mozilla::UniquePtr;
 
 using JS::AutoGCRooter;
 
@@ -4383,9 +4385,9 @@ JS::OwningCompileOptions::setFileAndLine(JSContext *cx, const char *f, unsigned 
 bool
 JS::OwningCompileOptions::setSourceMapURL(JSContext *cx, const jschar *s)
 {
-    jschar *copy = nullptr;
+    UniquePtr<jschar[], JS::FreePolicy> copy;
     if (s) {
-        copy = js_strdup(cx, s);
+        copy = DuplicateString(cx, s);
         if (!copy)
             return false;
     }
@@ -4393,7 +4395,7 @@ JS::OwningCompileOptions::setSourceMapURL(JSContext *cx, const jschar *s)
     // OwningCompileOptions always owns sourceMapURL_, so this cast is okay.
     js_free(const_cast<jschar *>(sourceMapURL_));
 
-    sourceMapURL_ = copy;
+    sourceMapURL_ = copy.release();
     return true;
 }
 
@@ -6267,7 +6269,7 @@ JS_SetGlobalJitCompilerOption(JSRuntime *rt, JSJitCompilerOption opt, uint32_t v
 JS_PUBLIC_API(int)
 JS_GetGlobalJitCompilerOption(JSRuntime *rt, JSJitCompilerOption opt)
 {
-#ifdef JS_ION
+#ifndef JS_CODEGEN_NONE
     switch (opt) {
       case JSJITCOMPILER_BASELINE_USECOUNT_TRIGGER:
         return jit::js_JitOptions.baselineUsesBeforeCompile;
@@ -6555,4 +6557,10 @@ JS::CaptureCurrentStack(JSContext *cx, JS::MutableHandleObject stackp, unsigned 
         return false;
     stackp.set(frame.get());
     return true;
+}
+
+JS_PUBLIC_API(Zone *)
+JS::GetObjectZone(JSObject *obj)
+{
+    return obj->zone();
 }

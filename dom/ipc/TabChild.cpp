@@ -516,6 +516,7 @@ TabChildBase::DispatchSynthesizedMouseEvent(uint32_t aMsg, uint64_t aTime,
   event.time = aTime;
   event.button = WidgetMouseEvent::eLeftButton;
   event.inputSource = nsIDOMMouseEvent::MOZ_SOURCE_TOUCH;
+  event.ignoreRootScrollFrame = true;
   if (aMsg != NS_MOUSE_MOVE) {
     event.clickCount = 1;
   }
@@ -729,6 +730,8 @@ TabChild::TabChild(nsIContentChild* aManager, const TabContext& aContext, uint32
   , mOrientation(eScreenOrientation_PortraitPrimary)
   , mUpdateHitRegion(false)
   , mPendingTouchPreventedResponse(false)
+  , mTouchEndCancelled(false)
+  , mEndTouchIsClick(false)
   , mIgnoreKeyPressEvent(false)
   , mActiveElementManager(new ActiveElementManager())
   , mHasValidInnerSize(false)
@@ -1815,6 +1818,10 @@ TabChild::RecvHandleSingleTap(const CSSPoint& aPoint, const ScrollableLayerGuid&
     return true;
   }
 
+  if (mTouchEndCancelled) {
+    return true;
+  }
+
   LayoutDevicePoint currentPoint = APZCCallbackHelper::ApplyCallbackTransform(aPoint, aGuid) * mWidget->GetDefaultScale();;
 
   MessageLoop::current()->PostDelayedTask(
@@ -1845,7 +1852,7 @@ TabChild::RecvHandleLongTap(const CSSPoint& aPoint, const ScrollableLayerGuid& a
   bool eventHandled =
       DispatchMouseEvent(NS_LITERAL_STRING("contextmenu"),
                          APZCCallbackHelper::ApplyCallbackTransform(aPoint, aGuid),
-                         2, 1, 0, false,
+                         2, 1, 0, true,
                          nsIDOMMouseEvent::MOZ_SOURCE_TOUCH);
 
   // If no one handle context menu, fire MOZLONGTAP event
@@ -1907,7 +1914,7 @@ TabChild::RecvNotifyAPZStateChange(const ViewID& aViewId,
   }
   case APZStateChange::EndTouch:
   {
-    mActiveElementManager->HandleTouchEnd(aArg);
+    mEndTouchIsClick = aArg;
     break;
   }
   default:
@@ -2078,7 +2085,7 @@ TabChild::FireContextMenuEvent()
                                              2 /* Right button */,
                                              1 /* Click count */,
                                              0 /* Modifiers */,
-                                             false /* Ignore root scroll frame */,
+                                             true /* Ignore root scroll frame */,
                                              nsIDOMMouseEvent::MOZ_SOURCE_TOUCH);
 
   // Fire a click event if someone didn't call preventDefault() on the context
@@ -2126,6 +2133,7 @@ TabChild::RecvRealTouchEvent(const WidgetTouchEvent& aEvent,
                           localEvent.mFlags.mMultipleActionsPrevented;
   switch (aEvent.message) {
   case NS_TOUCH_START: {
+    mTouchEndCancelled = false;
     if (mPendingTouchPreventedResponse) {
       // We can enter here if we get two TOUCH_STARTs in a row and didn't
       // respond to the first one. Respond to it now.
@@ -2141,9 +2149,16 @@ TabChild::RecvRealTouchEvent(const WidgetTouchEvent& aEvent,
     break;
   }
 
-  case NS_TOUCH_MOVE:
   case NS_TOUCH_END:
-  case NS_TOUCH_CANCEL: {
+    if (isTouchPrevented) {
+      mTouchEndCancelled = true;
+      mEndTouchIsClick = false;
+    }
+    // fall through
+  case NS_TOUCH_CANCEL:
+    mActiveElementManager->HandleTouchEnd(mEndTouchIsClick);
+    // fall through
+  case NS_TOUCH_MOVE: {
     SendPendingTouchPreventedResponse(isTouchPrevented, aGuid);
     break;
   }

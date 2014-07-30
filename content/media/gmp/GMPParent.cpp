@@ -52,7 +52,8 @@ namespace gmp {
 GMPParent::GMPParent()
   : mState(GMPStateNotLoaded)
   , mProcess(nullptr)
-  , mDeleteProcessOnUnload(false)
+  , mDeleteProcessOnlyOnUnload(false)
+  , mAbnormalShutdownInProgress(false)
 {
 }
 
@@ -62,12 +63,28 @@ GMPParent::~GMPParent()
   MOZ_ASSERT(NS_IsMainThread());
 }
 
+void
+GMPParent::CheckThread()
+{
+  MOZ_ASSERT(mGMPThread == NS_GetCurrentThread());
+}
+
 nsresult
-GMPParent::Init(nsIFile* aPluginDir)
+GMPParent::CloneFrom(const GMPParent* aOther)
+{
+  MOZ_ASSERT(GMPThread() == NS_GetCurrentThread());
+  MOZ_ASSERT(aOther->mDirectory && aOther->mService, "null plugin directory");
+  return Init(aOther->mService, aOther->mDirectory);
+}
+
+nsresult
+GMPParent::Init(GeckoMediaPluginService *aService, nsIFile* aPluginDir)
 {
   MOZ_ASSERT(aPluginDir);
+  MOZ_ASSERT(aService);
   MOZ_ASSERT(GMPThread() == NS_GetCurrentThread());
 
+  mService = aService;
   mDirectory = aPluginDir;
 
   nsAutoString leafname;
@@ -111,6 +128,7 @@ GMPParent::LoadProcess()
       mProcess = nullptr;
       return NS_ERROR_FAILURE;
     }
+    LOGD(("%s::%s: Created new process %p", __CLASS__, __FUNCTION__, (void *)mProcess));
   }
 
   mState = GMPStateLoaded;
@@ -123,11 +141,12 @@ GMPParent::CloseIfUnused()
 {
   MOZ_ASSERT(GMPThread() == NS_GetCurrentThread());
 
-  if ((mDeleteProcessOnUnload ||
+  if ((mDeleteProcessOnlyOnUnload ||
        mState == GMPStateLoaded ||
        mState == GMPStateUnloading) &&
       mVideoDecoders.IsEmpty() &&
-      mVideoEncoders.IsEmpty()) {
+      mVideoEncoders.IsEmpty() &&
+      mDecryptors.IsEmpty()) {
     Shutdown();
   }
 }
@@ -137,7 +156,7 @@ GMPParent::CloseActive(bool aDieWhenUnloaded)
 {
   LOGD(("%s::%s: %p state %d", __CLASS__, __FUNCTION__, this, mState));
   if (aDieWhenUnloaded) {
-    mDeleteProcessOnUnload = true; // don't allow this to go back...
+    mDeleteProcessOnlyOnUnload = true; // don't allow this to go back...
   }
   if (mState == GMPStateLoaded) {
     mState = GMPStateUnloading;
@@ -153,6 +172,11 @@ GMPParent::CloseActive(bool aDieWhenUnloaded)
     mVideoEncoders[i - 1]->Shutdown();
   }
 
+  // Invalidate and remove any remaining API objects.
+  for (uint32_t i = mDecryptors.Length(); i > 0; i--) {
+    mDecryptors[i - 1]->Shutdown();
+  }
+
   // Note: the shutdown of the codecs is async!  don't kill
   // the plugin-container until they're all safely shut down via
   // CloseIfUnused();
@@ -165,19 +189,23 @@ GMPParent::Shutdown()
   LOGD(("%s::%s: %p", __CLASS__, __FUNCTION__, this));
   MOZ_ASSERT(GMPThread() == NS_GetCurrentThread());
 
+  if (mAbnormalShutdownInProgress) {
+    return;
+  }
   MOZ_ASSERT(mVideoDecoders.IsEmpty() && mVideoEncoders.IsEmpty());
   if (mState == GMPStateNotLoaded || mState == GMPStateClosing) {
     return;
   }
 
-  // XXX Get rid of mDeleteProcessOnUnload and do this on all Shutdowns once
-  // Bug 1043671 is fixed (backout this patch)
-  if (mDeleteProcessOnUnload) {
-    mState = GMPStateClosing;
-    DeleteProcess();
-  } else {
-    mState = GMPStateNotLoaded;
-  }
+  mState = GMPStateClosing;
+  DeleteProcess();
+  // XXX Get rid of mDeleteProcessOnlyOnUnload and this code when
+  // Bug 1043671 is fixed
+  if (!mDeleteProcessOnlyOnUnload) {
+    // Destroy ourselves and rise from the fire to save memory
+    nsRefPtr<GMPParent> self(this);
+    mService->ReAddOnGMPThread(self);
+  } // else we've been asked to die and stay dead
   MOZ_ASSERT(mState == GMPStateNotLoaded);
 }
 
@@ -185,8 +213,12 @@ void
 GMPParent::DeleteProcess()
 {
   LOGD(("%s::%s: %p", __CLASS__, __FUNCTION__, this));
+  // Don't Close() twice!
+  // Probably remove when bug 1043671 is resolved
+  MOZ_ASSERT(mState == GMPStateClosing);
   Close();
   mProcess->Delete();
+  LOGD(("%s::%s: Shut down process %p", __CLASS__, __FUNCTION__, (void *) mProcess));
   mProcess = nullptr;
   mState = GMPStateNotLoaded;
 }
@@ -225,6 +257,44 @@ GMPParent::VideoEncoderDestroyed(GMPVideoEncoderParent* aEncoder)
   }
 }
 
+void
+GMPParent::DecryptorDestroyed(GMPDecryptorParent* aSession)
+{
+  MOZ_ASSERT(GMPThread() == NS_GetCurrentThread());
+
+  MOZ_ALWAYS_TRUE(mDecryptors.RemoveElement(aSession));
+
+  // Recv__delete__ is on the stack, don't potentially destroy the top-level actor
+  // until after this has completed.
+  if (mDecryptors.IsEmpty()) {
+    nsCOMPtr<nsIRunnable> event = NS_NewRunnableMethod(this, &GMPParent::CloseIfUnused);
+    NS_DispatchToCurrentThread(event);
+  }
+}
+
+nsresult
+GMPParent::GetGMPDecryptor(GMPDecryptorParent** aGMPDP)
+{
+  MOZ_ASSERT(GMPThread() == NS_GetCurrentThread());
+
+  if (!EnsureProcessLoaded()) {
+    return NS_ERROR_FAILURE;
+  }
+
+  PGMPDecryptorParent* pdp = SendPGMPDecryptorConstructor();
+  if (!pdp) {
+    return NS_ERROR_FAILURE;
+  }
+  GMPDecryptorParent* dp = static_cast<GMPDecryptorParent*>(pdp);
+  // This addref corresponds to the Proxy pointer the consumer is returned.
+  // It's dropped by calling Close() on the interface.
+  NS_ADDREF(dp);
+  mDecryptors.AppendElement(dp);
+  *aGMPDP = dp;
+
+  return NS_OK;
+}
+
 GMPState
 GMPParent::State() const
 {
@@ -232,6 +302,7 @@ GMPParent::State() const
 }
 
 #ifdef DEBUG
+// Not changing to use mService since we'll be removing it
 nsIThread*
 GMPParent::GMPThread()
 {
@@ -403,11 +474,15 @@ GMPParent::ActorDestroy(ActorDestroyReason aWhy)
 #endif
   // warn us off trying to close again
   mState = GMPStateClosing;
+  mAbnormalShutdownInProgress = true;
   CloseActive(false);
 
   // Normal Shutdown() will delete the process on unwind.
   if (AbnormalShutdown == aWhy) {
-    NS_DispatchToCurrentThread(NS_NewRunnableMethod(this, &GMPParent::DeleteProcess));
+    mState = GMPStateClosing;
+    nsRefPtr<GMPParent> self(this);
+    // Note: final destruction will be Dispatched to ourself
+    mService->ReAddOnGMPThread(self);
   }
 }
 
@@ -458,6 +533,22 @@ GMPParent::DeallocPGMPVideoEncoderParent(PGMPVideoEncoderParent* aActor)
 {
   GMPVideoEncoderParent* vep = static_cast<GMPVideoEncoderParent*>(aActor);
   NS_RELEASE(vep);
+  return true;
+}
+
+PGMPDecryptorParent*
+GMPParent::AllocPGMPDecryptorParent()
+{
+  GMPDecryptorParent* ksp = new GMPDecryptorParent(this);
+  NS_ADDREF(ksp);
+  return ksp;
+}
+
+bool
+GMPParent::DeallocPGMPDecryptorParent(PGMPDecryptorParent* aActor)
+{
+  GMPDecryptorParent* ksp = static_cast<GMPDecryptorParent*>(aActor);
+  NS_RELEASE(ksp);
   return true;
 }
 

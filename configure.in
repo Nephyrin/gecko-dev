@@ -5646,7 +5646,6 @@ fi
 dnl ========================================================
 dnl = ANGLE OpenGL->D3D translator for WebGL
 dnl = * only applies to win32
-dnl = * enabled by default (shipping build); requires explicit --disable to disable
 dnl ========================================================
 
 MOZ_ANGLE_RENDERER=
@@ -8011,10 +8010,13 @@ if test "$MOZ_TREE_CAIRO"; then
         XLIB_SURFACE_FEATURE="#define CAIRO_HAS_XLIB_SURFACE 1"
         XLIB_XRENDER_SURFACE_FEATURE="#define CAIRO_HAS_XLIB_XRENDER_SURFACE 1"
         PS_SURFACE_FEATURE="#define CAIRO_HAS_PS_SURFACE 1"
+    fi
+    if test "$_HAVE_FREETYPE2"; then
         FT_FONT_FEATURE="#define CAIRO_HAS_FT_FONT 1"
         MOZ_ENABLE_CAIRO_FT=1
         CAIRO_FT_CFLAGS="$FT2_CFLAGS"
     fi
+
     case "$MOZ_WIDGET_TOOLKIT" in
       qt)
         QT_SURFACE_FEATURE="#define CAIRO_HAS_QT_SURFACE 1"

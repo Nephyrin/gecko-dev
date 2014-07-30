@@ -47,6 +47,18 @@ from mozlog.structured.structuredlog import StructuredLogger
 # not yet present in the mozharness environment
 from mozrunner.utils import findInPath as which
 
+
+# Necessary to set up the global logger in automationutils.py
+import logging
+log = logging.getLogger()
+def resetGlobalLog():
+   while log.handlers:
+       log.removeHandler(log.handlers[0])
+   handler = logging.StreamHandler(sys.stdout)
+   log.setLevel(logging.INFO)
+   log.addHandler(handler)
+resetGlobalLog()
+
 ###########################
 # Option for NSPR logging #
 ###########################
@@ -70,7 +82,8 @@ class MochitestFormatter(TbplFormatter):
 
     def __call__(self, data):
         tbpl_output = super(MochitestFormatter, self).__call__(data)
-        output = '%d INFO %s' % (MochitestFormatter.log_num, tbpl_output)
+        log_level = data.get('level', 'info').upper()
+        output = '%d %s %s' % (MochitestFormatter.log_num, log_level, tbpl_output)
         MochitestFormatter.log_num += 1
         return output
 
@@ -1564,9 +1577,14 @@ class Mochitest(MochitestUtilsMixin):
     bisect = bisection.Bisect(self)
     finished = False
     status = 0
+    bisection_log = 0
     while not finished:
       if options.bisectChunk:
         testsToRun = bisect.pre_test(options, testsToRun, status)
+        # To inform that we are in the process of bisection, and to look for bleedthrough
+        if options.bisectChunk != "default" and not bisection_log:
+            log.info("TEST-UNEXPECTED-FAIL | Bisection | Please ignore repeats and look for 'Bleedthrough' (if any) at the end of the failure list")
+            bisection_log = 1
 
       result = self.doTests(options, onLaunch, testsToRun)
       if options.bisectChunk:
@@ -1634,7 +1652,7 @@ class Mochitest(MochitestUtilsMixin):
 
     return result
 
-  def doTests(self, options, onLaunch=None, testsToFilter = None):
+  def doTests(self, options, onLaunch=None, testsToFilter=None):
     # A call to initializeLooping method is required in case of --run-by-dir or --bisect-chunk
     # since we need to initialize variables for each loop.
     if options.bisectChunk or options.runByDir:
@@ -1898,7 +1916,7 @@ class Mochitest(MochitestUtilsMixin):
       if message['action'] == 'test_start': #by default make the result key equal to pass.
         key = message['test'].split('/')[-1].strip()
         self.harness.result[key] = "PASS"
-      elif message['action'] in ['test_end', 'test_status']:
+      elif message['action'] == 'test_status':
         if 'expected' in message:
           key = message['test'].split('/')[-1].strip()
           self.harness.result[key] = "FAIL"
@@ -1908,10 +1926,10 @@ class Mochitest(MochitestUtilsMixin):
       return message
 
     def first_error(self, message):
-      if 'expected' in message and message['status'] == 'FAIL':
+      if message['action'] == 'test_status' and 'expected' in message and message['status'] == 'FAIL':
         key = message['test'].split('/')[-1].strip()
         if key not in self.harness.expectedError:
-          self.harness.expectedError[key] = message['message'].strip()
+          self.harness.expectedError[key] = message.get('message', message['subtest']).strip()
       return message
 
     def countline(self, message):
@@ -1941,6 +1959,8 @@ class Mochitest(MochitestUtilsMixin):
       """record last test on harness"""
       if message['action'] == 'test_start':
         self.harness.lastTestSeen = message['test']
+      elif message['action'] == 'log' and 'TEST-START' in message['message'] and '|' in message['message']:
+        self.harness.lastTestSeen = message['message'].split("|")[1].strip()
       return message
 
     def dumpScreenOnTimeout(self, message):
@@ -1950,10 +1970,18 @@ class Mochitest(MochitestUtilsMixin):
           and 'message' in message
           and "Test timed out" in message['message']):
         self.harness.dumpScreen(self.utilityPath)
+      elif (not self.dump_screen_on_fail
+            and self.dump_screen_on_timeout
+            and message['action'] == 'log'
+            and 'TEST-UNEXPECTED-FAIL' in message['message']
+            and 'Test timed out' in message['message']):
+        self.harness.dumpScreen(self.utilityPath)
       return message
 
     def dumpScreenOnFail(self, message):
       if self.dump_screen_on_fail and 'expected' in message and message['status'] == 'FAIL':
+        self.harness.dumpScreen(self.utilityPath)
+      elif self.dump_screen_on_fail and message['action'] == 'log' and 'TEST-UNEXPECTED-FAIL' in message['message']:
         self.harness.dumpScreen(self.utilityPath)
       return message
 
