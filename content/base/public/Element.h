@@ -139,7 +139,7 @@ class Element : public FragmentOrElement
 {
 public:
 #ifdef MOZILLA_INTERNAL_API
-  Element(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo) :
+  explicit Element(already_AddRefed<mozilla::dom::NodeInfo>& aNodeInfo) :
     FragmentOrElement(aNodeInfo),
     mState(NS_EVENT_STATE_MOZ_READONLY)
   {
@@ -645,6 +645,8 @@ public:
   }
   bool HasAttributeNS(const nsAString& aNamespaceURI,
                       const nsAString& aLocalName) const;
+  bool Matches(const nsAString& aSelector,
+               ErrorResult& aError);
   already_AddRefed<nsIHTMLCollection>
     GetElementsByTagName(const nsAString& aQualifiedName);
   already_AddRefed<nsIHTMLCollection>
@@ -654,7 +656,10 @@ public:
   already_AddRefed<nsIHTMLCollection>
     GetElementsByClassName(const nsAString& aClassNames);
   bool MozMatchesSelector(const nsAString& aSelector,
-                          ErrorResult& aError);
+                          ErrorResult& aError)
+  {
+    return Matches(aSelector, aError);
+  }
   void SetPointerCapture(int32_t aPointerId, ErrorResult& aError)
   {
     bool activeState = false;
@@ -1208,7 +1213,7 @@ private:
 class DestinationInsertionPointList : public nsINodeList
 {
 public:
-  DestinationInsertionPointList(Element* aElement);
+  explicit DestinationInsertionPointList(Element* aElement);
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_CLASS(DestinationInsertionPointList)
@@ -1483,8 +1488,11 @@ NS_IMETHOD SetAttributeNode(nsIDOMAttr* newAttr,                              \
   if (!newAttr) {                                                             \
     return NS_ERROR_INVALID_POINTER;                                          \
   }                                                                           \
+  mozilla::dom::Attr* attr = mozilla::dom::Attr::FromDOMAttr(newAttr);        \
+  if (!attr) {                                                                \
+    return NS_ERROR_INVALID_POINTER;                                          \
+  }                                                                           \
   mozilla::ErrorResult rv;                                                    \
-  mozilla::dom::Attr* attr = static_cast<mozilla::dom::Attr*>(newAttr);       \
   *_retval = Element::SetAttributeNode(*attr, rv).take();                     \
   return rv.ErrorCode();                                                      \
 }                                                                             \
@@ -1494,8 +1502,11 @@ NS_IMETHOD RemoveAttributeNode(nsIDOMAttr* oldAttr,                           \
   if (!oldAttr) {                                                             \
     return NS_ERROR_INVALID_POINTER;                                          \
   }                                                                           \
+  mozilla::dom::Attr* attr = mozilla::dom::Attr::FromDOMAttr(oldAttr);        \
+  if (!attr) {                                                                \
+    return NS_ERROR_INVALID_POINTER;                                          \
+  }                                                                           \
   mozilla::ErrorResult rv;                                                    \
-  mozilla::dom::Attr* attr = static_cast<mozilla::dom::Attr*>(oldAttr);       \
   *_retval = Element::RemoveAttributeNode(*attr, rv).take();                  \
   return rv.ErrorCode();                                                      \
 }                                                                             \
@@ -1510,8 +1521,11 @@ NS_IMETHOD GetAttributeNodeNS(const nsAString& namespaceURI,                  \
 NS_IMETHOD SetAttributeNodeNS(nsIDOMAttr* newAttr,                            \
                               nsIDOMAttr** _retval) MOZ_FINAL                 \
 {                                                                             \
+  mozilla::dom::Attr* attr = mozilla::dom::Attr::FromDOMAttr(newAttr);        \
+  if (!attr) {                                                                \
+    return NS_ERROR_INVALID_POINTER;                                          \
+  }                                                                           \
   mozilla::ErrorResult rv;                                                    \
-  mozilla::dom::Attr* attr = static_cast<mozilla::dom::Attr*>(newAttr);       \
   *_retval = Element::SetAttributeNodeNS(*attr, rv).take();                   \
   return rv.ErrorCode();                                                      \
 }                                                                             \

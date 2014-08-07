@@ -7,7 +7,6 @@
 #define GFX_OGLSHADERPROGRAM_H
 
 #include "GLContext.h"                  // for fast inlines of glUniform*
-#include "gfx3DMatrix.h"                // for gfx3DMatrix
 #include "gfxTypes.h"
 #include "mozilla/Assertions.h"         // for MOZ_ASSERT, etc
 #include "mozilla/RefPtr.h"             // for RefPtr
@@ -47,6 +46,7 @@ enum ShaderFeatures {
 
 class KnownUniform {
 public:
+  // this needs to be kept in sync with strings in 'AddUniforms'
   enum KnownUniformName {
     NotAKnownUniform = -1,
 
@@ -469,10 +469,6 @@ protected:
     if (ku.UpdateUniform(16, aFloatValues)) {
       mGL->fUniformMatrix4fv(ku.mLocation, 1, false, ku.mValue.f16v);
     }
-  }
-
-  void SetMatrixUniform(KnownUniform::KnownUniformName aKnownUniform, const gfx3DMatrix& aMatrix) {
-    SetMatrixUniform(aKnownUniform, &aMatrix._11);
   }
 
   void SetMatrixUniform(KnownUniform::KnownUniformName aKnownUniform, const gfx::Matrix4x4& aMatrix) {

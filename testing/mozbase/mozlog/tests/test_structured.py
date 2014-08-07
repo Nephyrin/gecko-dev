@@ -1,9 +1,11 @@
+# -*- coding: utf-8 -*-
 import argparse
 import optparse
 import os
 import unittest
 import StringIO
 import json
+import mozfile
 
 from mozlog.structured import (
     commandline,
@@ -11,6 +13,7 @@ from mozlog.structured import (
     structuredlog,
     stdadapter,
     handlers,
+    formatters,
 )
 
 
@@ -240,7 +243,7 @@ class TestStructuredLog(BaseStructuredTest):
     def test_process(self):
         self.logger.process_output(1234, "test output")
         self.assert_log_equals({"action": "process_output",
-                                "process": 1234,
+                                "process": "1234",
                                 "data": "test output"})
 
     def test_log(self):
@@ -321,7 +324,84 @@ class TestStructuredLog(BaseStructuredTest):
                                 "level": "INFO",
                                 "message": "line 4"})
 
+class TestTypeconversions(BaseStructuredTest):
+    def test_raw(self):
+        self.logger.log_raw({"action":"suite_start", "tests":[1], "time": "1234"})
+        self.assert_log_equals({"action": "suite_start",
+                                "tests":["1"],
+                                "time": 1234})
+        self.logger.suite_end()
+
+    def test_tuple(self):
+        self.logger.suite_start([])
+        self.logger.test_start(("\xf0\x90\x8d\x84\xf0\x90\x8c\xb4\xf0\x90\x8d\x83\xf0\x90\x8d\x84", 42, u"\u16a4"))
+        self.assert_log_equals({"action": "test_start",
+                                "test": (u'\U00010344\U00010334\U00010343\U00010344', u"42", u"\u16a4")})
+        self.logger.suite_end()
+
+    def test_non_string_messages(self):
+        self.logger.suite_start([])
+        self.logger.info(1)
+        self.assert_log_equals({"action": "log",
+                                "message": "1",
+                                "level": "INFO"})
+        self.logger.info([1, (2, '3'), "s", "s" + chr(255)])
+        self.assert_log_equals({"action": "log",
+                                "message": "[1, (2, '3'), 's', 's\\xff']",
+                                "level": "INFO"})
+        self.logger.suite_end()
+
+    def test_utf8str_write(self):
+        with mozfile.NamedTemporaryFile() as logfile:
+            _fmt = formatters.TbplFormatter()
+            _handler = handlers.StreamHandler(logfile, _fmt)
+            self.logger.add_handler(_handler)
+            self.logger.suite_start([])
+            self.logger.info("☺")
+            logfile.seek(0)
+            data = logfile.readlines()[-1].strip()
+            self.assertEquals(data, "☺")
+            self.logger.suite_end()
+
+    def test_arguments(self):
+        self.logger.info(message="test")
+        self.assert_log_equals({"action": "log",
+                                "message": "test",
+                                "level": "INFO"})
+
+        self.logger.suite_start([], {})
+        self.assert_log_equals({"action": "suite_start",
+                                "tests": [],
+                                "run_info": {}})
+        self.logger.test_start(test="test1")
+        self.logger.test_status("subtest1", "FAIL", test="test1", status="PASS")
+        self.assert_log_equals({"action": "test_status",
+                                "test": "test1",
+                                "subtest": "subtest1",
+                                "status": "PASS",
+                                "expected": "FAIL"})
+        self.logger.process_output(123, "data", "test")
+        self.assert_log_equals({"action": "process_output",
+                                "process": "123",
+                                "command": "test",
+                                "data": "data"})
+        self.assertRaises(TypeError, self.logger.test_status, subtest="subtest2",
+                          status="FAIL", expected="PASS")
+        self.assertRaises(TypeError, self.logger.test_status, "test1", "subtest1",
+                          "PASS", "FAIL", "message", "stack", {}, "unexpected")
+        self.assertRaises(TypeError, self.logger.test_status, "test1", test="test2")
+        self.logger.suite_end()
+
 class TestCommandline(unittest.TestCase):
+
+    def setUp(self):
+        self.logfile = mozfile.NamedTemporaryFile()
+
+    @property
+    def loglines(self):
+        self.logfile.seek(0)
+        return [line.strip() for line in self.logfile.readlines()]
+
     def test_setup_logging(self):
         parser = argparse.ArgumentParser()
         commandline.add_logging_group(parser)
@@ -336,6 +416,53 @@ class TestCommandline(unittest.TestCase):
         logger = commandline.setup_logging("test_optparse", args, {})
         self.assertEqual(len(logger.handlers), 1)
         self.assertIsInstance(logger.handlers[0], handlers.StreamHandler)
+
+    def test_logging_defaultlevel(self):
+        parser = argparse.ArgumentParser()
+        commandline.add_logging_group(parser)
+
+        args = parser.parse_args(["--log-tbpl=%s" % self.logfile.name])
+        logger = commandline.setup_logging("test_fmtopts", args, {})
+        logger.info("INFO message")
+        logger.debug("DEBUG message")
+        logger.error("ERROR message")
+        # The debug level is not logged by default.
+        self.assertEqual(["INFO message",
+                          "ERROR message"],
+                         self.loglines)
+
+    def test_logging_errorlevel(self):
+        parser = argparse.ArgumentParser()
+        commandline.add_logging_group(parser)
+        args = parser.parse_args(["--log-tbpl=%s" % self.logfile.name, "--log-tbpl-level=error"])
+        logger = commandline.setup_logging("test_fmtopts", args, {})
+        logger.info("INFO message")
+        logger.debug("DEBUG message")
+        logger.error("ERROR message")
+
+        # Only the error level and above were requested.
+        self.assertEqual(["ERROR message"],
+                         self.loglines)
+
+    def test_logging_debuglevel(self):
+        parser = argparse.ArgumentParser()
+        commandline.add_logging_group(parser)
+        args = parser.parse_args(["--log-tbpl=%s" % self.logfile.name, "--log-tbpl-level=debug"])
+        logger = commandline.setup_logging("test_fmtopts", args, {})
+        logger.info("INFO message")
+        logger.debug("DEBUG message")
+        logger.error("ERROR message")
+        # Requesting a lower log level than default works as expected.
+        self.assertEqual(["INFO message",
+                          "DEBUG message",
+                          "ERROR message"],
+                         self.loglines)
+
+    def test_unused_options(self):
+        parser = argparse.ArgumentParser()
+        commandline.add_logging_group(parser)
+        args = parser.parse_args(["--log-tbpl-level=error"])
+        self.assertRaises(ValueError, commandline.setup_logging, "test_fmtopts", args, {})
 
 class TestReader(unittest.TestCase):
     def to_file_like(self, obj):

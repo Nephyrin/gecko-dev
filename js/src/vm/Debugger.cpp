@@ -6,6 +6,8 @@
 
 #include "vm/Debugger-inl.h"
 
+#include "mozilla/DebugOnly.h"
+
 #include "jscntxt.h"
 #include "jscompartment.h"
 #include "jshashutil.h"
@@ -244,10 +246,8 @@ BreakpointSite::BreakpointSite(JSScript *script, jsbytecode *pc)
 void
 BreakpointSite::recompile(FreeOp *fop)
 {
-#ifdef JS_ION
     if (script->hasBaselineScript())
         script->baselineScript()->toggleDebugTraps(script, pc);
-#endif
 }
 
 void
@@ -340,6 +340,7 @@ Breakpoint::nextInSite()
 
 Debugger::Debugger(JSContext *cx, JSObject *dbg)
   : object(dbg), uncaughtExceptionHook(nullptr), enabled(true), trackingAllocationSites(false),
+    allocationsLogLength(0), maxAllocationsLogLength(DEFAULT_MAX_ALLOCATIONS_LOG_LENGTH),
     frames(cx->runtime()), scripts(cx), sources(cx), objects(cx), environments(cx)
 {
     assertSameCompartment(cx, dbg);
@@ -352,6 +353,7 @@ Debugger::Debugger(JSContext *cx, JSObject *dbg)
 Debugger::~Debugger()
 {
     JS_ASSERT_IF(debuggees.initialized(), debuggees.empty());
+    emptyAllocationsLog();
 
     /*
      * Since the inactive state for this link is a singleton cycle, it's always
@@ -392,6 +394,19 @@ Debugger::fromChildJSObject(JSObject *obj)
               obj->getClass() == &DebuggerEnv_class);
     JSObject *dbgobj = &obj->getReservedSlot(JSSLOT_DEBUGOBJECT_OWNER).toObject();
     return fromJSObject(dbgobj);
+}
+
+bool
+Debugger::hasMemory() const
+{
+    return object->getReservedSlot(JSSLOT_DEBUG_MEMORY_INSTANCE).isObject();
+}
+
+DebuggerMemory &
+Debugger::memory() const
+{
+    JS_ASSERT(hasMemory());
+    return object->getReservedSlot(JSSLOT_DEBUG_MEMORY_INSTANCE).toObject().as<DebuggerMemory>();
 }
 
 bool
@@ -1441,6 +1456,61 @@ Debugger::slowPathOnNewGlobalObject(JSContext *cx, Handle<GlobalObject *> global
     JS_ASSERT(!cx->isExceptionPending());
 }
 
+/* static */ bool
+Debugger::slowPathOnLogAllocationSite(JSContext *cx, HandleSavedFrame frame,
+                                      GlobalObject::DebuggerVector &dbgs)
+{
+    JS_ASSERT(!dbgs.empty());
+    mozilla::DebugOnly<Debugger **> begin = dbgs.begin();
+
+    for (Debugger **dbgp = dbgs.begin(); dbgp < dbgs.end(); dbgp++) {
+        // The set of debuggers had better not change while we're iterating,
+        // such that the vector gets reallocated.
+        JS_ASSERT(dbgs.begin() == begin);
+
+        if ((*dbgp)->trackingAllocationSites &&
+            (*dbgp)->enabled &&
+            !(*dbgp)->appendAllocationSite(cx, frame))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool
+Debugger::appendAllocationSite(JSContext *cx, HandleSavedFrame frame)
+{
+    AutoCompartment ac(cx, object);
+    RootedObject wrapped(cx, frame);
+    if (!cx->compartment()->wrap(cx, &wrapped))
+        return false;
+
+    AllocationSite *allocSite = cx->new_<AllocationSite>(wrapped);
+    if (!allocSite)
+        return false;
+
+    allocationsLog.insertBack(allocSite);
+
+    if (allocationsLogLength >= maxAllocationsLogLength) {
+        js_delete(allocationsLog.getFirst());
+    } else {
+        allocationsLogLength++;
+    }
+
+    return true;
+}
+
+void
+Debugger::emptyAllocationsLog()
+{
+    while (!allocationsLog.isEmpty())
+        js_delete(allocationsLog.getFirst());
+    allocationsLogLength = 0;
+}
+
+
 
 /*** Debugger JSObjects **************************************************************************/
 
@@ -1635,6 +1705,12 @@ Debugger::trace(JSTracer *trc)
         JS_ASSERT(frameobj->getPrivate());
         MarkObject(trc, &frameobj, "live Debugger.Frame");
     }
+
+    /*
+     * Mark every allocation site in our allocation log.
+     */
+    for (AllocationSite *s = allocationsLog.getFirst(); s; s = s->getNext())
+        MarkObject(trc, &s->frame, "allocation log SavedFrame");
 
     /* Trace the weak map from JSScript instances to Debugger.Script objects. */
     scripts.trace(trc);
@@ -2049,7 +2125,7 @@ Debugger::addAllGlobalsAsDebuggees(JSContext *cx, unsigned argc, Value *vp)
         for (CompartmentsInZoneIter c(zone); !c.done(); c.next()) {
             if (c == dbg->object->compartment() || c->options().invisibleToDebugger())
                 continue;
-            c->zone()->scheduledForDestruction = false;
+            c->scheduledForDestruction = false;
             GlobalObject *global = c->maybeGlobal();
             if (global) {
                 Rooted<GlobalObject*> rg(cx, global);
@@ -2863,7 +2939,7 @@ Debugger::findAllGlobals(JSContext *cx, unsigned argc, Value *vp)
         if (c->options().invisibleToDebugger())
             continue;
 
-        c->zone()->scheduledForDestruction = false;
+        c->scheduledForDestruction = false;
 
         GlobalObject *global = c->maybeGlobal();
 
@@ -2876,7 +2952,7 @@ Debugger::findAllGlobals(JSContext *cx, unsigned argc, Value *vp)
              * marked gray by XPConnect. Since we're now exposing it to JS code,
              * we need to mark it black.
              */
-            JS::ExposeGCThingToActiveJS(global, JSTRACE_OBJECT);
+            JS::ExposeObjectToActiveJS(global);
 
             RootedValue globalValue(cx, ObjectValue(*global));
             if (!dbg->wrapDebuggeeValue(cx, &globalValue))
@@ -4166,7 +4242,7 @@ static void
 UpdateFrameIterPc(FrameIter &iter)
 {
     if (iter.abstractFramePtr().isRematerializedFrame()) {
-#if defined(DEBUG) && defined(JS_ION)
+#ifdef DEBUG
         // Rematerialized frames don't need their pc updated. The reason we
         // need to update pc is because we might get the same Debugger.Frame
         // object for multiple re-entries into debugger code from debuggee

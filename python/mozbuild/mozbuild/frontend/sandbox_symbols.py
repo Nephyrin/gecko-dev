@@ -21,6 +21,7 @@ from collections import OrderedDict
 from mozbuild.util import (
     HierarchicalStringList,
     HierarchicalStringListWithFlagsFactory,
+    List,
     StrictOrderingOnAppendList,
     StrictOrderingOnAppendListWithFlagsFactory,
 )
@@ -65,7 +66,7 @@ VARIABLES = {
         file.
         """, 'export'),
 
-    'ANDROID_RES_DIRS': (list, list,
+    'ANDROID_RES_DIRS': (List, list,
         """Android resource directories.
 
         This variable contains a list of directories, each relative to
@@ -80,7 +81,7 @@ VARIABLES = {
         populated by calling add_android_eclipse{_library}_project().
         """, 'export'),
 
-    'SOURCES': (StrictOrderingOnAppendListWithFlagsFactory({'no_pgo': bool, 'flags': list}), list,
+    'SOURCES': (StrictOrderingOnAppendListWithFlagsFactory({'no_pgo': bool, 'flags': List}), list,
         """Source code files.
 
         This variable contains a list of source code files to compile.
@@ -153,14 +154,14 @@ VARIABLES = {
            })
         """, None),
 
-    'DELAYLOAD_DLLS': (list, list,
+    'DELAYLOAD_DLLS': (List, list,
         """Delay-loaded DLLs.
 
         This variable contains a list of DLL files which the module being linked
         should load lazily.  This only has an effect when building with MSVC.
         """, None),
 
-    'DIRS': (list, list,
+    'DIRS': (List, list,
         """Child directories to descend into looking for build frontend files.
 
         This works similarly to the ``DIRS`` variable in make files. Each str
@@ -186,20 +187,18 @@ VARIABLES = {
        ``$(FINAL_TARGET)/components/``.
         """, 'libs'),
 
-    'EXTRA_JS_MODULES': (StrictOrderingOnAppendList, list,
+    'EXTRA_JS_MODULES': (HierarchicalStringList, list,
         """Additional JavaScript files to distribute.
 
         This variable contains a list of files to copy into
-        ``$(FINAL_TARGET)/$(JS_MODULES_PATH)``. ``JS_MODULES_PATH`` defaults
-        to ``modules`` if left undefined.
+        ``$(FINAL_TARGET)/modules.
         """, 'libs'),
 
-    'EXTRA_PP_JS_MODULES': (StrictOrderingOnAppendList, list,
+    'EXTRA_PP_JS_MODULES': (HierarchicalStringList, list,
         """Additional JavaScript files to distribute.
 
         This variable contains a list of files to copy into
-        ``$(FINAL_TARGET)/$(JS_MODULES_PATH)``, after preprocessing.
-        ``JS_MODULES_PATH`` defaults to ``modules`` if left undefined.
+        ``$(FINAL_TARGET)/modules``, after preprocessing.
         """, 'libs'),
 
     'TESTING_JS_MODULES': (HierarchicalStringList, list,
@@ -292,16 +291,6 @@ VARIABLES = {
         populated by calling add_java_jar().
         """, 'libs'),
 
-    'JS_MODULES_PATH': (unicode, unicode,
-        """Sub-directory of ``$(FINAL_TARGET)`` to install
-        ``EXTRA_JS_MODULES``.
-
-        ``EXTRA_JS_MODULES`` files are copied to
-        ``$(FINAL_TARGET)/$(JS_MODULES_PATH)``. This variable does not
-        need to be defined if the desired destination directory is
-        ``$(FINAL_TARGET)/modules``.
-        """, None),
-
     'LIBRARY_NAME': (unicode, unicode,
         """The code name of the library generated for a directory.
 
@@ -343,6 +332,10 @@ VARIABLES = {
         """List of libraries to link to host programs and libraries.
         """, None),
 
+    'HOST_OS_LIBS': (List, list,
+        """List of system libraries for host programs and libraries.
+        """, None),
+
     'LOCAL_INCLUDES': (StrictOrderingOnAppendList, list,
         """Additional directories to be searched for include files by the compiler.
         """, None),
@@ -359,7 +352,7 @@ VARIABLES = {
         """Build sources listed in this file without VISIBILITY_FLAGS.
         """, None),
 
-    'OS_LIBS': (list, list,
+    'OS_LIBS': (List, list,
         """System link libraries.
 
         This variable contains a list of system libaries to link against.
@@ -452,7 +445,7 @@ VARIABLES = {
         ``HOST_BIN_SUFFIX``, the name will remain unchanged.
         """, None),
 
-    'TEST_DIRS': (list, list,
+    'TEST_DIRS': (List, list,
         """Like DIRS but only for directories that contain test-only code.
 
         If tests are not enabled, this variable will be ignored.
@@ -729,7 +722,7 @@ VARIABLES = {
         """Directories containing Python packages that Sphinx documents.
         """, None),
 
-    'CFLAGS': (list, list,
+    'CFLAGS': (List, list,
         """Flags passed to the C compiler for all of the C source files
            declared in this directory.
 
@@ -738,7 +731,7 @@ VARIABLES = {
            appear in the moz.build file.
         """, None),
 
-    'CXXFLAGS': (list, list,
+    'CXXFLAGS': (List, list,
         """Flags passed to the C++ compiler for all of the C++ source files
            declared in this directory.
 
@@ -747,7 +740,7 @@ VARIABLES = {
            appear in the moz.build file.
         """, None),
 
-    'CMFLAGS': (list, list,
+    'CMFLAGS': (List, list,
         """Flags passed to the Objective-C compiler for all of the Objective-C
            source files declared in this directory.
 
@@ -756,7 +749,7 @@ VARIABLES = {
            appear in the moz.build file.
         """, None),
 
-    'CMMFLAGS': (list, list,
+    'CMMFLAGS': (List, list,
         """Flags passed to the Objective-C++ compiler for all of the
            Objective-C++ source files declared in this directory.
 
@@ -765,7 +758,7 @@ VARIABLES = {
            appear in the moz.build file.
         """, None),
 
-    'LDFLAGS': (list, list,
+    'LDFLAGS': (List, list,
         """Flags passed to the linker when linking all of the libraries and
            executables declared in this directory.
 
@@ -774,7 +767,7 @@ VARIABLES = {
            appear in the moz.build file.
         """, 'libs'),
 
-    'EXTRA_DSO_LDOPTS': (list, list,
+    'EXTRA_DSO_LDOPTS': (List, list,
         """Flags passed to the linker when linking a shared library.
 
            Note that the ordering of flags matter here, these flags will be
@@ -782,7 +775,7 @@ VARIABLES = {
            appear in the moz.build file.
         """, 'libs'),
 
-    'WIN32_EXE_LDFLAGS': (list, list,
+    'WIN32_EXE_LDFLAGS': (List, list,
         """Flags passed to the linker when linking a Windows .exe executable
            declared in this directory.
 
@@ -793,6 +786,12 @@ VARIABLES = {
            This variable only has an effect on Windows.
         """, 'libs'),
 }
+
+# Sanity check: we don't want any variable above to have a list as storage type.
+for name, (storage_type, input_types, docs, tier) in VARIABLES.items():
+    if storage_type == list:
+        raise RuntimeError('%s has a "list" storage type. Use "List" instead.'
+            % name)
 
 # The set of functions exposed to the sandbox.
 #
@@ -899,19 +898,10 @@ FUNCTIONS = {
 
            add_tier_dir('app', ['components', 'base'])
 
-        Register a directory as having static content (no dependencies)::
-
-           add_tier_dir('base', 'foo', static=True)
-
-        Register a directory as having external content (same as static
-        content, but traversed with export, libs, and tools subtiers::
+        Register a directory as having external content (no dependencies,
+        and traversed with export, libs, and tools subtiers::
 
            add_tier_dir('base', 'bar', external=True)
-
-        Note there is a temporary ``trigger`` parameter that tells the build
-        system that if it sees the given string in a Makefile, then the compile
-        rules in that directory depend on the directories listed in the
-        add_tier_dir call.
         """),
 
     'export': ('_export', (str,),

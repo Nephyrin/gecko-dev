@@ -777,7 +777,7 @@ js::WouldDefinePastNonwritableLength(ThreadSafeContext *cx,
 
     JSContext *ncx = cx->asJSContext();
 
-    if (!strict && !ncx->options().extraWarnings())
+    if (!strict && !ncx->compartment()->options().extraWarnings(ncx))
         return true;
 
     // XXX include the index and maybe array length in the error message
@@ -2575,7 +2575,6 @@ js::array_splice_impl(JSContext *cx, unsigned argc, Value *vp, bool returnValueI
     return true;
 }
 
-#ifdef JS_ION
 bool
 js::array_concat_dense(JSContext *cx, Handle<ArrayObject*> arr1, Handle<ArrayObject*> arr2,
                        Handle<ArrayObject*> result)
@@ -2600,7 +2599,6 @@ js::array_concat_dense(JSContext *cx, Handle<ArrayObject*> arr1, Handle<ArrayObj
     result->setLengthInt32(len);
     return true;
 }
-#endif /* JS_ION */
 
 /*
  * Python-esque sequence operations.
@@ -3057,21 +3055,12 @@ js_Array(JSContext *cx, unsigned argc, Value *vp)
      * Allocate dense elements eagerly for small arrays, to avoid reallocating
      * elements when filling the array.
      */
-    RootedObject obj(cx);
-    obj = (length <= ArrayObject::EagerAllocationMaxLength)
-          ? NewDenseAllocatedArray(cx, length)
-          : NewDenseUnallocatedArray(cx, length);
+    bool allocateArray = length <= ArrayObject::EagerAllocationMaxLength;
+    RootedObject obj(cx, NewDenseArray(cx, length, type, allocateArray));
     if (!obj)
         return false;
-    Rooted<ArrayObject*> arr(cx, &obj->as<ArrayObject>());
 
-    arr->setType(type);
-
-    /* If the length calculation overflowed, make sure that is marked for the new type. */
-    if (arr->length() > INT32_MAX)
-        arr->setLength(cx, arr->length());
-
-    args.rval().setObject(*arr);
+    args.rval().setObject(*obj);
     return true;
 }
 
@@ -3264,6 +3253,33 @@ js::NewDenseUnallocatedArray(ExclusiveContext *cx, uint32_t length, JSObject *pr
                              NewObjectKind newKind /* = GenericObject */)
 {
     return NewArray<false>(cx, length, proto, newKind);
+}
+
+ArrayObject * JS_FASTCALL
+js::NewDenseArray(ExclusiveContext *cx, uint32_t length, HandleTypeObject type, bool allocateArray)
+{
+    NewObjectKind newKind = !type ? SingletonObject : GenericObject;
+    if (type && type->shouldPreTenure())
+        newKind = TenuredObject;
+
+    // Allocate dense elements eagerly for small arrays, to avoid reallocating
+    // elements when filling the array.
+    ArrayObject *arr = allocateArray
+                       ? NewDenseAllocatedArray(cx, length, nullptr, newKind)
+                       : NewDenseUnallocatedArray(cx, length, nullptr, newKind);
+
+    if (!arr)
+        return nullptr;
+
+    if (type)
+        arr->setType(type);
+
+    // If the length calculation overflowed, make sure that is marked for the
+    // new type.
+    if (arr->length() > INT32_MAX)
+        arr->setLength(cx, arr->length());
+
+    return arr;
 }
 
 ArrayObject *

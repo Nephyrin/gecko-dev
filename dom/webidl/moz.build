@@ -70,6 +70,7 @@ WEBIDL_FILES = [
     'Contacts.webidl',
     'ConvolverNode.webidl',
     'Coordinates.webidl',
+    'CSPReport.webidl',
     'CSS.webidl',
     'CSSPrimitiveValue.webidl',
     'CSSRuleList.webidl',
@@ -260,6 +261,7 @@ WEBIDL_FILES = [
     'MozMobileMessageManager.webidl',
     'MozNamedAttrMap.webidl',
     'MozPowerManager.webidl',
+    'MozSelfSupport.webidl',
     'MozTimeManager.webidl',
     'MozWakeLock.webidl',
     'MutationEvent.webidl',
@@ -572,6 +574,7 @@ if CONFIG['MOZ_B2G_BT']:
             'BluetoothDiscoveryHandle.webidl',
             'BluetoothManager2.webidl',
             'BluetoothPairingHandle.webidl',
+            'BluetoothPairingListener.webidl',
         ]
     else:
         WEBIDL_FILES += [
@@ -602,6 +605,7 @@ if CONFIG['MOZ_NFC']:
          'MozNFC.webidl',
          'MozNFCPeer.webidl',
          'MozNFCTag.webidl',
+         'NfcOptions.webidl',
     ]
 
 if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':

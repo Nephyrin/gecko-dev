@@ -22,6 +22,7 @@
   // 3. Shared components
   var ConversationToolbar = loop.shared.views.ConversationToolbar;
   var ConversationView = loop.shared.views.ConversationView;
+  var FeedbackView = loop.shared.views.FeedbackView;
 
   // Local helpers
   function returnTrue() {
@@ -31,6 +32,13 @@
   function returnFalse() {
     return false;
   }
+
+  // Feedback API client configured to send data to the stage input server,
+  // which is available at https://input.allizom.org
+  var stageFeedbackApiClient = new loop.FeedbackAPIClient({
+    baseUrl: "https://input.allizom.org/api/v1/feedback",
+    product: "Loop"
+  });
 
   var Example = React.createClass({displayName: 'Example',
     render: function() {
@@ -85,8 +93,14 @@
       return (
         ShowCase(null, 
           Section({name: "PanelView"}, 
-            Example({summary: "332px wide", dashed: "true", style: {width: "332px"}}, 
+            React.DOM.p({className: "note"}, 
+              React.DOM.strong(null, "Note:"), " 332px wide."
+            ), 
+            Example({summary: "Pending call url retrieval", dashed: "true", style: {width: "332px"}}, 
               PanelView(null)
+            ), 
+            Example({summary: "Call URL retrieved", dashed: "true", style: {width: "332px"}}, 
+              PanelView({callUrl: "http://invalid.example.url/"})
             )
           ), 
 
@@ -111,6 +125,22 @@
           Section({name: "ConversationView"}, 
             Example({summary: "Default"}, 
               ConversationView({video: {enabled: true}, audio: {enabled: true}})
+            )
+          ), 
+
+          Section({name: "FeedbackView"}, 
+            React.DOM.p({className: "note"}, 
+              React.DOM.strong(null, "Note:"), " For the useable demo, you can access submitted data at ", 
+              React.DOM.a({href: "https://input.allizom.org/"}, "input.allizom.org"), "."
+            ), 
+            Example({summary: "Default (useable demo)", dashed: "true", style: {width: "280px"}}, 
+              FeedbackView({feedbackApiClient: stageFeedbackApiClient})
+            ), 
+            Example({summary: "Detailed form", dashed: "true", style: {width: "280px"}}, 
+              FeedbackView({step: "form"})
+            ), 
+            Example({summary: "Thank you!", dashed: "true", style: {width: "280px"}}, 
+              FeedbackView({step: "finished"})
             )
           ), 
 

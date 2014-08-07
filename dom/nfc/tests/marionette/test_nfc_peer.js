@@ -10,16 +10,20 @@ let INCORRECT_MANIFEST_URL = "app://xyz.gaiamobile.org/manifest.webapp";
 function peerReadyCb(evt) {
   log("peerReadyCb called");
   let peer = nfc.getNFCPeer(evt.detail);
+  let peer1 = nfc.getNFCPeer(evt.detail);
+  ok(peer == peer1, "Should get the same NFCPeer object.");
   ok(peer instanceof MozNFCPeer, "Should get a NFCPeer object.");
 
-  // reset callback.
-  nfc.onpeerready = null;
   NCI.deactivate();
 }
 
-function peerLostCb() {
+function peerLostCb(evt) {
   log("peerLostCb called");
+  ok(evt.detail === undefined, "evt.detail should be undefined");
   ok(true);
+
+  // reset callback.
+  nfc.onpeerready = null;
   nfc.onpeerlost = null;
   toggleNFC(false).then(runNextTest);
 }
@@ -81,22 +85,85 @@ function testCheckP2PRegFailure() {
   toggleNFC(true).then(() => NCI.activateRE(emulator.P2P_RE_INDEX_0));
 }
 
-function testCheckNfcPeerObjForInvalidToken() {
+function testPeerLostShouldNotBeCalled() {
+  nfc.onpeerlost = function () {
+    ok(false, "onpeerlost shouldn't be called");
+  };
+
+  toggleNFC(true)
+    .then(() => NCI.activateRE(emulator.P2P_RE_INDEX_0))
+    .then(NCI.deactivate)
+    .then(() => toggleNFC(false));
+
+  nfc.onpeerlost = null;
+  runNextTest();
+}
+
+function testPeerShouldThrow() {
+  let peer;
+  let tnf = NDEF.TNF_WELL_KNOWN;
+  let type = new Uint8Array(NfcUtils.fromUTF8("U"));
+  let id = new Uint8Array(NfcUtils.fromUTF8(""));
+  let payload = new Uint8Array(NfcUtils.fromUTF8(url));
+  let ndef = [new MozNDEFRecord(tnf, type, id, payload)];
+
+  nfc.onpeerready = function (evt) {
+    peer = nfc.getNFCPeer(evt.detail);
+  };
+
+  let request = nfc.checkP2PRegistration(MANIFEST_URL);
+  request.onsuccess = function (evt) {
+    is(request.result, true, "check for P2P registration result");
+    nfc.notifyUserAcceptedP2P(MANIFEST_URL);
+  }
+
+  toggleNFC(true)
+    .then(() => NCI.activateRE(emulator.P2P_RE_INDEX_0))
+    .then(NCI.deactivate);
+
   try {
-    // Use a'fakeSessionToken'
-    let peer = nfc.getNFCPeer("fakeSessionToken");
-    ok(false, "Should not get a NFCPeer object.");
-  } catch (ex) {
+    peer.sendNDEF(ndef);
+    ok(false, "sendNDEF should throw error");
+  } catch (e) {
     ok(true, "Exception expected");
   }
 
+  try {
+    peer.sendFile(new Blob());
+    ok(false, "sendfile should throw error");
+  } catch (e) {
+    ok(true, "Exception expected");
+  }
+
+  nfc.onpeerready = null;
   toggleNFC(false).then(runNextTest);
+}
+
+function testPeerInvalidToken() {
+  let peer = nfc.getNFCPeer("fakeSessionToken");
+  is(peer, null, "NFCPeer should be null on wrong session token");
+
+  runNextTest();
+}
+
+/**
+ * Added for completeness in Bug 1042651,
+ * TODO: remove once Bug 963531 lands
+ */
+function testTagInvalidToken() {
+  let tag = nfc.getNFCTag("fakeSessionToken");
+  is(tag, null, "NFCTag should be null on wrong session token");
+
+  runNextTest();
 }
 
 let tests = [
   testPeerReady,
   testCheckP2PRegFailure,
-  testCheckNfcPeerObjForInvalidToken
+  testPeerLostShouldNotBeCalled,
+  testPeerShouldThrow,
+  testPeerInvalidToken,
+  testTagInvalidToken
 ];
 
 SpecialPowers.pushPermissions(

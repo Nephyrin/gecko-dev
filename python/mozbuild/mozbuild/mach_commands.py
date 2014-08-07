@@ -285,6 +285,7 @@ class Build(MachCommandBase):
         warnings_path = self._get_state_filename('warnings.json')
         monitor = self._spawn(BuildMonitor)
         monitor.init(warnings_path)
+        ccache_start = monitor.ccache_stats()
 
         with BuildOutputManager(self.log_manager, monitor) as output:
             monitor.start()
@@ -392,6 +393,13 @@ class Build(MachCommandBase):
         if high_finder:
             print(FINDER_SLOW_MESSAGE % finder_percent)
 
+        ccache_end = monitor.ccache_stats()
+
+        if ccache_start and ccache_end:
+            ccache_diff = ccache_end - ccache_start
+            self.log(logging.INFO, 'ccache',
+                     {'msg': ccache_diff.hit_rate_message()}, "{msg}")
+
         if monitor.elapsed > 300:
             # Display a notification when the build completes.
             # This could probably be uplifted into the mach core or at least
@@ -399,24 +407,27 @@ class Build(MachCommandBase):
             # is received.
             try:
                 if sys.platform.startswith('darwin'):
-                    notifier = which.which('terminal-notifier')
+                    try:
+                        notifier = which.which('terminal-notifier')
+                    except which.WhichError:
+                        raise Exception('Install terminal-notifier to get '
+                            'a notification when the build finishes.')
                     self.run_process([notifier, '-title',
                         'Mozilla Build System', '-group', 'mozbuild',
                         '-message', 'Build complete'], ensure_exit_code=False)
                 elif sys.platform.startswith('linux'):
                     try:
                         import dbus
-                        bus = dbus.SessionBus()
-                        notify = bus.get_object('org.freedesktop.Notifications',
-                                                '/org/freedesktop/Notifications')
-                        method = notify.get_dbus_method('Notify',
-                                                        'org.freedesktop.Notifications')
-                        method('Mozilla Build System', 0, '', 'Build complete', '', [], [], -1)
-                    except (ImportError, dbus.exceptions.DBusException):
-                        pass
+                    except ImportError:
+                        raise Exception('Install the python dbus module to '
+                            'get a notification when the build finishes.')
+                    bus = dbus.SessionBus()
+                    notify = bus.get_object('org.freedesktop.Notifications',
+                                            '/org/freedesktop/Notifications')
+                    method = notify.get_dbus_method('Notify',
+                                                    'org.freedesktop.Notifications')
+                    method('Mozilla Build System', 0, '', 'Build complete', '', [], [], -1)
 
-            except (which.WhichError, ImportError):
-                pass
             except Exception as e:
                 self.log(logging.WARNING, 'notifier-failed', {'error':
                     e.message}, 'Notification center failed: {error}')

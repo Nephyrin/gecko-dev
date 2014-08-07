@@ -312,6 +312,8 @@ class SEGVHandler
 {
 public:
   bool hasRegisteredHandler() {
+    if (! initialized)
+      FinishInitialization();
     return registeredHandler;
   }
 
@@ -319,16 +321,20 @@ public:
     return signalHandlingBroken;
   }
 
-  static int __wrap_sigaction(int signum, const struct sigaction *act,
-                              struct sigaction *oldact);
-
-  static sighandler_t __wrap_signal(int signum, sighandler_t handler);
-
 protected:
   SEGVHandler();
   ~SEGVHandler();
 
 private:
+  static int __wrap_sigaction(int signum, const struct sigaction *act,
+                              struct sigaction *oldact);
+
+  /**
+   * The constructor doesn't do all initialization, and the tail is done
+   * at a later time.
+   */
+  void FinishInitialization();
+
   /**
    * SIGSEGV handler registered with __wrap_signal or __wrap_sigaction.
    */
@@ -361,6 +367,7 @@ private:
    */
   MappedPtr stackPtr;
 
+  bool initialized;
   bool registeredHandler;
   bool signalHandlingBroken;
   bool signalHandlingSlow;

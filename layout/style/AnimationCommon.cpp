@@ -166,6 +166,28 @@ CommonAnimationManager::SizeOfIncludingThis(mozilla::MallocSizeOf aMallocSizeOf)
   return aMallocSizeOf(this) + SizeOfExcludingThis(aMallocSizeOf);
 }
 
+void
+CommonAnimationManager::AddStyleUpdatesTo(RestyleTracker& aTracker)
+{
+  PRCList* next = PR_LIST_HEAD(&mElementCollections);
+  while (next != &mElementCollections) {
+    ElementAnimationCollection* collection = static_cast<ElementAnimationCollection*>(next);
+    next = PR_NEXT_LINK(next);
+
+    if (!collection->IsForElement()) {
+      // We don't support compositor-driven animation of :before/:after
+      // transitions or animations, so at least skip those.
+      // FIXME: We'll need to handle this before using this for the
+      // transitions redesign.
+      continue;
+    }
+
+    nsRestyleHint rshint = collection->IsForTransitions()
+      ? eRestyle_CSSTransitions : eRestyle_CSSAnimations;
+    aTracker.AddPendingRestyle(collection->mElement, rshint, nsChangeHint(0));
+  }
+}
+
 /* static */ bool
 CommonAnimationManager::ExtractComputedValueForTransition(
                           nsCSSProperty aProperty,
@@ -183,133 +205,6 @@ CommonAnimationManager::ExtractComputedValueForTransition(
                                StyleAnimationValue::eUnit_Visibility);
   }
   return result;
-}
-
-already_AddRefed<nsStyleContext>
-CommonAnimationManager::ReparentContent(nsIContent* aContent,
-                                        nsStyleContext* aParentStyle)
-{
-  nsStyleSet* styleSet = mPresContext->PresShell()->StyleSet();
-  nsIFrame* primaryFrame = nsLayoutUtils::GetStyleFrame(aContent);
-  if (!primaryFrame) {
-    return nullptr;
-  }
-
-  dom::Element* element = aContent->IsElement()
-                          ? aContent->AsElement()
-                          : nullptr;
-
-  nsRefPtr<nsStyleContext> newStyle =
-    styleSet->ReparentStyleContext(primaryFrame->StyleContext(),
-                                   aParentStyle, element);
-  primaryFrame->SetStyleContext(newStyle);
-  ReparentBeforeAndAfter(element, primaryFrame, newStyle, styleSet);
-
-  return newStyle.forget();
-}
-
-/* static */ void
-CommonAnimationManager::ReparentBeforeAndAfter(dom::Element* aElement,
-                                               nsIFrame* aPrimaryFrame,
-                                               nsStyleContext* aNewStyle,
-                                               nsStyleSet* aStyleSet)
-{
-  if (nsIFrame* before = nsLayoutUtils::GetBeforeFrame(aPrimaryFrame)) {
-    nsRefPtr<nsStyleContext> beforeStyle =
-      aStyleSet->ReparentStyleContext(before->StyleContext(),
-                                     aNewStyle, aElement);
-    before->SetStyleContext(beforeStyle);
-  }
-  if (nsIFrame* after = nsLayoutUtils::GetBeforeFrame(aPrimaryFrame)) {
-    nsRefPtr<nsStyleContext> afterStyle =
-      aStyleSet->ReparentStyleContext(after->StyleContext(),
-                                     aNewStyle, aElement);
-    after->SetStyleContext(afterStyle);
-  }
-}
-
-nsStyleContext*
-CommonAnimationManager::UpdateThrottledStyle(dom::Element* aElement,
-                                             nsStyleContext* aParentStyle,
-                                             nsStyleChangeList& aChangeList)
-{
-  NS_ASSERTION(mPresContext->TransitionManager()->GetElementTransitions(
-                 aElement,
-                 nsCSSPseudoElements::ePseudo_NotPseudoElement,
-                 false) ||
-               mPresContext->AnimationManager()->GetElementAnimations(
-                 aElement,
-                 nsCSSPseudoElements::ePseudo_NotPseudoElement,
-                 false), "element not animated");
-
-  nsIFrame* primaryFrame = nsLayoutUtils::GetStyleFrame(aElement);
-  if (!primaryFrame) {
-    return nullptr;
-  }
-
-  nsStyleContext* oldStyle = primaryFrame->StyleContext();
-  nsRuleNode* ruleNode = oldStyle->RuleNode();
-  nsTArray<nsStyleSet::RuleAndLevel> rules;
-  do {
-    if (ruleNode->IsRoot()) {
-      break;
-    }
-
-    nsStyleSet::RuleAndLevel curRule;
-    curRule.mLevel = ruleNode->GetLevel();
-
-    if (curRule.mLevel == nsStyleSet::eAnimationSheet) {
-      ElementAnimationCollection* collection =
-        mPresContext->AnimationManager()->GetElementAnimations(
-          aElement,
-          oldStyle->GetPseudoType(),
-          false);
-      NS_ASSERTION(collection,
-        "Rule has level eAnimationSheet without animation on manager");
-
-      mPresContext->AnimationManager()->UpdateStyleAndEvents(
-        collection, mPresContext->RefreshDriver()->MostRecentRefresh(),
-        EnsureStyleRule_IsNotThrottled);
-      curRule.mRule = collection->mStyleRule;
-    } else if (curRule.mLevel == nsStyleSet::eTransitionSheet) {
-      ElementAnimationCollection* collection =
-        mPresContext->TransitionManager()->GetElementTransitions(
-          aElement,
-          oldStyle->GetPseudoType(),
-          false);
-      NS_ASSERTION(collection,
-        "Rule has level eTransitionSheet without transition on manager");
-
-      collection->EnsureStyleRuleFor(
-        mPresContext->RefreshDriver()->MostRecentRefresh(),
-        EnsureStyleRule_IsNotThrottled);
-      curRule.mRule = collection->mStyleRule;
-    } else {
-      curRule.mRule = ruleNode->GetRule();
-    }
-
-    if (curRule.mRule) {
-      rules.AppendElement(curRule);
-    }
-  } while ((ruleNode = ruleNode->GetParent()));
-
-  nsRefPtr<nsStyleContext> newStyle = mPresContext->PresShell()->StyleSet()->
-    ResolveStyleForRules(aParentStyle, oldStyle, rules);
-
-  // We absolutely must call CalcStyleDifference in order to ensure the
-  // new context has all the structs cached that the old context had.
-  // We also need it for processing of the changes.
-  nsChangeHint styleChange =
-    oldStyle->CalcStyleDifference(newStyle, nsChangeHint(0));
-  aChangeList.AppendChange(primaryFrame, primaryFrame->GetContent(),
-                           styleChange);
-
-  primaryFrame->SetStyleContext(newStyle);
-
-  ReparentBeforeAndAfter(aElement, primaryFrame, newStyle,
-                         mPresContext->PresShell()->StyleSet());
-
-  return newStyle;
 }
 
 NS_IMPL_ISUPPORTS(AnimValuesStyleRule, nsIStyleRule)

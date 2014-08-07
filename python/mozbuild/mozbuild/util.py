@@ -20,6 +20,7 @@ from collections import (
     defaultdict,
     OrderedDict,
 )
+from functools import wraps
 from StringIO import StringIO
 
 
@@ -226,6 +227,40 @@ def resolve_target_to_make(topobjdir, target):
 
         target = os.path.join(os.path.basename(reldir), target)
         reldir = os.path.dirname(reldir)
+
+
+class List(list):
+    """A list specialized for moz.build environments.
+
+    We overload the assignment and append operations to require that the
+    appended thing is a list. This avoids bad surprises coming from appending
+    a string to a list, which would just add each letter of the string.
+    """
+    def extend(self, l):
+        if not isinstance(l, list):
+            raise ValueError('List can only be extended with other list instances.')
+
+        return list.extend(self, l)
+
+    def __setslice__(self, i, j, sequence):
+        if not isinstance(sequence, list):
+            raise ValueError('List can only be sliced with other list instances.')
+
+        return list.__setslice__(self, i, j, sequence)
+
+    def __add__(self, other):
+        if not isinstance(other, list):
+            raise ValueError('Only lists can be appended to lists.')
+
+        return list.__add__(self, other)
+
+    def __iadd__(self, other):
+        if not isinstance(other, list):
+            raise ValueError('Only lists can be appended to lists.')
+
+        list.__iadd__(self, other)
+
+        return self
 
 
 class UnsortedError(Exception):
@@ -436,10 +471,7 @@ class HierarchicalStringList(object):
         # to try to actually set the attribute. We want to ignore this case,
         # since we don't actually create an attribute called 'foo', but just add
         # it to our list of children (using _get_exportvariable()).
-        exports = self._get_exportvariable(name)
-        if not isinstance(value, HierarchicalStringList):
-            exports._check_list(value)
-            exports._strings = value
+        self._set_exportvariable(name, value)
 
     def __getattr__(self, name):
         if name.startswith('__'):
@@ -454,8 +486,20 @@ class HierarchicalStringList(object):
         self._strings += other
         return self
 
+    def __getitem__(self, name):
+        return self._get_exportvariable(name)
+
+    def __setitem__(self, name, value):
+        self._set_exportvariable(name, value)
+
     def _get_exportvariable(self, name):
         return self._children.setdefault(name, HierarchicalStringList())
+
+    def _set_exportvariable(self, name, value):
+        exports = self._get_exportvariable(name)
+        if not isinstance(value, HierarchicalStringList):
+            exports._check_list(value)
+            exports._strings = value
 
     def _check_list(self, value):
         if not isinstance(value, list):
@@ -663,3 +707,14 @@ class OrderedDefaultDict(OrderedDict):
         except KeyError:
             value = self[key] = self._default_factory()
             return value
+
+
+def memoize(func):
+    cache = {}
+
+    @wraps(func)
+    def wrapper(*args):
+        if args not in cache:
+            cache[args] = func(*args)
+        return cache[args]
+    return wrapper

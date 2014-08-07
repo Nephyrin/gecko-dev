@@ -25,6 +25,7 @@
 #include "nsISupportsImpl.h"            // for gfxContext::AddRef, etc
 #include "nsSize.h"                     // for nsIntSize
 #include "gfxReusableSharedImageSurfaceWrapper.h"
+#include "nsExpirationTracker.h"        // for nsExpirationTracker
 #include "nsMathUtils.h"               // for NS_roundf
 #include "gfx2DGlue.h"
 #include "LayersLogging.h"
@@ -284,13 +285,14 @@ SharedFrameMetricsHelper::AboutToCheckerboard(const FrameMetrics& aContentMetric
 }
 
 ClientTiledLayerBuffer::ClientTiledLayerBuffer(ClientTiledThebesLayer* aThebesLayer,
-                                             CompositableClient* aCompositableClient,
-                                             ClientLayerManager* aManager,
-                                             SharedFrameMetricsHelper* aHelper)
+                                               CompositableClient* aCompositableClient,
+                                               ClientLayerManager* aManager,
+                                               SharedFrameMetricsHelper* aHelper)
   : mThebesLayer(aThebesLayer)
   , mCompositableClient(aCompositableClient)
   , mManager(aManager)
-  , mLastPaintOpaque(false)
+  , mLastPaintContentType(gfxContentType::COLOR)
+  , mLastPaintSurfaceMode(SurfaceMode::SURFACE_OPAQUE)
   , mSharedFrameMetricsHelper(aHelper)
 {
 }
@@ -298,18 +300,39 @@ ClientTiledLayerBuffer::ClientTiledLayerBuffer(ClientTiledThebesLayer* aThebesLa
 bool
 ClientTiledLayerBuffer::HasFormatChanged() const
 {
-  return mThebesLayer->CanUseOpaqueSurface() != mLastPaintOpaque;
+  SurfaceMode mode;
+  gfxContentType content = GetContentType(&mode);
+  return content != mLastPaintContentType ||
+         mode != mLastPaintSurfaceMode;
 }
 
 
 gfxContentType
-ClientTiledLayerBuffer::GetContentType() const
+ClientTiledLayerBuffer::GetContentType(SurfaceMode* aMode) const
 {
-  if (mThebesLayer->CanUseOpaqueSurface()) {
-    return gfxContentType::COLOR;
-  } else {
-    return gfxContentType::COLOR_ALPHA;
+  gfxContentType content =
+    mThebesLayer->CanUseOpaqueSurface() ? gfxContentType::COLOR :
+                                          gfxContentType::COLOR_ALPHA;
+  SurfaceMode mode = mThebesLayer->GetSurfaceMode();
+
+  if (mode == SurfaceMode::SURFACE_COMPONENT_ALPHA) {
+#if defined(MOZ_GFX_OPTIMIZE_MOBILE) || defined(MOZ_WIDGET_GONK)
+     mode = SurfaceMode::SURFACE_SINGLE_CHANNEL_ALPHA;
+#else
+      if (!mThebesLayer->GetParent() ||
+          !mThebesLayer->GetParent()->SupportsComponentAlphaChildren() ||
+          !gfxPrefs::TiledDrawTargetEnabled()) {
+        mode = SurfaceMode::SURFACE_SINGLE_CHANNEL_ALPHA;
+      } else {
+        content = gfxContentType::COLOR;
+      }
+#endif
   }
+
+  if (aMode) {
+    *aMode = mode;
+  }
+  return content;
 }
 
 gfxMemorySharedReadLock::gfxMemorySharedReadLock()
@@ -402,20 +425,61 @@ gfxShmSharedReadLock::GetReadCount() {
   return info->readCount;
 }
 
+class TileExpiry MOZ_FINAL : public nsExpirationTracker<TileClient, 3>
+{
+  public:
+    TileExpiry() : nsExpirationTracker<TileClient, 3>(1000) {}
+  private:
+    virtual void NotifyExpired(TileClient* aTile)
+    {
+      aTile->DiscardBackBuffer();
+    }
+};
+
+TileExpiry *TileExpirer()
+{
+  static TileExpiry * sTileExpiry = new TileExpiry();
+  return sTileExpiry;
+}
+
+void
+TileClient::PrivateProtector::Set(TileClient * const aContainer, RefPtr<TextureClient> aNewValue)
+{
+  if (mBuffer) {
+    TileExpirer()->RemoveObject(aContainer);
+  }
+  mBuffer = aNewValue;
+  if (mBuffer) {
+    TileExpirer()->AddObject(aContainer);
+  }
+}
+
+void
+TileClient::PrivateProtector::Set(TileClient * const aContainer, TextureClient* aNewValue)
+{
+  Set(aContainer, RefPtr<TextureClient>(aNewValue));
+}
+
 // Placeholder
 TileClient::TileClient()
-  : mBackBuffer(nullptr)
-  , mFrontBuffer(nullptr)
-  , mBackLock(nullptr)
-  , mFrontLock(nullptr)
-  , mCompositableClient(nullptr)
+  : mCompositableClient(nullptr)
 {
+}
+
+TileClient::~TileClient()
+{
+  if (mExpirationState.IsTracked()) {
+    MOZ_ASSERT(mBackBuffer);
+    TileExpirer()->RemoveObject(this);
+  }
 }
 
 TileClient::TileClient(const TileClient& o)
 {
-  mBackBuffer = o.mBackBuffer;
+  mBackBuffer.Set(this, o.mBackBuffer);
+  mBackBufferOnWhite = o.mBackBufferOnWhite;
   mFrontBuffer = o.mFrontBuffer;
+  mFrontBufferOnWhite = o.mFrontBufferOnWhite;
   mBackLock = o.mBackLock;
   mFrontLock = o.mFrontLock;
   mCompositableClient = nullptr;
@@ -431,8 +495,10 @@ TileClient&
 TileClient::operator=(const TileClient& o)
 {
   if (this == &o) return *this;
-  mBackBuffer = o.mBackBuffer;
+  mBackBuffer.Set(this, o.mBackBuffer);
+  mBackBufferOnWhite = o.mBackBufferOnWhite;
   mFrontBuffer = o.mFrontBuffer;
+  mFrontBufferOnWhite = o.mFrontBufferOnWhite;
   mBackLock = o.mBackLock;
   mFrontLock = o.mFrontLock;
   mCompositableClient = nullptr;
@@ -464,14 +530,37 @@ TileClient::Flip()
   }
 #endif
   RefPtr<TextureClient> frontBuffer = mFrontBuffer;
+  RefPtr<TextureClient> frontBufferOnWhite = mFrontBufferOnWhite;
   mFrontBuffer = mBackBuffer;
-  mBackBuffer = frontBuffer;
+  mFrontBufferOnWhite = mBackBufferOnWhite;
+  mBackBuffer.Set(this, frontBuffer);
+  mBackBufferOnWhite = frontBufferOnWhite;
   RefPtr<gfxSharedReadLock> frontLock = mFrontLock;
   mFrontLock = mBackLock;
   mBackLock = frontLock;
   nsIntRegion invalidFront = mInvalidFront;
   mInvalidFront = mInvalidBack;
   mInvalidBack = invalidFront;
+}
+
+static bool
+CopyFrontToBack(TextureClient* aFront,
+                TextureClient* aBack,
+                const gfx::IntRect& aRectToCopy)
+{
+  if (!aFront->Lock(OpenMode::OPEN_READ)) {
+    NS_WARNING("Failed to lock the tile's front buffer");
+    return false;
+  }
+
+  if (!aBack->Lock(OpenMode::OPEN_WRITE)) {
+    NS_WARNING("Failed to lock the tile's back buffer");
+    return false;
+  }
+
+  gfx::IntPoint rectToCopyTopLeft = aRectToCopy.TopLeft();
+  aFront->CopyToTextureClient(aBack, &aRectToCopy, &rectToCopyTopLeft);
+  return true;
 }
 
 void
@@ -499,25 +588,17 @@ TileClient::ValidateBackBufferFromFront(const nsIntRegion& aDirtyRegion,
         return;
       }
 
-      if (!mFrontBuffer->Lock(OpenMode::OPEN_READ)) {
-        NS_WARNING("Failed to lock the tile's front buffer");
-        return;
-      }
-      TextureClientAutoUnlock autoFront(mFrontBuffer);
-
-      if (!mBackBuffer->Lock(OpenMode::OPEN_WRITE)) {
-        NS_WARNING("Failed to lock the tile's back buffer");
-        return;
-      }
-      TextureClientAutoUnlock autoBack(mBackBuffer);
-
       // Copy the bounding rect of regionToCopy. As tiles are quite small, it
       // is unlikely that we'd save much by copying each individual rect of the
       // region, but we can reevaluate this if it becomes an issue.
       const nsIntRect rectToCopy = regionToCopy.GetBounds();
       gfx::IntRect gfxRectToCopy(rectToCopy.x, rectToCopy.y, rectToCopy.width, rectToCopy.height);
-      gfx::IntPoint gfxRectToCopyTopLeft = gfxRectToCopy.TopLeft();
-      mFrontBuffer->CopyToTextureClient(mBackBuffer, &gfxRectToCopy, &gfxRectToCopyTopLeft);
+      CopyFrontToBack(mFrontBuffer, mBackBuffer, gfxRectToCopy);
+
+      if (mBackBufferOnWhite) {
+        MOZ_ASSERT(mFrontBufferOnWhite);
+        CopyFrontToBack(mFrontBufferOnWhite, mBackBufferOnWhite, gfxRectToCopy);
+      }
 
       mInvalidBack.SetEmpty();
     }
@@ -530,6 +611,7 @@ TileClient::DiscardFrontBuffer()
   if (mFrontBuffer) {
     MOZ_ASSERT(mFrontLock);
 #if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 17
+    MOZ_ASSERT(!mFrontBufferOnWhite);
     if (mFrontBuffer->GetIPDLActor() &&
         mCompositableClient && mCompositableClient->GetIPDLActor()) {
       // remove old buffer from CompositableHost
@@ -544,8 +626,18 @@ TileClient::DiscardFrontBuffer()
     }
 #endif
     mManager->GetTexturePool(mFrontBuffer->GetFormat())->ReturnTextureClientDeferred(mFrontBuffer);
+    if (mFrontBufferOnWhite) {
+      mManager->GetTexturePool(mFrontBufferOnWhite->GetFormat())->ReturnTextureClientDeferred(mFrontBufferOnWhite);
+    }
     mFrontLock->ReadUnlock();
+    if (mFrontBuffer->IsLocked()) {
+      mFrontBuffer->Unlock();
+    }
+    if (mFrontBufferOnWhite && mFrontBufferOnWhite->IsLocked()) {
+      mFrontBufferOnWhite->Unlock();
+    }
     mFrontBuffer = nullptr;
+    mFrontBufferOnWhite = nullptr;
     mFrontLock = nullptr;
   }
 }
@@ -559,9 +651,13 @@ TileClient::DiscardBackBuffer()
       // Our current back-buffer is still locked by the compositor. This can occur
       // when the client is producing faster than the compositor can consume. In
       // this case we just want to drop it and not return it to the pool.
-      mManager->GetTexturePool(mBackBuffer->GetFormat())->ReportClientLost();
+     mManager->GetTexturePool(mBackBuffer->GetFormat())->ReportClientLost();
+     if (mBackBufferOnWhite) {
+       mManager->GetTexturePool(mBackBufferOnWhite->GetFormat())->ReportClientLost();
+     }
     } else {
 #if defined(MOZ_WIDGET_GONK) && ANDROID_VERSION >= 17
+      MOZ_ASSERT(!mBackBufferOnWhite);
       if (mBackBuffer->GetIPDLActor() &&
           mCompositableClient && mCompositableClient->GetIPDLActor()) {
         // remove old buffer from CompositableHost
@@ -579,17 +675,34 @@ TileClient::DiscardBackBuffer()
       mManager->GetTexturePool(mBackBuffer->GetFormat())->ReturnTextureClientDeferred(mBackBuffer);
 #else
       mManager->GetTexturePool(mBackBuffer->GetFormat())->ReturnTextureClient(mBackBuffer);
+      if (mBackBufferOnWhite) {
+        mManager->GetTexturePool(mBackBufferOnWhite->GetFormat())->ReturnTextureClient(mBackBufferOnWhite);
+      }
 #endif
     }
     mBackLock->ReadUnlock();
-    mBackBuffer = nullptr;
+    if (mBackBuffer->IsLocked()) {
+      mBackBuffer->Unlock();
+    }
+    if (mBackBufferOnWhite && mBackBufferOnWhite->IsLocked()) {
+      mBackBufferOnWhite->Unlock();
+    }
+    mBackBuffer.Set(this, nullptr);
+    mBackBufferOnWhite = nullptr;
     mBackLock = nullptr;
   }
 }
 
 TextureClient*
-TileClient::GetBackBuffer(const nsIntRegion& aDirtyRegion, TextureClientPool *aPool, bool *aCreatedTextureClient, bool aCanRerasterizeValidRegion)
+TileClient::GetBackBuffer(const nsIntRegion& aDirtyRegion,
+                          gfxContentType aContent,
+                          SurfaceMode aMode,
+                          bool *aCreatedTextureClient,
+                          bool aCanRerasterizeValidRegion,
+                          RefPtr<TextureClient>* aBackBufferOnWhite)
 {
+  TextureClientPool *pool =
+    mManager->GetTexturePool(gfxPlatform::GetPlatform()->Optimal2DFormatForContent(aContent));
   // Try to re-use the front-buffer if possible
   if (mFrontBuffer &&
       mFrontBuffer->HasInternalBuffer() &&
@@ -598,6 +711,7 @@ TileClient::GetBackBuffer(const nsIntRegion& aDirtyRegion, TextureClientPool *aP
     // re-use the front buffer.
     DiscardBackBuffer();
     Flip();
+    *aBackBufferOnWhite = mBackBufferOnWhite;
     return mBackBuffer;
   }
 
@@ -607,9 +721,15 @@ TileClient::GetBackBuffer(const nsIntRegion& aDirtyRegion, TextureClientPool *aP
       // Our current back-buffer is still locked by the compositor. This can occur
       // when the client is producing faster than the compositor can consume. In
       // this case we just want to drop it and not return it to the pool.
-      aPool->ReportClientLost();
+      pool->ReportClientLost();
+      if (mBackBufferOnWhite) {
+        pool->ReportClientLost();
+      }
     }
-    mBackBuffer = aPool->GetTextureClient();
+    mBackBuffer.Set(this, pool->GetTextureClient());
+    if (aMode == SurfaceMode::SURFACE_COMPONENT_ALPHA) {
+      mBackBufferOnWhite = pool->GetTextureClient();
+    }
     // Create a lock for our newly created back-buffer.
     if (mManager->AsShadowForwarder()->IsSameProcess()) {
       // If our compositor is in the same process, we can save some cycles by not
@@ -627,6 +747,7 @@ TileClient::GetBackBuffer(const nsIntRegion& aDirtyRegion, TextureClientPool *aP
 
   ValidateBackBufferFromFront(aDirtyRegion, aCanRerasterizeValidRegion);
 
+  *aBackBufferOnWhite = mBackBufferOnWhite;
   return mBackBuffer;
 }
 
@@ -646,10 +767,12 @@ TileClient::GetTileDescriptor()
 
   if (mFrontLock->GetType() == gfxSharedReadLock::TYPE_MEMORY) {
     return TexturedTileDescriptor(nullptr, mFrontBuffer->GetIPDLActor(),
+                                  mFrontBufferOnWhite ? MaybeTexture(mFrontBufferOnWhite->GetIPDLActor()) : MaybeTexture(null_t()),
                                   TileLock(uintptr_t(mFrontLock.get())));
   } else {
     gfxShmSharedReadLock *lock = static_cast<gfxShmSharedReadLock*>(mFrontLock.get());
     return TexturedTileDescriptor(nullptr, mFrontBuffer->GetIPDLActor(),
+                                  mFrontBufferOnWhite ? MaybeTexture(mFrontBufferOnWhite->GetIPDLActor()) : MaybeTexture(null_t()),
                                   TileLock(lock->GetShmemSection()));
   }
 }
@@ -740,8 +863,7 @@ ClientTiledLayerBuffer::PaintThebes(const nsIntRegion& aNewValidRegion,
                            GetTileStart(paintBounds.YMost() - 1);
   }
   */
-
-  if (useSinglePaintBuffer) {
+  if (useSinglePaintBuffer && !gfxPrefs::TiledDrawTargetEnabled()) {
     nsRefPtr<gfxContext> ctxt;
 
     const nsIntRect bounds = aPaintRegion.GetBounds();
@@ -809,7 +931,7 @@ ClientTiledLayerBuffer::PaintThebes(const nsIntRegion& aNewValidRegion,
   }
 #endif
 
-  mLastPaintOpaque = mThebesLayer->CanUseOpaqueSurface();
+  mLastPaintContentType = GetContentType(&mLastPaintSurfaceMode);
   mCallback = nullptr;
   mCallbackData = nullptr;
   mSinglePaintDrawTarget = nullptr;
@@ -877,6 +999,41 @@ void PadDrawTargetOutFromRegion(RefPtr<DrawTarget> drawTarget, nsIntRegion &regi
   }
 }
 
+void
+ClientTiledLayerBuffer::PostValidate(const nsIntRegion& aPaintRegion)
+{
+  if (gfxPrefs::TiledDrawTargetEnabled() && mMoz2DTiles.size() > 0) {
+    gfx::TileSet tileset;
+    tileset.mTiles = &mMoz2DTiles[0];
+    tileset.mTileCount = mMoz2DTiles.size();
+    RefPtr<DrawTarget> drawTarget = gfx::Factory::CreateTiledDrawTarget(tileset);
+    drawTarget->SetTransform(Matrix());
+
+    RefPtr<gfxContext> ctx = new gfxContext(drawTarget);
+
+    mCallback(mThebesLayer, ctx, aPaintRegion, DrawRegionClip::DRAW, nsIntRegion(), mCallbackData);
+    mMoz2DTiles.clear();
+  }
+}
+
+void
+ClientTiledLayerBuffer::UnlockTile(TileClient aTile)
+{
+  // We locked the back buffer, and flipped so we now need to unlock the front
+  if (aTile.mFrontBuffer && aTile.mFrontBuffer->IsLocked()) {
+    aTile.mFrontBuffer->Unlock();
+  }
+  if (aTile.mFrontBufferOnWhite && aTile.mFrontBufferOnWhite->IsLocked()) {
+    aTile.mFrontBufferOnWhite->Unlock();
+  }
+  if (aTile.mBackBuffer && aTile.mBackBuffer->IsLocked()) {
+    aTile.mBackBuffer->Unlock();
+  }
+  if (aTile.mBackBufferOnWhite && aTile.mBackBufferOnWhite->IsLocked()) {
+    aTile.mBackBufferOnWhite->Unlock();
+  }
+}
+
 TileClient
 ClientTiledLayerBuffer::ValidateTile(TileClient aTile,
                                     const nsIntPoint& aTileOrigin,
@@ -909,16 +1066,101 @@ ClientTiledLayerBuffer::ValidateTile(TileClient aTile,
   offsetScaledDirtyRegion.ScaleRoundOut(mResolution, mResolution);
 
   bool usingSinglePaintBuffer = !!mSinglePaintDrawTarget;
+  SurfaceMode mode;
+  gfxContentType content = GetContentType(&mode);
+  RefPtr<TextureClient> backBufferOnWhite;
   RefPtr<TextureClient> backBuffer =
     aTile.GetBackBuffer(offsetScaledDirtyRegion,
-                        mManager->GetTexturePool(gfxPlatform::GetPlatform()->Optimal2DFormatForContent(GetContentType())),
-                        &createdTextureClient, !usingSinglePaintBuffer);
+                        content, mode,
+                        &createdTextureClient, !usingSinglePaintBuffer,
+                        &backBufferOnWhite);
 
-  if (!backBuffer || !backBuffer->Lock(OpenMode::OPEN_READ_WRITE)) {
-    NS_WARNING("Failed to lock tile TextureClient for updating.");
-    aTile.DiscardFrontBuffer();
-    aTile.DiscardBackBuffer();
+  // the back buffer may have been already locked in ValidateBackBufferFromFront
+  if (!backBuffer->IsLocked()) {
+    if (!backBuffer->Lock(OpenMode::OPEN_READ_WRITE)) {
+      NS_WARNING("Failed to lock tile TextureClient for updating.");
+      aTile.DiscardFrontBuffer();
+      return aTile;
+    }
+  }
+  if (backBufferOnWhite && !backBufferOnWhite->IsLocked()) {
+    if (!backBufferOnWhite->Lock(OpenMode::OPEN_READ_WRITE)) {
+      NS_WARNING("Failed to lock tile TextureClient for updating.");
+      aTile.DiscardFrontBuffer();
+      return aTile;
+    }
+  }
+
+  if (gfxPrefs::TiledDrawTargetEnabled()) {
+    aTile.Flip();
+
+    if (createdTextureClient) {
+      if (!mCompositableClient->AddTextureClient(backBuffer)) {
+        NS_WARNING("Failed to add tile TextureClient.");
+        aTile.DiscardFrontBuffer();
+        aTile.DiscardBackBuffer();
+        return aTile;
+      }
+      if (backBufferOnWhite && !mCompositableClient->AddTextureClient(backBufferOnWhite)) {
+        NS_WARNING("Failed to add tile TextureClient.");
+        aTile.DiscardFrontBuffer();
+        aTile.DiscardBackBuffer();
+        return aTile;
+      }
+    }
+
+    if (backBuffer->HasInternalBuffer()) {
+      // If our new buffer has an internal buffer, we don't want to keep another
+      // TextureClient around unnecessarily, so discard the back-buffer.
+      aTile.DiscardBackBuffer();
+    }
+
+    // prepare an array of Moz2D tiles that will be painted into in PostValidate
+    gfx::Tile moz2DTile;
+    gfx::Tile moz2DTileOnWhite;
+    moz2DTile.mDrawTarget = backBuffer->BorrowDrawTarget();
+    if (backBufferOnWhite) {
+      moz2DTileOnWhite.mDrawTarget = backBufferOnWhite->BorrowDrawTarget();
+    }
+    moz2DTile.mTileOrigin = moz2DTileOnWhite.mTileOrigin = gfx::IntPoint(aTileOrigin.x, aTileOrigin.y);
+    if (!moz2DTile.mDrawTarget ||
+        (backBufferOnWhite && !moz2DTileOnWhite.mDrawTarget)) {
+      aTile.DiscardFrontBuffer();
+      return aTile;
+    }
+
+    mMoz2DTiles.push_back(moz2DTile);
+    if (backBufferOnWhite) {
+      mMoz2DTiles.push_back(moz2DTileOnWhite);
+    }
+
+    nsIntRegionRectIterator it(aDirtyRegion);
+    for (const nsIntRect* dirtyRect = it.Next(); dirtyRect != nullptr; dirtyRect = it.Next()) {
+      gfx::Rect drawRect(dirtyRect->x - aTileOrigin.x,
+                         dirtyRect->y - aTileOrigin.y,
+                         dirtyRect->width,
+                         dirtyRect->height);
+      drawRect.Scale(mResolution);
+
+      gfx::IntRect copyRect(NS_roundf((dirtyRect->x - mSinglePaintBufferOffset.x) * mResolution),
+                            NS_roundf((dirtyRect->y - mSinglePaintBufferOffset.y) * mResolution),
+                            drawRect.width,
+                            drawRect.height);
+      gfx::IntPoint copyTarget(NS_roundf(drawRect.x), NS_roundf(drawRect.y));
+      // Mark the newly updated area as invalid in the front buffer
+      aTile.mInvalidFront.Or(aTile.mInvalidFront, nsIntRect(copyTarget.x, copyTarget.y, copyRect.width, copyRect.height));
+
+      if (mode == SurfaceMode::SURFACE_COMPONENT_ALPHA) {
+        moz2DTile.mDrawTarget->FillRect(drawRect, ColorPattern(Color(0.0, 0.0, 0.0, 1.0)));
+        moz2DTileOnWhite.mDrawTarget->FillRect(drawRect, ColorPattern(Color(1.0, 1.0, 1.0, 1.0)));
+      } else if (content == gfxContentType::COLOR_ALPHA) {
+        moz2DTile.mDrawTarget->ClearRect(drawRect);
+      }
+    }
+
     return aTile;
+  } else {
+    MOZ_ASSERT(!backBufferOnWhite, "Component alpha only supported with TiledDrawTarget");
   }
 
   // We must not keep a reference to the DrawTarget after it has been unlocked,
@@ -1082,30 +1324,31 @@ ClientTiledLayerBuffer::ValidateTile(TileClient aTile,
  */
 static LayerRect
 GetCompositorSideCompositionBounds(ContainerLayer* aScrollAncestor,
-                                   const gfx3DMatrix& aTransformToCompBounds,
+                                   const Matrix4x4& aTransformToCompBounds,
                                    const ViewTransform& aAPZTransform)
 {
-  gfx3DMatrix nonTransientAPZTransform = gfx3DMatrix::ScalingMatrix(
+  Matrix4x4 nonTransientAPZUntransform = Matrix4x4().Scale(
     aScrollAncestor->GetFrameMetrics().mResolution.scale,
     aScrollAncestor->GetFrameMetrics().mResolution.scale,
     1.f);
+  nonTransientAPZUntransform.Invert();
 
-  gfx3DMatrix layerTransform = gfx::To3DMatrix(aScrollAncestor->GetTransform());
+  Matrix4x4 layerTransform = aScrollAncestor->GetTransform();
+  Matrix4x4 layerUntransform = layerTransform;
+  layerUntransform.Invert();
 
   // First take off the last two "terms" of aTransformToCompBounds, which
   // are the scroll ancestor's local transform and the APZ's nontransient async
   // transform.
-  gfx3DMatrix transform = aTransformToCompBounds;
-  transform = transform * layerTransform.Inverse();
-  transform = transform * nonTransientAPZTransform.Inverse();
+  Matrix4x4 transform = aTransformToCompBounds * layerUntransform * nonTransientAPZUntransform;
 
   // Next, apply the APZ's async transform (this includes the nontransient component
   // as well).
-  transform = transform * gfx3DMatrix(aAPZTransform);
+  transform = transform * Matrix4x4(aAPZTransform);
 
   // Finally, put back the scroll ancestor's local transform.
   transform = transform * layerTransform;
-  return TransformTo<LayerPixel>(transform.Inverse(),
+  return TransformTo<LayerPixel>(To3DMatrix(transform).Inverse(),
             aScrollAncestor->GetFrameMetrics().mCompositionBounds);
 }
 

@@ -950,8 +950,6 @@ JS::IncrementalObjectBarrier(JSObject *obj)
 
     JS_ASSERT(!obj->zone()->runtimeFromMainThread()->isHeapMajorCollecting());
 
-    AutoMarkInDeadZone amn(obj->zone());
-
     JSObject::writeBarrierPre(obj);
 }
 
@@ -965,13 +963,13 @@ JS::IncrementalReferenceBarrier(void *ptr, JSGCTraceKind kind)
         return;
 
     gc::Cell *cell = static_cast<gc::Cell *>(ptr);
+
+#ifdef DEBUG
     Zone *zone = kind == JSTRACE_OBJECT
                  ? static_cast<JSObject *>(cell)->zone()
                  : cell->tenuredZone();
-
     JS_ASSERT(!zone->runtimeFromMainThread()->isHeapMajorCollecting());
-
-    AutoMarkInDeadZone amn(zone);
+#endif
 
     if (kind == JSTRACE_OBJECT)
         JSObject::writeBarrierPre(static_cast<JSObject*>(cell));
@@ -983,14 +981,16 @@ JS::IncrementalReferenceBarrier(void *ptr, JSGCTraceKind kind)
         JSScript::writeBarrierPre(static_cast<JSScript*>(cell));
     else if (kind == JSTRACE_LAZY_SCRIPT)
         LazyScript::writeBarrierPre(static_cast<LazyScript*>(cell));
+    else if (kind == JSTRACE_JITCODE)
+        jit::JitCode::writeBarrierPre(static_cast<jit::JitCode*>(cell));
     else if (kind == JSTRACE_SHAPE)
         Shape::writeBarrierPre(static_cast<Shape*>(cell));
     else if (kind == JSTRACE_BASE_SHAPE)
         BaseShape::writeBarrierPre(static_cast<BaseShape*>(cell));
     else if (kind == JSTRACE_TYPE_OBJECT)
-        types::TypeObject::writeBarrierPre((types::TypeObject *) ptr);
+        types::TypeObject::writeBarrierPre(static_cast<types::TypeObject *>(cell));
     else
-        MOZ_ASSUME_UNREACHABLE("invalid trace kind");
+        MOZ_CRASH("invalid trace kind");
 }
 
 JS_FRIEND_API(void)

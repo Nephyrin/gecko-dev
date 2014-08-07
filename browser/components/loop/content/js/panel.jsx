@@ -108,12 +108,21 @@ loop.panel = (function(_, mozL10n) {
     },
 
     render: function() {
-      var tosHTML = __("legal_text_and_links", {
-        "terms_of_use_url": "https://accounts.firefox.com/legal/terms",
-        "privacy_notice_url": "www.mozilla.org/privacy/"
-      });
-
       if (this.state.seenToS == "unseen") {
+        var terms_of_use_url = navigator.mozLoop.getLoopCharPref('legal.ToS_url');
+        var privacy_notice_url = navigator.mozLoop.getLoopCharPref('legal.privacy_url');
+        var tosHTML = __("legal_text_and_links2", {
+          "terms_of_use": React.renderComponentToStaticMarkup(
+            <a href={terms_of_use_url} target="_blank">
+              {__("legal_text_tos")}
+            </a>
+          ),
+          "privacy_notice": React.renderComponentToStaticMarkup(
+            <a href={privacy_notice_url} target="_blank">
+              {__("legal_text_privacy")}
+            </a>
+          ),
+        });
         navigator.mozLoop.setLoopCharPref('seenToS', 'seen');
         return <p className="terms-service"
                   dangerouslySetInnerHTML={{__html: tosHTML}}></p>;
@@ -143,11 +152,17 @@ loop.panel = (function(_, mozL10n) {
   });
 
   var CallUrlResult = React.createClass({
+    propTypes: {
+      callUrl:  React.PropTypes.string,
+      notifier: React.PropTypes.object.isRequired,
+      client:   React.PropTypes.object.isRequired
+    },
 
     getInitialState: function() {
       return {
         pending: false,
-        callUrl: ''
+        copied: false,
+        callUrl: this.props.callUrl || ""
       };
     },
 
@@ -175,7 +190,7 @@ loop.panel = (function(_, mozL10n) {
 
       if (err) {
         this.props.notifier.errorL10n("unable_retrieve_url");
-        this.setState({pending: false});
+        this.setState(this.getInitialState());
       } else {
         try {
           var callUrl = new window.URL(callUrlData.callUrl);
@@ -185,13 +200,32 @@ loop.panel = (function(_, mozL10n) {
                       callUrl.pathname.split('/').pop();
 
           navigator.mozLoop.setLoopCharPref('loopToken', token);
-          this.setState({pending: false, callUrl: callUrl.href});
+          this.setState({pending: false, copied: false, callUrl: callUrl.href});
         } catch(e) {
           console.log(e);
           this.props.notifier.errorL10n("unable_retrieve_url");
-          this.setState({pending: false});
+          this.setState(this.getInitialState());
         }
       }
+    },
+
+    _generateMailTo: function() {
+      return encodeURI([
+        "mailto:?subject=" + __("share_email_subject") + "&",
+        "body=" + __("share_email_body", {callUrl: this.state.callUrl})
+      ].join(""));
+    },
+
+    handleEmailButtonClick: function(event) {
+      // Note: side effect
+      document.location = event.target.dataset.mailto;
+    },
+
+    handleCopyButtonClick: function(event) {
+      // XXX the mozLoop object should be passed as a prop, to ease testing and
+      //     using a fake implementation in UI components showcase.
+      navigator.mozLoop.copyString(this.state.callUrl);
+      this.setState({copied: true});
     },
 
     render: function() {
@@ -204,7 +238,19 @@ loop.panel = (function(_, mozL10n) {
         <PanelLayout summary={__("share_link_header_text")}>
           <div className="invite">
             <input type="url" value={this.state.callUrl} readOnly="true"
-                   className={cx({'pending': this.state.pending})} />
+                   className={cx({pending: this.state.pending})} />
+            <p className="button-group url-actions">
+              <button className="btn btn-email" disabled={!this.state.callUrl}
+                onClick={this.handleEmailButtonClick}
+                data-mailto={this._generateMailTo()}>
+                {__("share_button")}
+              </button>
+              <button className="btn btn-copy" disabled={!this.state.callUrl}
+                onClick={this.handleCopyButtonClick}>
+                {this.state.copied ? __("copied_url_button") :
+                                     __("copy_url_button")}
+              </button>
+            </p>
           </div>
         </PanelLayout>
       );
@@ -217,14 +263,17 @@ loop.panel = (function(_, mozL10n) {
   var PanelView = React.createClass({
     propTypes: {
       notifier: React.PropTypes.object.isRequired,
-      client: React.PropTypes.object.isRequired
+      client: React.PropTypes.object.isRequired,
+      // Mostly used for UI components showcase and unit tests
+      callUrl: React.PropTypes.string
     },
 
     render: function() {
       return (
         <div>
           <CallUrlResult client={this.props.client}
-                       notifier={this.props.notifier} />
+                         notifier={this.props.notifier}
+                         callUrl={this.props.callUrl} />
           <ToSView />
           <AvailabilityDropdown />
         </div>

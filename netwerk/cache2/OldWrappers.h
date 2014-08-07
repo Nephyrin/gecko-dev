@@ -33,6 +33,8 @@ public:
 
   NS_IMETHOD AsyncDoom(nsICacheEntryDoomCallback* listener);
   NS_IMETHOD GetPersistent(bool *aPersistToDisk);
+  NS_IMETHOD GetIsForcedValid(bool *aIsForcedValid);
+  NS_IMETHOD ForceValidFor(uint32_t aSecondsToTheFuture);
   NS_IMETHOD SetValid() { return NS_OK; }
   NS_IMETHOD MetaDataReady() { return NS_OK; }
   NS_IMETHOD Recreate(bool, nsICacheEntry**);
@@ -43,8 +45,8 @@ public:
   NS_IMETHOD HasWriteAccess(bool aWriteOnly, bool *aWriteAccess);
   NS_IMETHOD VisitMetaData(nsICacheEntryMetaDataVisitor*);
 
-  _OldCacheEntryWrapper(nsICacheEntryDescriptor* desc);
-  _OldCacheEntryWrapper(nsICacheEntryInfo* info);
+  explicit _OldCacheEntryWrapper(nsICacheEntryDescriptor* desc);
+  explicit _OldCacheEntryWrapper(nsICacheEntryInfo* info);
 
 private:
   virtual ~_OldCacheEntryWrapper();
@@ -160,7 +162,7 @@ public:
   static nsresult Get(nsICacheStorageConsumptionObserver* aCallback);
 
 private:
-  _OldGetDiskConsumption(nsICacheStorageConsumptionObserver* aCallback);
+  explicit _OldGetDiskConsumption(nsICacheStorageConsumptionObserver* aCallback);
   virtual ~_OldGetDiskConsumption() {}
   NS_DECL_ISUPPORTS_INHERITED
   NS_DECL_NSICACHEVISITOR

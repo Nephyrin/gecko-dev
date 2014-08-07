@@ -48,6 +48,7 @@
 #include "mozilla/dom/MessageEventBinding.h"
 #include "mozilla/dom/MessagePortList.h"
 #include "mozilla/dom/ScriptSettings.h"
+#include "mozilla/dom/StructuredClone.h"
 #include "mozilla/dom/WorkerBinding.h"
 #include "mozilla/Preferences.h"
 #include "nsAlgorithm.h"
@@ -352,25 +353,7 @@ struct WorkerStructuredCloneCallbacks
     // See if the object is an ImageData.
     else if (aTag == SCTAG_DOM_IMAGEDATA) {
       MOZ_ASSERT(!aData);
-
-      // Read the information out of the stream.
-      uint32_t width, height;
-      JS::Rooted<JS::Value> dataArray(aCx);
-      if (!JS_ReadUint32Pair(aReader, &width, &height) ||
-          !JS_ReadTypedArray(aReader, &dataArray))
-      {
-        return nullptr;
-      }
-      MOZ_ASSERT(dataArray.isObject());
-
-      {
-        // Construct the ImageData.
-        nsRefPtr<ImageData> imageData = new ImageData(width, height,
-                                                      dataArray.toObject());
-        // Wrap it in a JS::Value, protected from a moving GC during ~nsRefPtr.
-        result = imageData->WrapObject(aCx);
-      }
-      return result;
+      return ReadStructuredCloneImageData(aCx, aReader);
     }
 
     Error(aCx, 0);
@@ -418,17 +401,7 @@ struct WorkerStructuredCloneCallbacks
     {
       ImageData* imageData = nullptr;
       if (NS_SUCCEEDED(UNWRAP_OBJECT(ImageData, aObj, imageData))) {
-        // Prepare the ImageData internals.
-        uint32_t width = imageData->Width();
-        uint32_t height = imageData->Height();
-        JS::Rooted<JSObject*> dataArray(aCx, imageData->GetDataObject());
-
-        // Write the internals to the stream.
-        JSAutoCompartment ac(aCx, dataArray);
-        JS::Rooted<JS::Value> arrayValue(aCx, JS::ObjectValue(*dataArray));
-        return JS_WriteUint32Pair(aWriter, SCTAG_DOM_IMAGEDATA, 0) &&
-               JS_WriteUint32Pair(aWriter, width, height) &&
-               JS_WriteTypedArray(aWriter, arrayValue);
+        return WriteStructuredCloneImageData(aCx, aWriter, imageData);
       }
     }
 
@@ -1547,32 +1520,23 @@ private:
   }
 };
 
-class UpdateRuntimeAndContextOptionsRunnable MOZ_FINAL : public WorkerControlRunnable
+class UpdateRuntimeOptionsRunnable MOZ_FINAL : public WorkerControlRunnable
 {
   JS::RuntimeOptions mRuntimeOptions;
-  JS::ContextOptions mContentCxOptions;
-  JS::ContextOptions mChromeCxOptions;
 
 public:
-  UpdateRuntimeAndContextOptionsRunnable(
+  UpdateRuntimeOptionsRunnable(
                                     WorkerPrivate* aWorkerPrivate,
-                                    const JS::RuntimeOptions& aRuntimeOptions,
-                                    const JS::ContextOptions& aContentCxOptions,
-                                    const JS::ContextOptions& aChromeCxOptions)
+                                    const JS::RuntimeOptions& aRuntimeOptions)
   : WorkerControlRunnable(aWorkerPrivate, WorkerThreadUnchangedBusyCount),
-    mRuntimeOptions(aRuntimeOptions),
-    mContentCxOptions(aContentCxOptions),
-    mChromeCxOptions(aChromeCxOptions)
+    mRuntimeOptions(aRuntimeOptions)
   { }
 
 private:
   virtual bool
   WorkerRun(JSContext* aCx, WorkerPrivate* aWorkerPrivate) MOZ_OVERRIDE
   {
-    aWorkerPrivate->UpdateRuntimeAndContextOptionsInternal(aCx,
-                                                           mRuntimeOptions,
-                                                           mContentCxOptions,
-                                                           mChromeCxOptions);
+    aWorkerPrivate->UpdateRuntimeOptionsInternal(aCx, mRuntimeOptions);
     return true;
   }
 };
@@ -2881,26 +2845,19 @@ WorkerPrivateParent<Derived>::GetInnerWindowId()
 
 template <class Derived>
 void
-WorkerPrivateParent<Derived>::UpdateRuntimeAndContextOptions(
+WorkerPrivateParent<Derived>::UpdateRuntimeOptions(
                                     JSContext* aCx,
-                                    const JS::RuntimeOptions& aRuntimeOptions,
-                                    const JS::ContextOptions& aContentCxOptions,
-                                    const JS::ContextOptions& aChromeCxOptions)
+                                    const JS::RuntimeOptions& aRuntimeOptions)
 {
   AssertIsOnParentThread();
 
   {
     MutexAutoLock lock(mMutex);
     mJSSettings.runtimeOptions = aRuntimeOptions;
-    mJSSettings.content.contextOptions = aContentCxOptions;
-    mJSSettings.chrome.contextOptions = aChromeCxOptions;
   }
 
-  nsRefPtr<UpdateRuntimeAndContextOptionsRunnable> runnable =
-    new UpdateRuntimeAndContextOptionsRunnable(ParentAsWorkerPrivate(),
-                                               aRuntimeOptions,
-                                               aContentCxOptions,
-                                               aChromeCxOptions);
+  nsRefPtr<UpdateRuntimeOptionsRunnable> runnable =
+    new UpdateRuntimeOptionsRunnable(ParentAsWorkerPrivate(), aRuntimeOptions);
   if (!runnable->Dispatch(aCx)) {
     NS_WARNING("Failed to update worker context options!");
     JS_ClearPendingException(aCx);
@@ -3623,11 +3580,17 @@ ChromeWorkerPrivate::Constructor(const GlobalObject& aGlobal,
 
 // static
 bool
-ChromeWorkerPrivate::WorkerAvailable(JSContext* /* unused */, JSObject* /* unused */)
+ChromeWorkerPrivate::WorkerAvailable(JSContext* aCx, JSObject* /* unused */)
 {
-  // Chrome is always allowed to use workers, and content is never allowed to
-  // use ChromeWorker, so all we have to check is the caller.
-  return nsContentUtils::ThreadsafeIsCallerChrome();
+  // Chrome is always allowed to use workers, and content is never
+  // allowed to use ChromeWorker, so all we have to check is the
+  // caller.  However, chrome workers apparently might not have a
+  // system principal, so we have to check for them manually.
+  if (NS_IsMainThread()) {
+    return nsContentUtils::IsCallerChrome();
+  }
+
+  return GetWorkerPrivateFromContext(aCx)->IsChromeWorker();
 }
 
 // static
@@ -5446,7 +5409,8 @@ WorkerPrivate::RunExpiredTimeouts(JSContext* aCx)
       nsString expression = info->mTimeoutString;
 
       JS::CompileOptions options(aCx);
-      options.setFileAndLine(info->mFilename.get(), info->mLineNumber);
+      options.setFileAndLine(info->mFilename.get(), info->mLineNumber)
+             .setNoScriptRval(true);
 
       if ((expression.IsEmpty() ||
            !JS::Evaluate(aCx, global, options, expression.get(), expression.Length())) &&
@@ -5534,21 +5498,16 @@ WorkerPrivate::RescheduleTimeoutTimer(JSContext* aCx)
 }
 
 void
-WorkerPrivate::UpdateRuntimeAndContextOptionsInternal(
+WorkerPrivate::UpdateRuntimeOptionsInternal(
                                     JSContext* aCx,
-                                    const JS::RuntimeOptions& aRuntimeOptions,
-                                    const JS::ContextOptions& aContentCxOptions,
-                                    const JS::ContextOptions& aChromeCxOptions)
+                                    const JS::RuntimeOptions& aRuntimeOptions)
 {
   AssertIsOnWorkerThread();
 
   JS::RuntimeOptionsRef(aCx) = aRuntimeOptions;
-  JS::ContextOptionsRef(aCx) = IsChromeWorker() ? aChromeCxOptions : aContentCxOptions;
 
   for (uint32_t index = 0; index < mChildWorkers.Length(); index++) {
-    mChildWorkers[index]->UpdateRuntimeAndContextOptions(aCx, aRuntimeOptions,
-                                                         aContentCxOptions,
-                                                         aChromeCxOptions);
+    mChildWorkers[index]->UpdateRuntimeOptions(aCx, aRuntimeOptions);
   }
 }
 

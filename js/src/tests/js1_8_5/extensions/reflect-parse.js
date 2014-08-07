@@ -93,6 +93,10 @@ function callExpr(callee, args) Pattern({ type: "CallExpression", callee: callee
 function arrExpr(elts) Pattern({ type: "ArrayExpression", elements: elts })
 function objExpr(elts) Pattern({ type: "ObjectExpression", properties: elts })
 function templateLit(elts) Pattern({ type: "TemplateLiteral", elements: elts })
+function taggedTemplate(tagPart, templatePart) Pattern({ type: "TaggedTemplate", callee: tagPart,
+                arguments : templatePart })
+function template(raw, cooked, ...args) Pattern([{ type: "CallSiteObject", raw: raw, cooked:
+cooked}, ...args])
 function compExpr(body, blocks, filter) Pattern({ type: "ComprehensionExpression", body: body, blocks: blocks, filter: filter })
 function genExpr(body, blocks, filter) Pattern({ type: "GeneratorExpression", body: body, blocks: blocks, filter: filter })
 function graphExpr(idx, body) Pattern({ type: "GraphExpression", index: idx, expression: body })
@@ -403,15 +407,28 @@ assertStmt("if (foo) { throw 1; throw 2; throw 3; } else true;",
            ifStmt(ident("foo"),
                   blockStmt([throwStmt(lit(1)), throwStmt(lit(2)), throwStmt(lit(3))]),
                   exprStmt(lit(true))));
-var hasTemplateStrings = false;  try { eval("``"); hasTemplateStrings = true; } catch (exc) { }
-if (hasTemplateStrings == true) {
-    assertStringExpr("`hey there`", literal("hey there"));
-    assertStringExpr("`hey\nthere`", literal("hey\nthere"));
-    assertExpr("`hey${\"there\"}`", templateLit([lit("hey"), lit("there"), lit("")]));
-    assertExpr("`hey${\"there\"}mine`", templateLit([lit("hey"), lit("there"), lit("mine")]));
-    assertExpr("`hey${a == 5}mine`", templateLit([lit("hey"), binExpr("==", ident("a"), lit(5)), lit("mine")]));
-    assertExpr("`hey${`there${\"how\"}`}mine`", templateLit([lit("hey"), templateLit([lit("there"), lit("how"), lit("")]), lit("mine")]));
-}
+
+// template strings
+assertStringExpr("`hey there`", literal("hey there"));
+assertStringExpr("`hey\nthere`", literal("hey\nthere"));
+assertExpr("`hey${\"there\"}`", templateLit([lit("hey"), lit("there"), lit("")]));
+assertExpr("`hey${\"there\"}mine`", templateLit([lit("hey"), lit("there"), lit("mine")]));
+assertExpr("`hey${a == 5}mine`", templateLit([lit("hey"), binExpr("==", ident("a"), lit(5)), lit("mine")]));
+assertExpr("`hey${`there${\"how\"}`}mine`", templateLit([lit("hey"),
+           templateLit([lit("there"), lit("how"), lit("")]), lit("mine")]));
+assertExpr("func`hey`", taggedTemplate(ident("func"), template(["hey"], ["hey"])));
+assertExpr("func`hey${\"4\"}there`", taggedTemplate(ident("func"),
+           template(["hey", "there"], ["hey", "there"], lit("4"))));
+assertExpr("func`hey${\"4\"}there${5}`", taggedTemplate(ident("func"),
+           template(["hey", "there", ""], ["hey", "there", ""],
+                  lit("4"), lit(5))));
+assertExpr("func`hey\r\n`", taggedTemplate(ident("func"), template(["hey\n"], ["hey\n"])));
+assertExpr("func`hey${4}``${5}there``mine`",
+           taggedTemplate(taggedTemplate(taggedTemplate(
+               ident("func"), template(["hey", ""], ["hey", ""], lit(4))),
+               template(["", "there"], ["", "there"], lit(5))),
+               template(["mine"], ["mine"])));
+
 assertStringExpr("\"hey there\"", literal("hey there"));
 
 assertStmt("foo: for(;;) break foo;", labStmt(ident("foo"), forStmt(null, null, null, breakStmt(ident("foo")))));

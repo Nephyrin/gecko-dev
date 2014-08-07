@@ -8,11 +8,9 @@
 
 #include "jsgc.h"
 
-#ifdef JS_ION
 #include "jit/BaselineJIT.h"
 #include "jit/Ion.h"
 #include "jit/JitCompartment.h"
-#endif
 #include "vm/Debugger.h"
 #include "vm/Runtime.h"
 
@@ -27,16 +25,12 @@ JS::Zone::Zone(JSRuntime *rt)
     types(this),
     compartments(),
     gcGrayRoots(),
-    gcHeapGrowthFactor(3.0),
     gcMallocBytes(0),
     gcMallocGCTriggered(false),
     usage(&rt->gc.usage),
-    gcTriggerBytes(0),
     data(nullptr),
     isSystem(false),
     usedByExclusiveThread(false),
-    scheduledForDestruction(false),
-    maybeAlive(true),
     active(false),
     jitZone_(nullptr),
     gcState_(NoGC),
@@ -48,6 +42,7 @@ JS::Zone::Zone(JSRuntime *rt)
     JS_ASSERT(reinterpret_cast<JS::shadow::Zone *>(this) ==
               static_cast<JS::shadow::Zone *>(this));
 
+    threshold.updateAfterGC(8192, GC_NORMAL, rt->gc.tunables, rt->gc.schedulingState);
     setGCMaxMallocBytes(rt->gc.maxMallocBytesAllocated() * 0.9);
 }
 
@@ -57,31 +52,28 @@ Zone::~Zone()
     if (this == rt->gc.systemZone)
         rt->gc.systemZone = nullptr;
 
-#ifdef JS_ION
     js_delete(jitZone_);
-#endif
 }
 
-bool Zone::init()
+bool Zone::init(bool isSystemArg)
 {
+    isSystem = isSystemArg;
     return gcZoneGroupEdges.init();
 }
 
 void
-Zone::setNeedsBarrier(bool needs, ShouldUpdateJit updateJit)
+Zone::setNeedsIncrementalBarrier(bool needs, ShouldUpdateJit updateJit)
 {
-#ifdef JS_ION
     if (updateJit == UpdateJit && needs != jitUsingBarriers_) {
         jit::ToggleBarriers(this, needs);
         jitUsingBarriers_ = needs;
     }
-#endif
 
     if (needs && runtimeFromMainThread()->isAtomsZone(this))
         JS_ASSERT(!runtimeFromMainThread()->exclusiveThreadsPresent());
 
     JS_ASSERT_IF(needs, canCollect());
-    needsBarrier_ = needs;
+    needsIncrementalBarrier_ = needs;
 }
 
 void
@@ -172,7 +164,6 @@ Zone::sweepBreakpoints(FreeOp *fop)
 void
 Zone::discardJitCode(FreeOp *fop)
 {
-#ifdef JS_ION
     if (!jitZone())
         return;
 
@@ -180,13 +171,13 @@ Zone::discardJitCode(FreeOp *fop)
         PurgeJITCaches(this);
     } else {
 
-# ifdef DEBUG
+#ifdef DEBUG
         /* Assert no baseline scripts are marked as active. */
         for (ZoneCellIterUnderGC i(this, FINALIZE_SCRIPT); !i.done(); i.next()) {
             JSScript *script = i.get<JSScript>();
             JS_ASSERT_IF(script->hasBaselineScript(), !script->baselineScript()->active());
         }
-# endif
+#endif
 
         /* Mark baseline scripts on the stack as active. */
         jit::MarkActiveBaselineScripts(this);
@@ -215,7 +206,6 @@ Zone::discardJitCode(FreeOp *fop)
 
         jitZone()->optimizedStubSpace()->free();
     }
-#endif
 }
 
 uint64_t
@@ -226,7 +216,6 @@ Zone::gcNumber()
     return usedByExclusiveThread ? 0 : runtimeFromMainThread()->gc.gcNumber();
 }
 
-#ifdef JS_ION
 js::jit::JitZone *
 Zone::createJitZone(JSContext *cx)
 {
@@ -238,7 +227,6 @@ Zone::createJitZone(JSContext *cx)
     jitZone_ = cx->new_<js::jit::JitZone>();
     return jitZone_;
 }
-#endif
 
 JS::Zone *
 js::ZoneOfObjectFromAnyThread(const JSObject &obj)

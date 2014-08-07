@@ -162,11 +162,32 @@ BaseProxyHandler::set(JSContext *cx, HandleObject proxy, HandleObject receiver,
 {
     assertEnteredPolicy(cx, proxy, id, SET);
 
+    // Find an own or inherited property. The code here is strange for maximum
+    // backward compatibility with earlier code written before ES6 and before
+    // SetPropertyIgnoringNamedGetter.
     Rooted<PropertyDescriptor> desc(cx);
     if (!getOwnPropertyDescriptor(cx, proxy, id, &desc))
         return false;
+    bool descIsOwn = desc.object() != nullptr;
+    if (!descIsOwn) {
+        if (!getPropertyDescriptor(cx, proxy, id, &desc))
+            return false;
+    }
+
+    return SetPropertyIgnoringNamedGetter(cx, this, proxy, receiver, id, &desc, descIsOwn, strict,
+                                          vp);
+}
+
+bool
+js::SetPropertyIgnoringNamedGetter(JSContext *cx, const BaseProxyHandler *handler,
+                                   HandleObject proxy, HandleObject receiver,
+                                   HandleId id, MutableHandle<PropertyDescriptor> desc,
+                                   bool descIsOwn, bool strict, MutableHandleValue vp)
+{
     /* The control-flow here differs from ::get() because of the fall-through case below. */
-    if (desc.object()) {
+    if (descIsOwn) {
+        JS_ASSERT(desc.object());
+
         // Check for read-only properties.
         if (desc.isReadonly())
             return strict ? Throw(cx, id, JSMSG_READ_ONLY) : true;
@@ -178,7 +199,7 @@ BaseProxyHandler::set(JSContext *cx, HandleObject proxy, HandleObject receiver,
         } else if (desc.hasSetterObject() || desc.setter() != JS_StrictPropertyStub) {
             if (!CallSetter(cx, receiver, id, desc.setter(), desc.attributes(), strict, vp))
                 return false;
-            if (!proxy->is<ProxyObject>() || proxy->as<ProxyObject>().handler() != this)
+            if (!proxy->is<ProxyObject>() || proxy->as<ProxyObject>().handler() != handler)
                 return true;
             if (desc.isShared())
                 return true;
@@ -189,10 +210,8 @@ BaseProxyHandler::set(JSContext *cx, HandleObject proxy, HandleObject receiver,
                 desc.setGetter(JS_PropertyStub);
         }
         desc.value().set(vp.get());
-        return defineProperty(cx, receiver, id, &desc);
+        return handler->defineProperty(cx, receiver, id, desc);
     }
-    if (!getPropertyDescriptor(cx, proxy, id, &desc))
-        return false;
     if (desc.object()) {
         // Check for read-only properties.
         if (desc.isReadonly())
@@ -205,7 +224,7 @@ BaseProxyHandler::set(JSContext *cx, HandleObject proxy, HandleObject receiver,
         } else if (desc.hasSetterObject() || desc.setter() != JS_StrictPropertyStub) {
             if (!CallSetter(cx, receiver, id, desc.setter(), desc.attributes(), strict, vp))
                 return false;
-            if (!proxy->is<ProxyObject>() || proxy->as<ProxyObject>().handler() != this)
+            if (!proxy->is<ProxyObject>() || proxy->as<ProxyObject>().handler() != handler)
                 return true;
             if (desc.isShared())
                 return true;
@@ -216,7 +235,7 @@ BaseProxyHandler::set(JSContext *cx, HandleObject proxy, HandleObject receiver,
                 desc.setGetter(JS_PropertyStub);
         }
         desc.value().set(vp.get());
-        return defineProperty(cx, receiver, id, &desc);
+        return handler->defineProperty(cx, receiver, id, desc);
     }
 
     desc.object().set(receiver);
@@ -224,7 +243,7 @@ BaseProxyHandler::set(JSContext *cx, HandleObject proxy, HandleObject receiver,
     desc.setAttributes(JSPROP_ENUMERATE);
     desc.setGetter(nullptr);
     desc.setSetter(nullptr); // Pick up the class getter/setter.
-    return defineProperty(cx, receiver, id, &desc);
+    return handler->defineProperty(cx, receiver, id, desc);
 }
 
 bool
@@ -237,7 +256,6 @@ BaseProxyHandler::keys(JSContext *cx, HandleObject proxy, AutoIdVector &props) c
         return false;
 
     /* Select only the enumerable properties through in-place iteration. */
-    Rooted<PropertyDescriptor> desc(cx);
     RootedId id(cx);
     size_t i = 0;
     for (size_t j = 0, len = props.length(); j < len; j++) {
@@ -247,6 +265,7 @@ BaseProxyHandler::keys(JSContext *cx, HandleObject proxy, AutoIdVector &props) c
             continue;
 
         AutoWaivePolicy policy(cx, proxy, id, BaseProxyHandler::GET);
+        Rooted<PropertyDescriptor> desc(cx);
         if (!getOwnPropertyDescriptor(cx, proxy, id, &desc))
             return false;
         if (desc.object() && desc.isEnumerable())
@@ -397,7 +416,7 @@ bool
 DirectProxyHandler::getPropertyDescriptor(JSContext *cx, HandleObject proxy, HandleId id,
                                           MutableHandle<PropertyDescriptor> desc) const
 {
-    assertEnteredPolicy(cx, proxy, id, GET | SET);
+    assertEnteredPolicy(cx, proxy, id, GET | SET | GET_PROPERTY_DESCRIPTOR);
     JS_ASSERT(!hasPrototype()); // Should never be called if there's a prototype.
     RootedObject target(cx, proxy->as<ProxyObject>().target());
     return JS_GetPropertyDescriptorById(cx, target, id, desc);
@@ -407,7 +426,7 @@ bool
 DirectProxyHandler::getOwnPropertyDescriptor(JSContext *cx, HandleObject proxy, HandleId id,
                                              MutableHandle<PropertyDescriptor> desc) const
 {
-    assertEnteredPolicy(cx, proxy, id, GET | SET);
+    assertEnteredPolicy(cx, proxy, id, GET | SET | GET_PROPERTY_DESCRIPTOR);
     RootedObject target(cx, proxy->as<ProxyObject>().target());
     return js::GetOwnPropertyDescriptor(cx, target, id, desc);
 }
@@ -2195,7 +2214,7 @@ Proxy::getPropertyDescriptor(JSContext *cx, HandleObject proxy, HandleId id,
     JS_CHECK_RECURSION(cx, return false);
     const BaseProxyHandler *handler = proxy->as<ProxyObject>().handler();
     desc.object().set(nullptr); // default result if we refuse to perform this action
-    AutoEnterPolicy policy(cx, handler, proxy, id, BaseProxyHandler::GET, true);
+    AutoEnterPolicy policy(cx, handler, proxy, id, BaseProxyHandler::GET_PROPERTY_DESCRIPTOR, true);
     if (!policy.allowed())
         return policy.returnValue();
     if (!handler->hasPrototype())
@@ -2226,7 +2245,7 @@ Proxy::getOwnPropertyDescriptor(JSContext *cx, HandleObject proxy, HandleId id,
 
     const BaseProxyHandler *handler = proxy->as<ProxyObject>().handler();
     desc.object().set(nullptr); // default result if we refuse to perform this action
-    AutoEnterPolicy policy(cx, handler, proxy, id, BaseProxyHandler::GET, true);
+    AutoEnterPolicy policy(cx, handler, proxy, id, BaseProxyHandler::GET_PROPERTY_DESCRIPTOR, true);
     if (!policy.allowed())
         return policy.returnValue();
     return handler->getOwnPropertyDescriptor(cx, proxy, id, desc);

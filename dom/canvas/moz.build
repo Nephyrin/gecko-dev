@@ -41,6 +41,7 @@ if CONFIG['MOZ_WEBGL']:
         'WebGL1Context.cpp',
         'WebGL2Context.cpp',
         'WebGLActiveInfo.cpp',
+        'WebGLBindableName.cpp',
         'WebGLBuffer.cpp',
         'WebGLContext.cpp',
         'WebGLContextAsyncQueries.cpp',
@@ -124,3 +125,6 @@ LOCAL_INCLUDES += [
     '/layout/style',
     '/layout/xul',
 ]
+
+CXXFLAGS += CONFIG['MOZ_CAIRO_CFLAGS']
+CXXFLAGS += CONFIG['TK_CFLAGS']

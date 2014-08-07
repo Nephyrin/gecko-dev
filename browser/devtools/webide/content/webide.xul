@@ -5,7 +5,7 @@
    - file, You can obtain one at http://mozilla.org/MPL/2.0/. -->
 
 <!DOCTYPE window [
-  <!ENTITY % webideDTD SYSTEM "chrome://webide/content/webide.dtd" >
+  <!ENTITY % webideDTD SYSTEM "chrome://browser/locale/devtools/webide.dtd" >
   %webideDTD;
 ]>
 
@@ -181,10 +181,9 @@
       <iframe id="deck-panel-runtimedetails" flex="1" src="runtimedetails.xhtml"/>
       <iframe id="deck-panel-monitor" flex="1" lazysrc="monitor.xhtml"/>
     </deck>
+    <splitter hidden="true" class="devtools-horizontal-splitter" orient="vertical"/>
+    <!-- toolbox iframe will be inserted here -->
   </notificationbox>
 
-  <splitter hidden="true" class="devtools-horizontal-splitter" orient="vertical"/>
-
-  <!-- toolbox iframe will be inserted here -->
 
 </window>

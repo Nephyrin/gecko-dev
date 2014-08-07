@@ -219,6 +219,7 @@ ifdef MOZ_CRASHREPORTER
 	echo building symbol store
 	$(RM) -r $(DIST)/crashreporter-symbols
 	$(RM) '$(DIST)/$(SYMBOL_ARCHIVE_BASENAME).zip'
+	$(RM) '$(DIST)/$(SYMBOL_FULL_ARCHIVE_BASENAME).zip'
 	$(NSINSTALL) -D $(DIST)/crashreporter-symbols
 	OBJCOPY='$(OBJCOPY)' \
 	$(PYTHON) $(topsrcdir)/toolkit/crashreporter/tools/symbolstore.py \
@@ -326,9 +327,12 @@ endif
 ifeq ($(MOZ_WIDGET_TOOLKIT),gtk3)
 toolkit/library/target: widget/gtk/mozgtk/gtk3/target
 endif
+ifdef MOZ_LDAP_XPCOM
+toolkit/library/target: ../ldap/target
+endif
 ifndef MOZ_FOLD_LIBS
 ifndef MOZ_NATIVE_SQLITE
-security/build/target: db/sqlite3/src/target
+config/external/nss/target: db/sqlite3/src/target
 endif
 endif
 ifeq ($(MOZ_REPLACE_MALLOC_LINKAGE),dummy library)

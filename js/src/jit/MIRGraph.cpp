@@ -6,7 +6,7 @@
 
 #include "jit/MIRGraph.h"
 
-#include "jit/AsmJS.h"
+#include "asmjs/AsmJSValidate.h"
 #include "jit/BytecodeAnalysis.h"
 #include "jit/Ion.h"
 #include "jit/IonSpewer.h"
@@ -30,11 +30,43 @@ MIRGenerator::MIRGenerator(CompileCompartment *compartment, const JitCompileOpti
     cancelBuild_(false),
     maxAsmJSStackArgBytes_(0),
     performsCall_(false),
-    needsInitialStackAlignment_(false),
+    usesSimd_(false),
+    usesSimdCached_(false),
     minAsmJSHeapLength_(AsmJSAllocationGranularity),
     modifiesFrameArguments_(false),
     options(options)
 { }
+
+bool
+MIRGenerator::usesSimd()
+{
+    if (usesSimdCached_)
+        return usesSimd_;
+
+    usesSimdCached_ = true;
+    for (ReversePostorderIterator block = graph_->rpoBegin(),
+                                  end   = graph_->rpoEnd();
+         block != end;
+         block++)
+    {
+        // It's fine to use MInstructionIterator here because we don't have to
+        // worry about Phis, since any reachable phi (or phi cycle) will have at
+        // least one instruction as an input.
+        for (MInstructionIterator inst = block->begin(); inst != block->end(); inst++) {
+            // Instructions that have SIMD inputs but not a SIMD type are fine
+            // to ignore, as their inputs are also reached at some point. By
+            // induction, at least one instruction with a SIMD type is reached
+            // at some point.
+            if (IsSimdType(inst->type())) {
+                JS_ASSERT(SupportsSimd);
+                usesSimd_ = true;
+                return true;
+            }
+        }
+    }
+    usesSimd_ = false;
+    return false;
+}
 
 bool
 MIRGenerator::abortFmt(const char *message, va_list ap)
@@ -713,11 +745,54 @@ AssertSafelyDiscardable(MDefinition *def)
 }
 
 void
-MBasicBlock::discard(MInstruction *ins)
+MBasicBlock::prepareForDiscard(MInstruction *ins, ReferencesType refType /* = RefType_Default */)
 {
-    AssertSafelyDiscardable(ins);
+    // Only remove instructions from the same basic block.  This is needed for
+    // correctly removing the resume point if any.
+    MOZ_ASSERT(ins->block() == this);
+
+    MResumePoint *rp = ins->resumePoint();
+    if (refType & RefType_DiscardResumePoint && rp) {
+        rp->discardUses();
+        // Resume point are using a forward list only, so we need to iterate
+        // to the location of the resume point in order to remove it.
+        MResumePointIterator iter = resumePointsBegin();
+        while (*iter != rp) {
+            // If the instruction has a resume point, then it should be part
+            // of the basic block list of resume points.
+            MOZ_ASSERT(iter != resumePointsEnd());
+            iter++;
+        }
+        resumePoints_.removeAt(iter);
+    }
+
+    // We need to assert that instructions have no uses after removing the their
+    // resume points operands as they could be captured by their own resume
+    // point.
+    MOZ_ASSERT_IF(refType & RefType_AssertNoUses, !ins->hasUses());
+
+    MOZ_ASSERT(refType & RefType_DiscardOperands);
     for (size_t i = 0, e = ins->numOperands(); i < e; i++)
         ins->discardOperand(i);
+
+    ins->setDiscarded();
+}
+
+void
+MBasicBlock::discard(MInstruction *ins)
+{
+    prepareForDiscard(ins);
+    instructions_.remove(ins);
+}
+
+void
+MBasicBlock::discardIgnoreOperands(MInstruction *ins)
+{
+    AssertSafelyDiscardable(ins);
+#ifdef DEBUG
+    for (size_t i = 0, e = ins->numOperands(); i < e; i++)
+        JS_ASSERT(ins->operandDiscarded(i));
+#endif
 
     instructions_.remove(ins);
 }
@@ -725,20 +800,14 @@ MBasicBlock::discard(MInstruction *ins)
 MInstructionIterator
 MBasicBlock::discardAt(MInstructionIterator &iter)
 {
-    AssertSafelyDiscardable(*iter);
-    for (size_t i = 0, e = iter->numOperands(); i < e; i++)
-        iter->discardOperand(i);
-
+    prepareForDiscard(*iter);
     return instructions_.removeAt(iter);
 }
 
 MInstructionReverseIterator
 MBasicBlock::discardAt(MInstructionReverseIterator &iter)
 {
-    AssertSafelyDiscardable(*iter);
-    for (size_t i = 0, e = iter->numOperands(); i < e; i++)
-        iter->discardOperand(i);
-
+    prepareForDiscard(*iter);
     return instructions_.removeAt(iter);
 }
 
@@ -760,15 +829,17 @@ MBasicBlock::discardAllInstructions()
 {
     MInstructionIterator iter = begin();
     discardAllInstructionsStartingAt(iter);
-
 }
 
 void
 MBasicBlock::discardAllInstructionsStartingAt(MInstructionIterator &iter)
 {
     while (iter != end()) {
-        for (size_t i = 0, e = iter->numOperands(); i < e; i++)
-            iter->discardOperand(i);
+        // We only discard operands and flag the instruction as discarded as the
+        // resume points are exepected to be removed separately.  Also we do not
+        // assert that we have no uses as block might be removed in reverse post
+        // order.
+        prepareForDiscard(*iter, RefType_DiscardOperands);
         iter = instructions_.removeAt(iter);
     }
 }

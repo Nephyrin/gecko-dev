@@ -75,11 +75,17 @@ class SyntaxParseHandler
         return NodeString;
     }
 
-#ifdef JS_HAS_TEMPLATE_STRINGS
     Node newTemplateStringLiteral(JSAtom *atom, const TokenPos &pos) {
         return NodeGeneric;
     }
-#endif
+
+    Node newCallSiteObject(uint32_t begin, unsigned blockidGen) {
+        return NodeGeneric;
+    }
+
+    bool addToCallSiteObject(Node callSiteObj, Node rawNode, Node cookedNode) {
+        return true;
+    }
 
     Node newThisLiteral(const TokenPos &pos) { return NodeGeneric; }
     Node newNullLiteral(const TokenPos &pos) { return NodeGeneric; }

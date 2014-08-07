@@ -120,11 +120,40 @@ class FullParseHandler
         return new_<NullaryNode>(PNK_STRING, JSOP_NOP, pos, atom);
     }
 
-#ifdef JS_HAS_TEMPLATE_STRINGS
     ParseNode *newTemplateStringLiteral(JSAtom *atom, const TokenPos &pos) {
         return new_<NullaryNode>(PNK_TEMPLATE_STRING, JSOP_NOP, pos, atom);
     }
-#endif
+
+    ParseNode *newCallSiteObject(uint32_t begin, unsigned blockidGen) {
+        ParseNode *callSite = new_<CallSiteNode>(begin);
+        if (!callSite)
+            return null();
+
+        Node propExpr = newArrayLiteral(getPosition(callSite).begin, blockidGen);
+        if (!propExpr)
+            return null();
+
+        if (!addArrayElement(callSite, propExpr))
+            return null();
+
+        return callSite;
+    }
+
+    bool addToCallSiteObject(ParseNode *callSiteObj, ParseNode *rawNode, ParseNode *cookedNode) {
+        MOZ_ASSERT(callSiteObj->isKind(PNK_CALLSITEOBJ));
+
+        if (!addArrayElement(callSiteObj, cookedNode))
+            return false;
+        if (!addArrayElement(callSiteObj->pn_head, rawNode))
+            return false;
+
+        /*
+         * We don't know when the last noSubstTemplate will come in, and we
+         * don't want to deal with this outside this method
+         */
+        setEndPosition(callSiteObj, callSiteObj->pn_head);
+        return true;
+    }
 
     ParseNode *newThisLiteral(const TokenPos &pos) {
         return new_<ThisLiteral>(pos);

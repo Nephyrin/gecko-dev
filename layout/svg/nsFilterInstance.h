@@ -27,7 +27,7 @@ class nsSVGFilterPaintCallback;
 
 /**
  * This class performs all filter processing.
- * 
+ *
  * We build a graph of the filter image data flow, essentially
  * converting the filter graph to SSA. This lets us easily propagate
  * analysis data (such as bounding-boxes) over the filter primitive graph.
@@ -271,6 +271,11 @@ private:
    * The SVG bbox of the element that is being filtered, in user space.
    */
   gfxRect                 mTargetBBox;
+
+  /**
+   * The SVG bbox of the element that is being filtered, in filter space.
+   */
+  nsIntRect               mTargetBBoxInFilterSpace;
 
   /**
    * The transform from filter space to outer-<svg> device space.

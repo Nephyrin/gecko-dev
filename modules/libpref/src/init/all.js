@@ -270,6 +270,7 @@ pref("media.gstreamer.enabled", true);
 #endif
 #ifdef MOZ_APPLEMEDIA
 pref("media.apple.mp3.enabled", true);
+pref("media.apple.mp4.enabled", true);
 #endif
 #ifdef MOZ_WEBRTC
 pref("media.navigator.enabled", true);
@@ -310,6 +311,7 @@ pref("media.navigator.video.h264.max_br", 0);
 pref("media.navigator.video.h264.max_mbps", 0);
 pref("media.peerconnection.video.h264_enabled", false);
 pref("media.getusermedia.aec", 1);
+pref("media.getusermedia.browser.enabled", true);
 #endif
 pref("media.peerconnection.video.min_bitrate", 200);
 pref("media.peerconnection.video.start_bitrate", 300);
@@ -361,11 +363,8 @@ pref("media.navigator.enabled", true);
 #endif
 #endif
 
-// do not enable screensharing before addressing security concerns: Bug 1035577
-// do not enable screensharing before implementing app/window sharing: Bug 1036653
-// do not enable screensharing before source constraints are finalized: Bug 1033885
-// do not enable screensharing before UX is ready: Bug 1035577
-pref("media.getusermedia.screensharing.enabled", false);
+pref("media.getusermedia.screensharing.enabled", true);
+pref("media.getusermedia.screensharing.allowed_domains", "");
 
 // TextTrack support
 pref("media.webvtt.enabled", true);
@@ -1646,7 +1645,6 @@ pref("security.notification_enable_delay", 500);
 pref("security.csp.enable", true);
 pref("security.csp.debug", false);
 pref("security.csp.experimentalEnabled", false);
-pref("security.csp.newbackend.enable", true);
 
 // Mixed content blocking
 pref("security.mixed_content.block_active_content", false);
@@ -2006,6 +2004,25 @@ pref("layout.css.box-decoration-break.enabled", true);
 // Is layout of CSS outline-style:auto enabled?
 pref("layout.css.outline-style-auto.enabled", false);
 
+// Is CSSOM-View scroll-behavior and its MSD smooth scrolling enabled?
+pref("layout.css.scroll-behavior.enabled", false);
+
+// Tuning of the smooth scroll motion used by CSSOM-View scroll-behavior.
+// Spring-constant controls the strength of the simulated MSD
+// (Mass-Spring-Damper)
+pref("layout.css.scroll-behavior.spring-constant", "250.0");
+
+// Tuning of the smooth scroll motion used by CSSOM-View scroll-behavior.
+// Damping-ratio controls the dampening force of the simulated MSD
+// (Mass-Spring-Damper).
+// When below 1.0, the system is under-damped; it may overshoot the target and
+// oscillate.
+// When greater than 1.0, the system is over-damped; it will reach the target at
+// reduced speed without overshooting.
+// When equal to 1.0, the system is critically-damped; it will reach the target
+// at the greatest speed without overshooting.
+pref("layout.css.scroll-behavior.damping-ratio", "1.0");
+
 // pref for which side vertical scrollbars should be on
 // 0 = end-side in UI direction
 // 1 = end-side in document/content direction
@@ -2217,21 +2234,6 @@ pref("font.default.th", "serif");
 pref("font.minimum-size.th", 0);
 pref("font.size.variable.th", 16);
 pref("font.size.fixed.th", 13);
-
-pref("font.default.tr", "serif");
-pref("font.minimum-size.tr", 0);
-pref("font.size.variable.tr", 16);
-pref("font.size.fixed.tr", 13);
-
-pref("font.default.x-baltic", "serif");
-pref("font.minimum-size.x-baltic", 0);
-pref("font.size.variable.x-baltic", 16);
-pref("font.size.fixed.x-baltic", 13);
-
-pref("font.default.x-central-euro", "serif");
-pref("font.minimum-size.x-central-euro", 0);
-pref("font.size.variable.x-central-euro", 16);
-pref("font.size.fixed.x-central-euro", 13);
 
 pref("font.default.x-cyrillic", "serif");
 pref("font.minimum-size.x-cyrillic", 0);
@@ -2514,21 +2516,6 @@ pref("font.name.sans-serif.th", "Tahoma");
 pref("font.name.monospace.th", "Tahoma");
 pref("font.name.cursive.th", "Tahoma");
 
-pref("font.name.serif.tr", "Times New Roman");
-pref("font.name.sans-serif.tr", "Arial");
-pref("font.name.monospace.tr", "Courier New");
-pref("font.name.cursive.tr", "Comic Sans MS");
-
-pref("font.name.serif.x-baltic", "Times New Roman");
-pref("font.name.sans-serif.x-baltic", "Arial");
-pref("font.name.monospace.x-baltic", "Courier New");
-pref("font.name.cursive.x-baltic", "Comic Sans MS");
-
-pref("font.name.serif.x-central-euro", "Times New Roman");
-pref("font.name.sans-serif.x-central-euro", "Arial");
-pref("font.name.monospace.x-central-euro", "Courier New");
-pref("font.name.cursive.x-central-euro", "Comic Sans MS");
-
 pref("font.name.serif.x-cyrillic", "Times New Roman");
 pref("font.name.sans-serif.x-cyrillic", "Arial");
 pref("font.name.monospace.x-cyrillic", "Courier New");
@@ -2774,7 +2761,11 @@ pref("intl.keyboard.per_window_layout", false);
 
 #ifdef NS_ENABLE_TSF
 // Enable/Disable TSF support on Vista or later.
+#ifdef NIGHTLY_BUILD
+pref("intl.tsf.enable", true);
+#else
 pref("intl.tsf.enable", false);
+#endif
 // Force enable TSF even on WinXP or WinServer 2003.
 // Be aware, TSF framework on prior to Vista is not enough stable.
 pref("intl.tsf.force_enable", false);
@@ -2881,34 +2872,12 @@ pref("font.name-list.serif.th", "Thonburi");
 pref("font.name-list.sans-serif.th", "Thonburi");
 pref("font.name-list.monospace.th", "Ayuthaya");
 
-pref("font.name.serif.tr", "Times");
-pref("font.name.sans-serif.tr", "Helvetica");
-pref("font.name.monospace.tr", "Courier");
-pref("font.name.cursive.tr", "Apple Chancery");
-pref("font.name.fantasy.tr", "Papyrus");
-pref("font.name-list.serif.tr", "Times");
-pref("font.name-list.sans-serif.tr", "Helvetica");
-pref("font.name-list.monospace.tr", "Courier");
-pref("font.name-list.cursive.tr", "Apple Chancery");
-pref("font.name-list.fantasy.tr", "Papyrus");
-
 pref("font.name.serif.x-armn", "Mshtakan");
 pref("font.name.sans-serif.x-armn", "Mshtakan");
 pref("font.name.monospace.x-armn", "Mshtakan");
 pref("font.name-list.serif.x-armn", "Mshtakan");
 pref("font.name-list.sans-serif.x-armn", "Mshtakan");
 pref("font.name-list.monospace.x-armn", "Mshtakan");
-
-pref("font.name.serif.x-baltic", "Times");
-pref("font.name.sans-serif.x-baltic", "Helvetica");
-pref("font.name.monospace.x-baltic", "Courier");
-pref("font.name.cursive.x-baltic", "Apple Chancery");
-pref("font.name.fantasy.x-baltic", "Papyrus");
-pref("font.name-list.serif.x-baltic", "Times");
-pref("font.name-list.sans-serif.x-baltic", "Helvetica");
-pref("font.name-list.monospace.x-baltic", "Courier");
-pref("font.name-list.cursive.x-baltic", "Apple Chancery");
-pref("font.name-list.fantasy.x-baltic", "Papyrus");
 
 // SolaimanLipi, Rupali http://ekushey.org/?page/mac_download
 pref("font.name.serif.x-beng", "Bangla MN");
@@ -2924,17 +2893,6 @@ pref("font.name.monospace.x-cans", "Euphemia UCAS");
 pref("font.name-list.serif.x-cans", "Euphemia UCAS");
 pref("font.name-list.sans-serif.x-cans", "Euphemia UCAS");
 pref("font.name-list.monospace.x-cans", "Euphemia UCAS");
-
-pref("font.name.serif.x-central-euro", "Times");
-pref("font.name.sans-serif.x-central-euro", "Helvetica");
-pref("font.name.monospace.x-central-euro", "Courier");
-pref("font.name.cursive.x-central-euro", "Apple Chancery");
-pref("font.name.fantasy.x-central-euro", "Papyrus");
-pref("font.name-list.serif.x-central-euro", "Times");
-pref("font.name-list.sans-serif.x-central-euro", "Helvetica");
-pref("font.name-list.monospace.x-central-euro", "Courier");
-pref("font.name-list.cursive.x-central-euro", "Apple Chancery");
-pref("font.name-list.fantasy.x-central-euro", "Papyrus");
 
 pref("font.name.serif.x-cyrillic", "Times");
 pref("font.name.sans-serif.x-cyrillic", "Helvetica");
@@ -3244,18 +3202,6 @@ pref("font.name.sans-serif.th", "Fira Sans");
 pref("font.name.monospace.th", "Fira Mono");
 pref("font.name-list.sans-serif.th", "Fira Sans, Noto Sans Thai, Droid Sans Thai");
 
-pref("font.name.serif.tr", "Charis SIL Compact");
-pref("font.name.sans-serif.tr", "Fira Sans");
-pref("font.name.monospace.tr", "Fira Mono");
-
-pref("font.name.serif.x-baltic", "Charis SIL Compact");
-pref("font.name.sans-serif.x-baltic", "Fira Sans");
-pref("font.name.monospace.x-baltic", "Fira Mono");
-
-pref("font.name.serif.x-central-euro", "Charis SIL Compact");
-pref("font.name.sans-serif.x-central-euro", "Fira Sans");
-pref("font.name.monospace.x-central-euro", "Fira Mono");
-
 pref("font.name.serif.x-cyrillic", "Charis SIL Compact");
 pref("font.name.sans-serif.x-cyrillic", "Fira Sans");
 pref("font.name.monospace.x-cyrillic", "Fira Mono");
@@ -3316,24 +3262,6 @@ pref("font.name.monospace.th", "Droid Sans Mono");
 pref("font.name-list.serif.th", "Droid Serif");
 pref("font.name-list.sans-serif.th", "Droid Sans Thai, Clear Sans, Droid Sans");
 
-pref("font.name.serif.tr", "Charis SIL Compact");
-pref("font.name.sans-serif.tr", "Clear Sans");
-pref("font.name.monospace.tr", "Droid Sans Mono");
-pref("font.name-list.serif.tr", "Droid Serif");
-pref("font.name-list.sans-serif.tr", "Clear Sans, Roboto, Droid Sans");
-
-pref("font.name.serif.x-baltic", "Charis SIL Compact");
-pref("font.name.sans-serif.x-baltic", "Clear Sans");
-pref("font.name.monospace.x-baltic", "Droid Sans Mono");
-pref("font.name-list.serif.x-baltic", "Droid Serif");
-pref("font.name-list.sans-serif.x-baltic", "Clear Sans, Roboto, Droid Sans");
-
-pref("font.name.serif.x-central-euro", "Charis SIL Compact");
-pref("font.name.sans-serif.x-central-euro", "Clear Sans");
-pref("font.name.monospace.x-central-euro", "Droid Sans Mono");
-pref("font.name-list.serif.x-central-euro", "Droid Serif");
-pref("font.name-list.sans-serif.x-central-euro", "Clear Sans, Roboto, Droid Sans");
-
 pref("font.name.serif.x-cyrillic", "Charis SIL Compact");
 pref("font.name.sans-serif.x-cyrillic", "Clear Sans");
 pref("font.name.monospace.x-cyrillic", "Droid Sans Mono");
@@ -3385,15 +3313,6 @@ pref("font.size.fixed.el", 12);
 pref("font.size.fixed.he", 12);
 
 pref("font.minimum-size.th", 13);
-
-pref("font.default.tr", "sans-serif");
-pref("font.size.fixed.tr", 12);
-
-pref("font.default.x-baltic", "sans-serif");
-pref("font.size.fixed.x-baltic", 12);
-
-pref("font.default.x-central-euro", "sans-serif");
-pref("font.size.fixed.x-central-euro", 12);
 
 pref("font.default.x-cyrillic", "sans-serif");
 pref("font.size.fixed.x-cyrillic", 12);
@@ -3502,21 +3421,6 @@ pref("font.name.serif.th", "serif");
 pref("font.name.sans-serif.th", "sans-serif");
 pref("font.minimum-size.th", 13);
 pref("font.name.monospace.th", "monospace");
-
-pref("font.name.serif.tr", "serif");
-pref("font.name.sans-serif.tr", "sans-serif");
-pref("font.name.monospace.tr", "monospace");
-pref("font.size.fixed.tr", 12);
-
-pref("font.name.serif.x-baltic", "serif");
-pref("font.name.sans-serif.x-baltic", "sans-serif");
-pref("font.name.monospace.x-baltic", "monospace");
-pref("font.size.fixed.x-baltic", 12);
-
-pref("font.name.serif.x-central-euro", "serif");
-pref("font.name.sans-serif.x-central-euro", "sans-serif");
-pref("font.name.monospace.x-central-euro", "monospace");
-pref("font.size.fixed.x-central-euro", 12);
 
 pref("font.name.serif.x-cyrillic", "serif");
 pref("font.name.sans-serif.x-cyrillic", "sans-serif");
@@ -3828,6 +3732,7 @@ pref("layers.draw-tile-borders", false);
 pref("layers.draw-bigimage-borders", false);
 pref("layers.frame-counter", false);
 pref("layers.enable-tiles", false);
+pref("layers.tiled-drawtarget.enabled", false);
 pref("layers.low-precision-buffer", false);
 pref("layers.tile-width", 256);
 pref("layers.tile-height", 256);

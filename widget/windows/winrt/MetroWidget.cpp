@@ -651,8 +651,8 @@ bool
 MetroWidget::DispatchScrollEvent(mozilla::WidgetGUIEvent* aEvent)
 {
   WidgetGUIEvent* newEvent = nullptr;
-  switch(aEvent->eventStructType) {
-    case NS_WHEEL_EVENT:
+  switch(aEvent->mClass) {
+    case eWheelEventClass:
     {
       WidgetWheelEvent* oldEvent = aEvent->AsWheelEvent();
       WidgetWheelEvent* wheelEvent =
@@ -661,7 +661,7 @@ MetroWidget::DispatchScrollEvent(mozilla::WidgetGUIEvent* aEvent)
       newEvent = static_cast<WidgetGUIEvent*>(wheelEvent);
     }
     break;
-    case NS_CONTENT_COMMAND_EVENT:
+    case eContentCommandEventClass:
     {
       WidgetContentCommandEvent* oldEvent = aEvent->AsContentCommandEvent();
       WidgetContentCommandEvent* cmdEvent =
@@ -1030,9 +1030,6 @@ void
 MetroWidget::SetWidgetListener(nsIWidgetListener* aWidgetListener)
 {
   mWidgetListener = aWidgetListener;
-  if (mController) {
-    mController->SetWidgetListener(aWidgetListener);
-  }
 }
 
 CompositorParent* MetroWidget::NewCompositorParent(int aSurfaceWidth, int aSurfaceHeight)
@@ -1043,7 +1040,6 @@ CompositorParent* MetroWidget::NewCompositorParent(int aSurfaceWidth, int aSurfa
     mRootLayerTreeId = compositor->RootLayerTreeId();
 
     mController = new APZController();
-    mController->SetWidgetListener(mWidgetListener);
 
     CompositorParent::SetControllerForLayerTree(mRootLayerTreeId, mController);
 
@@ -1136,6 +1132,12 @@ MetroWidget::ApzReceiveInputEvent(WidgetInputEvent* aEvent,
     return nsEventStatus_eIgnore;
   }
   return mController->ReceiveInputEvent(aEvent, aOutTargetGuid);
+}
+
+void
+MetroWidget::SetApzPendingResponseFlusher(APZPendingResponseFlusher* aFlusher)
+{
+  mController->SetPendingResponseFlusher(aFlusher);
 }
 
 LayerManager*

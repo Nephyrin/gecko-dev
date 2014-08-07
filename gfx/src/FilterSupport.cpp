@@ -95,8 +95,6 @@ namespace gfx {
 
 // Some convenience FilterNode creation functions.
 
-static const float kMaxStdDeviation = 500;
-
 namespace FilterWrappers {
 
   static TemporaryRef<FilterNode>
@@ -1102,6 +1100,15 @@ FilterNodeGraphFromDescription(DrawTarget* aDT,
             IntPoint offset = surfaceRect.TopLeft();
             sourceFilterNode = FilterWrappers::ForSurface(aDT, surf, offset);
 
+            // Clip the original SourceGraphic to the first filter region if the
+            // surface isn't already sized appropriately.
+            if ((inputIndex == FilterPrimitiveDescription::kPrimitiveIndexSourceGraphic ||
+                 inputIndex == FilterPrimitiveDescription::kPrimitiveIndexSourceAlpha) &&
+                !descr.FilterSpaceBounds().Contains(aSourceGraphicRect)) {
+              sourceFilterNode =
+                FilterWrappers::Crop(aDT, sourceFilterNode, descr.FilterSpaceBounds());
+            }
+
             if (inputIndex == FilterPrimitiveDescription::kPrimitiveIndexSourceAlpha) {
               sourceFilterNode = FilterWrappers::ToAlpha(aDT, sourceFilterNode);
             }
@@ -1303,9 +1310,9 @@ FilterSupport::ComputeResultChangeRegion(const FilterDescription& aFilter,
   return resultChangeRegions[resultChangeRegions.Length() - 1];
 }
 
-static nsIntRegion
-PostFilterExtentsForPrimitive(const FilterPrimitiveDescription& aDescription,
-                              const nsTArray<nsIntRegion>& aInputExtents)
+nsIntRegion
+FilterSupport::PostFilterExtentsForPrimitive(const FilterPrimitiveDescription& aDescription,
+                                             const nsTArray<nsIntRegion>& aInputExtents)
 {
   const AttributeMap& atts = aDescription.Attributes();
   switch (aDescription.Type()) {

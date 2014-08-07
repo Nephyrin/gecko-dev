@@ -17,7 +17,7 @@
 #include "VideoSegment.h"
 #include "MainThreadUtils.h"
 #include "nsAutoRef.h"
-#include "speex/speex_resampler.h"
+#include <speex/speex_resampler.h>
 #include "AudioMixer.h"
 #include "mozilla/dom/AudioChannelBinding.h"
 
@@ -555,6 +555,7 @@ public:
   virtual size_t SizeOfIncludingThis(MallocSizeOf aMallocSizeOf) const;
 
   void SetAudioChannelType(dom::AudioChannel aType) { mAudioChannelType = aType; }
+  dom::AudioChannel AudioChannelType() const { return mAudioChannelType; }
 
 protected:
   virtual void AdvanceTimeVaryingValuesToCurrentTime(GraphTime aCurrentTime, GraphTime aBlockedTime)

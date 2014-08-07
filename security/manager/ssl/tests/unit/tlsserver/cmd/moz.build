@@ -23,6 +23,10 @@ LOCAL_INCLUDES += [
 USE_LIBS += [
     'mozalloc',
     'mozillapkix',
+    'nspr',
+    'nss',
     'pkixtestutil',
     'tlsserver',
 ]
+
+CXXFLAGS += CONFIG['TK_CFLAGS']

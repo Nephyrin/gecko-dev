@@ -2,9 +2,9 @@
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
-from machformatter import BaseMachFormatter
+from .base import BaseFormatter
 
-class TbplFormatter(BaseMachFormatter):
+class TbplFormatter(BaseFormatter):
     """Formatter that formats logs in the legacy formatting format used by TBPL
     This is intended to be used to preserve backward compatibility with existing tools
     hand-parsing this format.
@@ -48,18 +48,23 @@ class TbplFormatter(BaseMachFormatter):
             message)
 
     def test_end(self, data):
-        start_time = self.test_start_times.pop(self.test_id(data["test"]))
-        time = data["time"] - start_time
+        test_id = self.test_id(data["test"])
+        time_msg = ""
+
+        if test_id in self.test_start_times:
+            start_time = self.test_start_times.pop(test_id)
+            time = data["time"] - start_time
+            time_msg = " | took %ims" % time
 
         if "expected" in data:
             failure_line = "TEST-UNEXPECTED-%s | %s | %s" % (
-                data["status"], self.id_str(data["test"]),
-                data.get("message", ""))
-            info_line = "TEST-INFO expected %s | took %ims\n" % (data["expected"], time)
+                data["status"], test_id, data.get("message", ""))
+
+            info_line = "TEST-INFO expected %s%s\n" % (data["expected"], time_msg)
             return "\n".join([failure_line, info_line])
 
-        return "TEST-%s | %s | took %ims\n" % (
-            data["status"], self.id_str(data["test"]), time)
+        return "TEST-%s | %s%s\n" % (
+            data["status"], test_id, time_msg)
 
     def suite_end(self, data):
         start_time = self.suite_start_time

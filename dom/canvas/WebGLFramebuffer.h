@@ -6,6 +6,7 @@
 #ifndef WEBGLFRAMEBUFFER_H_
 #define WEBGLFRAMEBUFFER_H_
 
+#include "WebGLBindableName.h"
 #include "WebGLObjectModel.h"
 
 #include "nsWrapperCache.h"
@@ -23,11 +24,15 @@ namespace gl {
 
 class WebGLFramebuffer MOZ_FINAL
     : public nsWrapperCache
+    , public WebGLBindableName
     , public WebGLRefCountedObject<WebGLFramebuffer>
     , public LinkedListElement<WebGLFramebuffer>
     , public WebGLContextBoundObject
+    , public SupportsWeakPtr<WebGLFramebuffer>
 {
 public:
+    MOZ_DECLARE_REFCOUNTED_TYPENAME(WebGLFramebuffer)
+
     WebGLFramebuffer(WebGLContext* context);
 
     struct Attachment
@@ -40,10 +45,8 @@ public:
         GLint mTexImageLevel;
         mutable bool mNeedsFinalize;
 
-        Attachment(GLenum aAttachmentPoint = LOCAL_GL_COLOR_ATTACHMENT0)
-            : mAttachmentPoint(aAttachmentPoint)
-            , mNeedsFinalize(false)
-        {}
+        Attachment(GLenum aAttachmentPoint = LOCAL_GL_COLOR_ATTACHMENT0);
+        ~Attachment();
 
         bool IsDefined() const {
             return Texture() || Renderbuffer();
@@ -79,10 +82,7 @@ public:
         bool HasUninitializedImageData() const;
         void SetImageDataStatus(WebGLImageDataStatus x);
 
-        void Reset() {
-            mTexturePtr = nullptr;
-            mRenderbufferPtr = nullptr;
-        }
+        void Reset();
 
         const WebGLRectangleObject& RectangleObject() const;
 
@@ -93,10 +93,6 @@ public:
     };
 
     void Delete();
-
-    bool HasEverBeenBound() { return mHasEverBeenBound; }
-    void SetHasEverBeenBound(bool x) { mHasEverBeenBound = x; }
-    GLuint GLName() { return mGLName; }
 
     void FramebufferRenderbuffer(GLenum target,
                                  GLenum attachment,
@@ -184,9 +180,6 @@ private:
     }
 
     mutable GLenum mStatus;
-
-    GLuint mGLName;
-    bool mHasEverBeenBound;
 
     // we only store pointers to attached renderbuffers, not to attached textures, because
     // we will only need to initialize renderbuffers. Textures are already initialized.

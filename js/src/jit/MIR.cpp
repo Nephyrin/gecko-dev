@@ -1522,6 +1522,29 @@ MBinaryArithInstruction::trySpecializeFloat32(TempAllocator &alloc)
     setResultType(MIRType_Float32);
 }
 
+MDefinition *
+MMinMax::foldsTo(TempAllocator &alloc)
+{
+    if (!lhs()->isConstant() && !rhs()->isConstant())
+        return this;
+
+    MDefinition *operand = lhs()->isConstant() ? rhs() : lhs();
+    MConstant *constant = lhs()->isConstant() ? lhs()->toConstant() : rhs()->toConstant();
+
+    if (operand->isToDouble() && operand->getOperand(0)->type() == MIRType_Int32) {
+        const js::Value &val = constant->value();
+
+        // min(int32, d >= INT32_MAX) = int32
+        if (val.isDouble() && val.toDouble() >= INT32_MAX && !isMax())
+            return operand;
+
+        // max(int32, d <= INT32_MIN) = int32
+        if (val.isDouble() && val.toDouble() <= INT32_MIN && isMax())
+            return operand;
+    }
+    return this;
+}
+
 bool
 MAbs::fallible() const
 {
@@ -2601,6 +2624,65 @@ MCompare::evaluateConstantOperands(bool *result)
     MDefinition *left = getOperand(0);
     MDefinition *right = getOperand(1);
 
+    if (compareType() == Compare_Double) {
+        // Optimize "MCompare MConstant (MToDouble SomethingInInt32Range).
+        // In most cases the MToDouble was added, because the constant is
+        // a double. e.g. v < 9007199254740991,
+        // where v is an int32 so the result is always true.
+        if (!lhs()->isConstant() && !rhs()->isConstant())
+            return false;
+
+        MDefinition *operand = left->isConstant() ? right : left;
+        MConstant *constant = left->isConstant() ? left->toConstant() : right->toConstant();
+        JS_ASSERT(constant->value().isDouble());
+        double d = constant->value().toDouble();
+
+        if (operand->isToDouble() && operand->getOperand(0)->type() == MIRType_Int32) {
+            switch (jsop_) {
+              case JSOP_LT:
+                if (d > INT32_MAX || d < INT32_MIN) {
+                    *result = !((constant == lhs()) ^ (d < INT32_MIN));
+                    return true;
+                }
+                break;
+              case JSOP_LE:
+                if (d >= INT32_MAX || d <= INT32_MIN) {
+                    *result = !((constant == lhs()) ^ (d <= INT32_MIN));
+                    return true;
+                }
+                break;
+              case JSOP_GT:
+                if (d > INT32_MAX || d < INT32_MIN) {
+                    *result = !((constant == rhs()) ^ (d < INT32_MIN));
+                    return true;
+                }
+                break;
+              case JSOP_GE:
+                if (d >= INT32_MAX || d <= INT32_MIN) {
+                    *result = !((constant == rhs()) ^ (d <= INT32_MIN));
+                    return true;
+                }
+                break;
+              case JSOP_STRICTEQ: // Fall through.
+              case JSOP_EQ:
+                if (d > INT32_MAX || d < INT32_MIN) {
+                    *result = false;
+                    return true;
+                }
+                break;
+              case JSOP_STRICTNE: // Fall through.
+              case JSOP_NE:
+                if (d > INT32_MAX || d < INT32_MIN) {
+                    *result = true;
+                    return true;
+                }
+                break;
+              default:
+                MOZ_ASSUME_UNREACHABLE("Unexpected op.");
+            }
+        }
+    }
+
     if (!left->isConstant() || !right->isConstant())
         return false;
 
@@ -2889,6 +2971,28 @@ MLoadFixedSlot::mightAlias(const MDefinition *store) const
     return true;
 }
 
+MDefinition *
+MLoadFixedSlot::foldsTo(TempAllocator &alloc)
+{
+    if (!dependency() || !dependency()->isStoreFixedSlot())
+        return this;
+
+    MStoreFixedSlot *store = dependency()->toStoreFixedSlot();
+    if (!store->block()->dominates(block()))
+        return this;
+
+    if (store->object() != object())
+        return this;
+
+    if (store->slot() != slot())
+        return this;
+
+    if (store->value()->type() != type())
+        return this;
+
+    return store->value();
+}
+
 bool
 MAsmJSLoadHeap::mightAlias(const MDefinition *def) const
 {
@@ -2941,6 +3045,25 @@ MAsmJSLoadGlobalVar::congruentTo(const MDefinition *ins) const
     return false;
 }
 
+MDefinition *
+MAsmJSLoadGlobalVar::foldsTo(TempAllocator &alloc)
+{
+    if (!dependency() || !dependency()->isAsmJSStoreGlobalVar())
+        return this;
+
+    MAsmJSStoreGlobalVar *store = dependency()->toAsmJSStoreGlobalVar();
+    if (!store->block()->dominates(block()))
+        return this;
+
+    if (store->globalDataOffset() != globalDataOffset())
+        return this;
+
+    if (store->value()->type() != type())
+        return this;
+
+    return store->value();
+}
+
 HashNumber
 MAsmJSLoadFuncPtr::valueHash() const
 {
@@ -2991,6 +3114,47 @@ MLoadSlot::valueHash() const
     HashNumber hash = MDefinition::valueHash();
     hash = addU32ToHash(hash, slot_);
     return hash;
+}
+
+MDefinition *
+MLoadSlot::foldsTo(TempAllocator &alloc)
+{
+    if (!dependency() || !dependency()->isStoreSlot())
+        return this;
+
+    MStoreSlot *store = dependency()->toStoreSlot();
+    if (!store->block()->dominates(block()))
+        return this;
+
+    if (store->slots() != slots())
+        return this;
+
+    if (store->value()->type() != type())
+        return this;
+
+    return store->value();
+}
+
+MDefinition *
+MLoadElement::foldsTo(TempAllocator &alloc)
+{
+    if (!dependency() || !dependency()->isStoreElement())
+        return this;
+
+    MStoreElement *store = dependency()->toStoreElement();
+    if (!store->block()->dominates(block()))
+        return this;
+
+    if (store->elements() != elements())
+        return this;
+
+    if (store->index() != index())
+        return this;
+
+    if (store->value()->type() != type())
+        return this;
+
+    return store->value();
 }
 
 bool

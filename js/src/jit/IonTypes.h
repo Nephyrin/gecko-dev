@@ -383,6 +383,10 @@ StringFromMIRType(MIRType type)
       return "Pointer";
     case MIRType_ForkJoinContext:
       return "ForkJoinContext";
+    case MIRType_Int32x4:
+      return "Int32x4";
+    case MIRType_Float32x4:
+      return "Float32x4";
     default:
       MOZ_ASSUME_UNREACHABLE("Unknown MIRType.");
   }
@@ -412,16 +416,51 @@ IsNullOrUndefined(MIRType type)
     return type == MIRType_Null || type == MIRType_Undefined;
 }
 
+static inline bool
+IsSimdType(MIRType type)
+{
+    return type == MIRType_Int32x4 || type == MIRType_Float32x4;
+};
+
+// Returns the number of vector elements (hereby called "length") for a given
+// SIMD kind. It is the Y part of the name "Foo x Y".
+static inline unsigned
+SimdTypeToLength(MIRType type)
+{
+    JS_ASSERT(IsSimdType(type));
+    switch (type) {
+      case MIRType_Int32x4:
+      case MIRType_Float32x4:
+        return 4;
+      default: break;
+    }
+    MOZ_ASSUME_UNREACHABLE("unexpected SIMD kind");
+}
+
+static inline MIRType
+SimdTypeToScalarType(MIRType type)
+{
+    JS_ASSERT(IsSimdType(type));
+    switch (type) {
+      case MIRType_Int32x4:
+        return MIRType_Int32;
+      case MIRType_Float32x4:
+        return MIRType_Float32;
+      default: break;
+    }
+    MOZ_ASSUME_UNREACHABLE("unexpected SIMD kind");
+}
+
 #ifdef DEBUG
+
 // Track the pipeline of opcodes which has produced a snapshot.
 #define TRACK_SNAPSHOTS 1
 
 // Make sure registers are not modified between an instruction and
 // its OsiPoint.
-#  if defined(JS_ION)
-#    define CHECK_OSIPOINT_REGISTERS 1
-#  endif
-#endif
+#define CHECK_OSIPOINT_REGISTERS 1
+
+#endif // DEBUG
 
 enum {
     ArgType_General = 0x1,

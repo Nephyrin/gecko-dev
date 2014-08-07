@@ -821,26 +821,26 @@ pref("plugin.state.f5 sam inspection host plugin", 2);
 pref("plugin.state.nprobloxproxy", 2);
 #endif
 #ifdef XP_MACOSX
-pref("plugins.state.nproblox", 2);
+pref("plugin.state.nproblox", 2);
 #endif
 
 // Box Edit, bug 1029654
 #ifdef XP_WIN
-pref("plugins.state.npboxedit", 2);
+pref("plugin.state.npboxedit", 2);
 #endif
 #ifdef XP_MACOSX
-pref("plugins.state.box edit", 2);
+pref("plugin.state.box edit", 2);
 #endif
 
 // Nexus Personal, bug 1024965
 #ifdef XP_WIN
-pref("plugins.state.np_prsnl", 2);
+pref("plugin.state.np_prsnl", 2);
 #endif
 #ifdef XP_MACOSX
-pref("plugins.state.personalplugin", 2);
+pref("plugin.state.personalplugin", 2);
 #endif
 #ifdef UNIX_BUT_NOT_MAC
-pref("plugins.state.libplugins", 2);
+pref("plugin.state.libplugins", 2);
 #endif
 
 // display door hanger if flash not installed
@@ -1217,7 +1217,6 @@ pref("services.sync.prefs.sync.browser.link.open_newwindow", true);
 pref("services.sync.prefs.sync.browser.offline-apps.notify", true);
 pref("services.sync.prefs.sync.browser.safebrowsing.enabled", true);
 pref("services.sync.prefs.sync.browser.safebrowsing.malware.enabled", true);
-pref("services.sync.prefs.sync.browser.search.selectedEngine", true);
 pref("services.sync.prefs.sync.browser.search.update", true);
 pref("services.sync.prefs.sync.browser.sessionstore.restore_on_demand", true);
 pref("services.sync.prefs.sync.browser.startup.homepage", true);
@@ -1293,6 +1292,7 @@ pref("devtools.toolbox.toolbarSpec", '["splitconsole", "paintflashing toggle","t
 pref("devtools.toolbox.sideEnabled", true);
 pref("devtools.toolbox.zoomValue", "1");
 pref("devtools.toolbox.splitconsoleEnabled", false);
+pref("devtools.toolbox.splitconsoleHeight", 100);
 
 // Toolbox Button preferences
 pref("devtools.command-button-pick.enabled", true);
@@ -1454,7 +1454,7 @@ pref("devtools.browserconsole.filter.secwarn", true);
 pref("devtools.webconsole.fontSize", 0);
 
 // Number of usages of the web console or scratchpad.
-// If this is less than 10, then pasting code into the web console or scratchpad is disabled
+// If this is less than 5, then pasting code into the web console or scratchpad is disabled
 pref("devtools.selfxss.count", 0);
 
 // Persistent logging: |true| if you want the Web Console to keep all of the
@@ -1574,10 +1574,14 @@ pref("loop.enabled", false);
 
 pref("loop.server", "https://loop.services.mozilla.com");
 pref("loop.seenToS", "unseen");
+pref("loop.legal.ToS_url", "https://accounts.firefox.com/legal/terms");
+pref("loop.legal.privacy_url", "https://www.mozilla.org/privacy/");
 pref("loop.do_not_disturb", false);
 pref("loop.ringtone", "chrome://browser/content/loop/shared/sounds/Firefox-Long.ogg");
 pref("loop.retry_delay.start", 60000);
 pref("loop.retry_delay.limit", 300000);
+pref("loop.feedback.baseUrl", "https://input.mozilla.org/api/v1/feedback");
+pref("loop.feedback.product", "Loop");
 
 // serverURL to be assigned by services team
 pref("services.push.serverURL", "wss://push.services.mozilla.com/");

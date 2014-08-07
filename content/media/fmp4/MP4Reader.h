@@ -12,6 +12,7 @@
 #include "PlatformDecoderModule.h"
 #include "mp4_demuxer/mp4_demuxer.h"
 #include "MediaTaskQueue.h"
+#include "mozilla/CDMProxy.h"
 
 #include <deque>
 #include "mozilla/Monitor.h"
@@ -52,13 +53,21 @@ public:
 
   virtual bool IsMediaSeekable() MOZ_OVERRIDE;
 
+  virtual void NotifyDataArrived(const char* aBuffer, uint32_t aLength,
+                                 int64_t aOffset) MOZ_OVERRIDE;
+
   virtual nsresult GetBuffered(dom::TimeRanges* aBuffered,
                                int64_t aStartTime) MOZ_OVERRIDE;
 
+  virtual bool IsWaitingMediaResources() MOZ_OVERRIDE;
+
+  virtual nsresult ResetDecode() MOZ_OVERRIDE;
+
+  virtual void Shutdown() MOZ_OVERRIDE;
+
 private:
 
-  // Destroys all decoder resources.
-  void Shutdown();
+  void ExtractCryptoInitData(nsTArray<uint8_t>& aInitData);
 
   // Initializes mLayersBackendType if possible.
   void InitLayersBackendType();
@@ -116,14 +125,15 @@ private:
       , mError(false)
       , mIsFlushing(false)
       , mDrainComplete(false)
+      , mEOS(false)
     {
     }
 
     // The platform decoder.
-    RefPtr<MediaDataDecoder> mDecoder;
+    nsRefPtr<MediaDataDecoder> mDecoder;
     // TaskQueue on which decoder can choose to decode.
     // Only non-null up until the decoder is created.
-    RefPtr<MediaTaskQueue> mTaskQueue;
+    nsRefPtr<MediaTaskQueue> mTaskQueue;
     // Callback that receives output and error notifications from the decoder.
     nsAutoPtr<DecoderCallback> mCallback;
     // Monitor that protects all non-threadsafe state; the primitives
@@ -138,10 +148,11 @@ private:
     bool mError;
     bool mIsFlushing;
     bool mDrainComplete;
+    bool mEOS;
   };
   DecoderData mAudio;
   DecoderData mVideo;
-  // Queued frame extracted by the demuxer, but not yet sent to the platform
+  // Queued samples extracted by the demuxer, but not yet sent to the platform
   // decoder.
   nsAutoPtr<mp4_demuxer::MP4Sample> mQueuedVideoSample;
 
@@ -152,11 +163,19 @@ private:
   uint64_t mLastReportedNumDecodedFrames;
 
   DecoderData& GetDecoderData(mp4_demuxer::TrackType aTrack);
-  MP4SampleQueue& SampleQueue(mp4_demuxer::TrackType aTrack);
   MediaDataDecoder* Decoder(mp4_demuxer::TrackType aTrack);
 
   layers::LayersBackend mLayersBackendType;
 
+  nsTArray<nsTArray<uint8_t>> mInitDataEncountered;
+  Monitor mTimeRangesMonitor;
+  nsTArray<mp4_demuxer::Interval<Microseconds>> mTimeRanges;
+
+  // True if we've read the streams' metadata.
+  bool mDemuxerInitialized;
+
+  // Synchronized by decoder monitor.
+  bool mIsEncrypted;
 };
 
 } // namespace mozilla
