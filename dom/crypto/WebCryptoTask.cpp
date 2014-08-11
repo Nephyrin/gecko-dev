@@ -96,6 +96,17 @@ enum TelemetryAlgorithm {
     return NS_ERROR_DOM_UNKNOWN_ERR; \
   }
 
+// Safety check for algorithms that use keys, suitable for constructors
+#define CHECK_KEY_ALGORITHM(keyAlg, algName) \
+  { \
+    nsString keyAlgName; \
+    keyAlg->GetName(keyAlgName); \
+    if (!keyAlgName.EqualsLiteral(algName)) { \
+      mEarlyRv = NS_ERROR_DOM_INVALID_ACCESS_ERR; \
+      return; \
+    } \
+  }
+
 class ClearException
 {
 public:
@@ -202,8 +213,8 @@ MapHashAlgorithmNameToBlockSize(const nsString& aName)
 }
 
 inline nsresult
-GetKeySizeForAlgorithm(JSContext* aCx, const ObjectOrString& aAlgorithm,
-                       size_t& aLength)
+GetKeyLengthForAlgorithm(JSContext* aCx, const ObjectOrString& aAlgorithm,
+                         size_t& aLength)
 {
   aLength = 0;
 
@@ -218,7 +229,7 @@ GetKeySizeForAlgorithm(JSContext* aCx, const ObjectOrString& aAlgorithm,
       algName.EqualsLiteral(WEBCRYPTO_ALG_AES_CTR) ||
       algName.EqualsLiteral(WEBCRYPTO_ALG_AES_GCM) ||
       algName.EqualsLiteral(WEBCRYPTO_ALG_AES_KW)) {
-    RootedDictionary<AesKeyGenParams> params(aCx);
+    RootedDictionary<AesDerivedKeyParams> params(aCx);
     if (NS_FAILED(Coerce(aCx, params, aAlgorithm)) ||
         !params.mLength.WasPassed()) {
       return NS_ERROR_DOM_SYNTAX_ERR;
@@ -233,12 +244,19 @@ GetKeySizeForAlgorithm(JSContext* aCx, const ObjectOrString& aAlgorithm,
     return NS_OK;
   }
 
-  // Determine HMAC key length as the block size of the given hash.
+  // Read HMAC key length from given algorithm object or
+  // determine key length as the block size of the given hash.
   if (algName.EqualsLiteral(WEBCRYPTO_ALG_HMAC)) {
-    RootedDictionary<HmacImportParams> params(aCx);
+    RootedDictionary<HmacDerivedKeyParams> params(aCx);
     if (NS_FAILED(Coerce(aCx, params, aAlgorithm)) ||
         !params.mHash.WasPassed()) {
       return NS_ERROR_DOM_SYNTAX_ERR;
+    }
+
+    // Return the passed length, if any.
+    if (params.mLength.WasPassed()) {
+      aLength = params.mLength.Value();
+      return NS_OK;
     }
 
     nsString hashName;
@@ -246,6 +264,7 @@ GetKeySizeForAlgorithm(JSContext* aCx, const ObjectOrString& aAlgorithm,
       return NS_ERROR_DOM_SYNTAX_ERR;
     }
 
+    // Return the given hash algorithm's block size as the key length.
     size_t length = MapHashAlgorithmNameToBlockSize(hashName);
     if (length == 0) {
       return NS_ERROR_DOM_SYNTAX_ERR;
@@ -439,6 +458,8 @@ public:
     // Cache parameters depending on the specific algorithm
     TelemetryAlgorithm telemetryAlg;
     if (algName.EqualsLiteral(WEBCRYPTO_ALG_AES_CBC)) {
+      CHECK_KEY_ALGORITHM(aKey.Algorithm(), WEBCRYPTO_ALG_AES_CBC);
+
       mMechanism = CKM_AES_CBC_PAD;
       telemetryAlg = TA_AES_CBC;
       AesCbcParams params;
@@ -454,6 +475,8 @@ public:
         return;
       }
     } else if (algName.EqualsLiteral(WEBCRYPTO_ALG_AES_CTR)) {
+      CHECK_KEY_ALGORITHM(aKey.Algorithm(), WEBCRYPTO_ALG_AES_CTR);
+
       mMechanism = CKM_AES_CTR;
       telemetryAlg = TA_AES_CTR;
       AesCtrParams params;
@@ -472,6 +495,8 @@ public:
 
       mCounterLength = params.mLength.Value();
     } else if (algName.EqualsLiteral(WEBCRYPTO_ALG_AES_GCM)) {
+      CHECK_KEY_ALGORITHM(aKey.Algorithm(), WEBCRYPTO_ALG_AES_GCM);
+
       mMechanism = CKM_AES_GCM;
       telemetryAlg = TA_AES_GCM;
       AesGcmParams params;
@@ -619,6 +644,8 @@ public:
   void Init(JSContext* aCx, const ObjectOrString& aAlgorithm,
             CryptoKey& aKey, bool aEncrypt)
   {
+    CHECK_KEY_ALGORITHM(aKey.Algorithm(), WEBCRYPTO_ALG_AES_KW);
+
     nsString algName;
     mEarlyRv = GetAlgorithmName(aCx, aAlgorithm, algName);
     if (NS_FAILED(mEarlyRv)) {
@@ -746,6 +773,8 @@ public:
 
     Telemetry::Accumulate(Telemetry::WEBCRYPTO_ALG, TA_RSAES_PKCS1);
 
+    CHECK_KEY_ALGORITHM(aKey.Algorithm(), WEBCRYPTO_ALG_RSAES_PKCS1);
+
     if (mEncrypt) {
       if (!mPubKey) {
         mEarlyRv = NS_ERROR_DOM_INVALID_ACCESS_ERR;
@@ -841,6 +870,8 @@ public:
   {
     Telemetry::Accumulate(Telemetry::WEBCRYPTO_ALG, TA_RSA_OAEP);
 
+    CHECK_KEY_ALGORITHM(aKey.Algorithm(), WEBCRYPTO_ALG_RSA_OAEP);
+
     if (mEncrypt) {
       if (!mPubKey) {
         mEarlyRv = NS_ERROR_DOM_INVALID_ACCESS_ERR;
@@ -855,15 +886,19 @@ public:
       mStrength = PK11_GetPrivateModulusLen(mPrivKey);
     }
 
-    RootedDictionary<RsaOaepParams> params(aCx);
-    mEarlyRv = Coerce(aCx, params, aAlgorithm);
-    if (NS_FAILED(mEarlyRv)) {
-      mEarlyRv = NS_ERROR_DOM_SYNTAX_ERR;
-      return;
-    }
+    // The algorithm could just be given as a string
+    // in which case there would be no label specified.
+    if (!aAlgorithm.IsString()) {
+      RootedDictionary<RsaOaepParams> params(aCx);
+      mEarlyRv = Coerce(aCx, params, aAlgorithm);
+      if (NS_FAILED(mEarlyRv)) {
+        mEarlyRv = NS_ERROR_DOM_SYNTAX_ERR;
+        return;
+      }
 
-    if (params.mLabel.WasPassed() && !params.mLabel.Value().IsNull()) {
-      ATTEMPT_BUFFER_INIT(mLabel, params.mLabel.Value().Value());
+      if (params.mLabel.WasPassed() && !params.mLabel.Value().IsNull()) {
+        ATTEMPT_BUFFER_INIT(mLabel, params.mLabel.Value().Value());
+      }
     }
     // Otherwise mLabel remains the empty octet string, as intended
 
@@ -965,6 +1000,8 @@ public:
     , mSymKey(aKey.GetSymKey())
     , mSign(aSign)
   {
+    CHECK_KEY_ALGORITHM(aKey.Algorithm(), WEBCRYPTO_ALG_HMAC);
+
     ATTEMPT_BUFFER_INIT(mData, aData);
     if (!aSign) {
       ATTEMPT_BUFFER_INIT(mSignature, aSignature);
@@ -1071,6 +1108,8 @@ public:
     , mVerified(false)
   {
     Telemetry::Accumulate(Telemetry::WEBCRYPTO_ALG, TA_RSASSA_PKCS1);
+
+    CHECK_KEY_ALGORITHM(aKey.Algorithm(), WEBCRYPTO_ALG_RSASSA_PKCS1);
 
     ATTEMPT_BUFFER_INIT(mData, aData);
     if (!aSign) {
@@ -1942,7 +1981,7 @@ public:
         algName.EqualsLiteral(WEBCRYPTO_ALG_AES_CTR) ||
         algName.EqualsLiteral(WEBCRYPTO_ALG_AES_GCM) ||
         algName.EqualsLiteral(WEBCRYPTO_ALG_AES_KW)) {
-      mEarlyRv = GetKeySizeForAlgorithm(aCx, aAlgorithm, mLength);
+      mEarlyRv = GetKeyLengthForAlgorithm(aCx, aAlgorithm, mLength);
       if (NS_FAILED(mEarlyRv)) {
         return;
       }
@@ -2267,7 +2306,7 @@ public:
     : mSymKey(aKey.GetSymKey())
   {
     size_t length;
-    mEarlyRv = GetKeySizeForAlgorithm(aCx, aTargetAlgorithm, length);
+    mEarlyRv = GetKeyLengthForAlgorithm(aCx, aTargetAlgorithm, length);
 
     if (NS_SUCCEEDED(mEarlyRv)) {
       Init(aCx, aAlgorithm, aKey, length);
@@ -2277,6 +2316,8 @@ public:
   void Init(JSContext* aCx, const ObjectOrString& aAlgorithm, CryptoKey& aKey,
             uint32_t aLength)
   {
+    CHECK_KEY_ALGORITHM(aKey.Algorithm(), WEBCRYPTO_ALG_PBKDF2);
+
     // Check that we got a symmetric key
     if (mSymKey.Length() == 0) {
       mEarlyRv = NS_ERROR_DOM_INVALID_ACCESS_ERR;
@@ -2426,7 +2467,7 @@ public:
                      CryptoKey& aKey, const ObjectOrString& aTargetAlgorithm)
     : mPrivKey(aKey.GetPrivateKey())
   {
-    mEarlyRv = GetKeySizeForAlgorithm(aCx, aTargetAlgorithm, mLength);
+    mEarlyRv = GetKeyLengthForAlgorithm(aCx, aTargetAlgorithm, mLength);
     if (NS_SUCCEEDED(mEarlyRv)) {
       Init(aCx, aAlgorithm, aKey);
     }
@@ -2434,6 +2475,8 @@ public:
 
   void Init(JSContext* aCx, const ObjectOrString& aAlgorithm, CryptoKey& aKey)
   {
+    CHECK_KEY_ALGORITHM(aKey.Algorithm(), WEBCRYPTO_ALG_ECDH);
+
     // Check that we have a private key.
     if (!mPrivKey) {
       mEarlyRv = NS_ERROR_DOM_INVALID_ACCESS_ERR;
@@ -2464,14 +2507,7 @@ public:
     }
 
     nsRefPtr<KeyAlgorithm> publicAlgorithm = publicKey->Algorithm();
-
-    // Given public key must be an ECDH key.
-    nsString algName;
-    publicAlgorithm->GetName(algName);
-    if (!algName.EqualsLiteral(WEBCRYPTO_ALG_ECDH)) {
-      mEarlyRv = NS_ERROR_DOM_INVALID_ACCESS_ERR;
-      return;
-    }
+    CHECK_KEY_ALGORITHM(publicAlgorithm, WEBCRYPTO_ALG_ECDH);
 
     // Both keys must use the same named curve.
     nsString curve1, curve2;

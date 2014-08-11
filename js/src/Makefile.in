@@ -314,11 +314,13 @@ selfhosting_srcs := \
   $(srcdir)/builtin/ParallelUtilities.js \
   $(srcdir)/builtin/Array.js \
   $(srcdir)/builtin/Date.js \
+  $(srcdir)/builtin/Error.js \
   $(srcdir)/builtin/Intl.js \
   $(srcdir)/builtin/IntlData.js \
   $(srcdir)/builtin/Iterator.js \
   $(srcdir)/builtin/Map.js \
   $(srcdir)/builtin/Number.js \
+  $(srcdir)/builtin/Object.js \
   $(srcdir)/builtin/String.js \
   $(srcdir)/builtin/Set.js \
   $(srcdir)/builtin/TypedObject.js \
