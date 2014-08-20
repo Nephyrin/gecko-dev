@@ -8,6 +8,12 @@ import urlparse
 
 treeherder_base = "http://treeherder.mozilla.org/"
 
+"""Simple script for downloading structured logs from treeherder.
+
+For the moment this is specialised to work with web-platform-tests
+logs; in due course it should move somewhere generic and get hooked
+up to mach or similar"""
+
 # Interpretation of the "job" list from
 # https://github.com/mozilla/treeherder-service/blob/master/treeherder/webapp/api/utils.py#L18
 
