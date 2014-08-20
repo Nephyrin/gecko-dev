@@ -1277,9 +1277,6 @@ IonBuilder::traverseBytecode()
         }
 #endif
 
-        if (isNativeToBytecodeMapEnabled())
-            current->add(MPcOffset::New(alloc()));
-
         // Nothing in inspectOpcode() is allowed to advance the pc.
         JSOp op = JSOp(*pc);
         if (!inspectOpcode(op))
@@ -1549,6 +1546,9 @@ IonBuilder::inspectOpcode(JSOp op)
 
       case JSOP_NEWARRAY:
         return jsop_newarray(GET_UINT24(pc));
+
+      case JSOP_NEWARRAY_COPYONWRITE:
+        return jsop_newarray_copyonwrite();
 
       case JSOP_NEWOBJECT:
         return jsop_newobject();
@@ -5297,6 +5297,7 @@ IonBuilder::makeCallHelper(JSFunction *target, CallInfo &callInfo, bool cloneAtC
         // MCall accordingly.
         types::TemporaryTypeSet *thisTypes = callInfo.thisArg()->resultTypeSet();
         if (thisTypes &&
+            thisTypes->getKnownMIRType() == MIRType_Object &&
             thisTypes->isDOMClass() &&
             testShouldDOMCall(thisTypes, target, JSJitInfo::Method))
         {
@@ -5535,6 +5536,28 @@ IonBuilder::jsop_newarray(uint32_t count)
         templateObject->setShouldConvertDoubleElements();
     else
         templateObject->clearShouldConvertDoubleElements();
+    return true;
+}
+
+bool
+IonBuilder::jsop_newarray_copyonwrite()
+{
+    JSObject *templateObject = types::GetCopyOnWriteObject(script(), pc);
+
+    // The baseline compiler should have ensured the template object has a type
+    // with the copy on write flag set already. During the arguments usage
+    // analysis the baseline compiler hasn't run yet, however, though in this
+    // case the template object's type doesn't matter.
+    JS_ASSERT_IF(info().executionMode() != ArgumentsUsageAnalysis,
+                 templateObject->type()->hasAnyFlags(types::OBJECT_FLAG_COPY_ON_WRITE));
+
+    MNewArrayCopyOnWrite *ins =
+        MNewArrayCopyOnWrite::New(alloc(), constraints(), templateObject,
+                                  templateObject->type()->initialHeap(constraints()));
+
+    current->add(ins);
+    current->push(ins);
+
     return true;
 }
 
@@ -7933,6 +7956,9 @@ IonBuilder::setElemTryCache(bool *emitted, MDefinition *object,
     // another value.
     bool guardHoles = ElementAccessHasExtraIndexedProperty(constraints(), object);
 
+    // Make sure the object being written to doesn't have copy on write elements.
+    object = addMaybeCopyElementsForWrite(object);
+
     if (NeedsPostBarrier(info(), value))
         current->add(MPostWriteBarrier::New(alloc(), object, value));
 
@@ -7967,6 +7993,9 @@ IonBuilder::jsop_setelem_dense(types::TemporaryTypeSet::DoubleConversion convers
     MInstruction *idInt32 = MToInt32::New(alloc(), id);
     current->add(idInt32);
     id = idInt32;
+
+    // Copy the elements vector if necessary.
+    obj = addMaybeCopyElementsForWrite(obj);
 
     // Get the elements vector.
     MElements *elements = MElements::New(alloc(), obj);
@@ -9252,8 +9281,8 @@ IonBuilder::needsToMonitorMissingProperties(types::TemporaryTypeSet *types)
     // TypeScript::Monitor to ensure that the observed type set contains
     // undefined. To account for possible missing properties, which property
     // types do not track, we must always insert a type barrier.
-    return (info().executionMode() == ParallelExecution &&
-            !types->hasType(types::Type::UndefinedType()));
+    return info().executionMode() == ParallelExecution &&
+           !types->hasType(types::Type::UndefinedType());
 }
 
 bool
@@ -10258,6 +10287,16 @@ IonBuilder::addConvertElementsToDoubles(MDefinition *elements)
     MInstruction *convert = MConvertElementsToDoubles::New(alloc(), elements);
     current->add(convert);
     return convert;
+}
+
+MDefinition *
+IonBuilder::addMaybeCopyElementsForWrite(MDefinition *object)
+{
+    if (!ElementAccessMightBeCopyOnWrite(constraints(), object))
+        return object;
+    MInstruction *copy = MMaybeCopyElementsForWrite::New(alloc(), object);
+    current->add(copy);
+    return copy;
 }
 
 MInstruction *

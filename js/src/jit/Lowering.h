@@ -70,6 +70,7 @@ class LIRGenerator : public LIRGeneratorSpecific
     bool visitGoto(MGoto *ins);
     bool visitTableSwitch(MTableSwitch *tableswitch);
     bool visitNewArray(MNewArray *ins);
+    bool visitNewArrayCopyOnWrite(MNewArrayCopyOnWrite *ins);
     bool visitNewObject(MNewObject *ins);
     bool visitNewDeclEnvObject(MNewDeclEnvObject *ins);
     bool visitNewCallObject(MNewCallObject *ins);
@@ -141,7 +142,6 @@ class LIRGenerator : public LIRGeneratorSpecific
     bool visitFromCharCode(MFromCharCode *ins);
     bool visitStringSplit(MStringSplit *ins);
     bool visitStart(MStart *start);
-    bool visitPcOffset(MPcOffset *pcOffset);
     bool visitOsrEntry(MOsrEntry *entry);
     bool visitNop(MNop *nop);
     bool visitLimitedTruncate(MLimitedTruncate *nop);
@@ -167,6 +167,7 @@ class LIRGenerator : public LIRGeneratorSpecific
     bool visitConstantElements(MConstantElements *ins);
     bool visitConvertElementsToDoubles(MConvertElementsToDoubles *ins);
     bool visitMaybeToDoubleElement(MMaybeToDoubleElement *ins);
+    bool visitMaybeCopyElementsForWrite(MMaybeCopyElementsForWrite *ins);
     bool visitLoadSlot(MLoadSlot *ins);
     bool visitFunctionEnvironment(MFunctionEnvironment *ins);
     bool visitForkJoinContext(MForkJoinContext *ins);
@@ -269,6 +270,10 @@ class LIRGenerator : public LIRGeneratorSpecific
     bool visitSimdBinaryArith(MSimdBinaryArith *ins);
     bool visitSimdValueX4(MSimdValueX4 *ins);
     bool visitSimdConstant(MSimdConstant *ins);
+    bool visitPhi(MPhi *ins);
+    bool visitBeta(MBeta *ins);
+    bool visitObjectState(MObjectState *ins);
+    bool visitArrayState(MArrayState *ins);
 };
 
 } // namespace jit

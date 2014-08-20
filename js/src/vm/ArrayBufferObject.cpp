@@ -269,7 +269,7 @@ ArrayBufferObject::class_constructor(JSContext *cx, unsigned argc, Value *vp)
 static ArrayBufferObject::BufferContents
 AllocateArrayBufferContents(JSContext *cx, uint32_t nbytes)
 {
-    void *p = cx->runtime()->callocCanGC(nbytes);
+    uint8_t *p = cx->runtime()->pod_callocCanGC<uint8_t>(nbytes);
     if (!p)
         js_ReportOutOfMemory(cx);
 
@@ -1145,6 +1145,12 @@ JS_IsArrayBufferObject(JSObject *obj)
 {
     obj = CheckedUnwrap(obj);
     return obj ? obj->is<ArrayBufferObject>() : false;
+}
+
+JS_FRIEND_API(bool)
+JS_ArrayBufferHasData(JSObject *obj)
+{
+    return CheckedUnwrap(obj)->as<ArrayBufferObject>().hasData();
 }
 
 JS_FRIEND_API(JSObject *)

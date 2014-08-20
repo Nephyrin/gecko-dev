@@ -34,6 +34,9 @@
 #include "TextRenderer.h"               // for TextRenderer
 #include <vector>
 
+#define CULLING_LOG(...)
+// #define CULLING_LOG(...) printf_stderr("CULLING: " __VA_ARGS__)
+
 namespace mozilla {
 namespace layers {
 
@@ -52,6 +55,8 @@ GetOpaqueRect(Layer* aLayer)
 
   // Just bail if there's anything difficult to handle.
   if (!is2D || aLayer->GetMaskLayer() ||
+    aLayer->GetIsFixedPosition() ||
+    aLayer->GetIsStickyPosition() ||
     aLayer->GetEffectiveOpacity() != 1.0f ||
     matrix.HasNonIntegerTranslation()) {
     return result;
@@ -222,8 +227,8 @@ static void DrawVelGraph(const nsIntRect& aClipRect,
   for (int32_t i = (int32_t)velocityData->mData.size() - 2; i >= 0; i--) {
     const gfx::Point& p1 = velocityData->mData[i+1].mPoint;
     const gfx::Point& p2 = velocityData->mData[i].mPoint;
-    int vel = sqrt((p1.x - p2.x) * (p1.x - p2.x) +
-                   (p1.y - p2.y) * (p1.y - p2.y));
+    int vel = sqrt((p1.x - p2.x).value * (p1.x - p2.x).value +
+                   (p1.y - p2.y).value * (p1.y - p2.y).value);
     Point next = Point(graphRect.width / circularBufferSize * i,
                        graphRect.height - vel/yScaleFactor);
     if (first) {
@@ -265,11 +270,9 @@ static void PrintUniformityInfo(Layer* aLayer)
     return;
   }
 
-  LayerIntPoint scrollOffset = RoundedToInt(frameMetrics.GetScrollOffsetInLayerPixels());
+  const LayerPoint scrollOffset = frameMetrics.GetScrollOffsetInLayerPixels();
   const gfx::Point layerTransform = GetScrollData(aLayer);
-  gfx::Point layerScroll;
-  layerScroll.x = scrollOffset.x - layerTransform.x;
-  layerScroll.y = scrollOffset.y - layerTransform.y;
+  const gfx::Point layerScroll = scrollOffset.ToUnknownPoint() - layerTransform;
 
   printf_stderr("UniformityInfo Layer_Move %llu %p %f, %f\n",
     TimeStamp::Now(), aLayer, layerScroll.x, layerScroll.y);
@@ -321,16 +324,26 @@ ContainerPrepare(ContainerT* aContainer,
       continue;
     }
 
+    CULLING_LOG("Preparing sublayer %p\n", layerToRender->GetLayer());
+
     nsIntRegion savedVisibleRegion;
     bool restoreVisibleRegion = false;
+    gfx::Matrix matrix;
+    bool is2D = layerToRender->GetLayer()->GetBaseTransform().Is2D(&matrix);
     if (i + 1 < children.Length() &&
-        layerToRender->GetLayer()->GetEffectiveTransform().IsIdentity()) {
+        is2D && !matrix.HasNonIntegerTranslation()) {
       LayerComposite* nextLayer = static_cast<LayerComposite*>(children.ElementAt(i + 1)->ImplData());
+      CULLING_LOG("Culling against %p\n", nextLayer->GetLayer());
       nsIntRect nextLayerOpaqueRect;
       if (nextLayer && nextLayer->GetLayer()) {
         nextLayerOpaqueRect = GetOpaqueRect(nextLayer->GetLayer());
+        gfx::Point point = matrix.GetTranslation();
+        nextLayerOpaqueRect.MoveBy(static_cast<int>(-point.x), static_cast<int>(-point.y));
+        CULLING_LOG("  point %i, %i\n", static_cast<int>(-point.x), static_cast<int>(-point.y));
+        CULLING_LOG("  opaque rect %i, %i, %i, %i\n", nextLayerOpaqueRect.x, nextLayerOpaqueRect.y, nextLayerOpaqueRect.width, nextLayerOpaqueRect.height);
       }
       if (!nextLayerOpaqueRect.IsEmpty()) {
+        CULLING_LOG("  draw\n");
         savedVisibleRegion = layerToRender->GetShadowVisibleRegion();
         nsIntRegion visibleRegion;
         visibleRegion.Sub(savedVisibleRegion, nextLayerOpaqueRect);
@@ -339,11 +352,15 @@ ContainerPrepare(ContainerT* aContainer,
         }
         layerToRender->SetShadowVisibleRegion(visibleRegion);
         restoreVisibleRegion = true;
+      } else {
+        CULLING_LOG("  skip\n");
       }
     }
     layerToRender->Prepare(clipRect);
     aContainer->mPrepared->mLayers.AppendElement(PreparedLayer(layerToRender, clipRect, restoreVisibleRegion, savedVisibleRegion));
   }
+
+  CULLING_LOG("Preparing container layer %p\n", aContainer->GetLayer());
 
   /**
    * Setup our temporary surface for rendering the contents of this container.

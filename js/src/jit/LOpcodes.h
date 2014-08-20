@@ -31,6 +31,7 @@
     _(TableSwitchV)                 \
     _(Goto)                         \
     _(NewArray)                     \
+    _(NewArrayCopyOnWrite)          \
     _(ArraySplice)                  \
     _(NewObject)                    \
     _(NewDeclEnvObject)             \
@@ -156,7 +157,6 @@
     _(DoubleToString)               \
     _(ValueToString)                \
     _(Start)                        \
-    _(PcOffset)                     \
     _(OsrEntry)                     \
     _(OsrValue)                     \
     _(OsrScopeChain)                \
@@ -175,6 +175,7 @@
     _(Elements)                     \
     _(ConvertElementsToDoubles)     \
     _(MaybeToDoubleElement)         \
+    _(MaybeCopyElementsForWrite)    \
     _(LoadSlotV)                    \
     _(LoadSlotT)                    \
     _(StoreSlotV)                   \

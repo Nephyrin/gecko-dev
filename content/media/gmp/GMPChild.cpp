@@ -37,7 +37,8 @@ namespace mozilla {
 namespace gmp {
 
 GMPChild::GMPChild()
-  : mLib(nullptr)
+  : mAsyncShutdown(nullptr)
+  , mLib(nullptr)
   , mGetAPIFunc(nullptr)
   , mGMPMessageLoop(MessageLoop::current())
 {
@@ -127,14 +128,15 @@ GMPChild::Init(const std::string& aPluginPath,
     return false;
   }
 
+#ifdef MOZ_CRASHREPORTER
+  SendPCrashReporterConstructor(CrashReporter::CurrentThreadId());
+#endif
+
 #if defined(XP_MACOSX) && defined(MOZ_GMP_SANDBOX)
   mPluginPath = aPluginPath;
   return true;
 #endif
 
-#ifdef MOZ_CRASHREPORTER
-  SendPCrashReporterConstructor(CrashReporter::CurrentThreadId());
-#endif
 #if defined(XP_WIN)
   mozilla::SandboxTarget::Instance()->StartSandbox();
 #endif
@@ -181,6 +183,14 @@ GMPChild::LoadPluginLibrary(const std::string& aPluginPath)
   mGetAPIFunc = reinterpret_cast<GMPGetAPIFunc>(PR_FindFunctionSymbol(mLib, "GMPGetAPI"));
   if (!mGetAPIFunc) {
     return false;
+  }
+
+  void* sh = nullptr;
+  GMPAsyncShutdownHost* host = static_cast<GMPAsyncShutdownHost*>(this);
+  GMPErr err = mGetAPIFunc("async-shutdown", host, &sh);
+  if (err == GMPNoErr && sh) {
+    mAsyncShutdown = reinterpret_cast<GMPAsyncShutdown*>(sh);
+    SendAsyncShutdownRequired();
   }
 
   return true;
@@ -390,11 +400,56 @@ GMPChild::GetGMPTimers()
   return mTimerChild;
 }
 
+PGMPStorageChild*
+GMPChild::AllocPGMPStorageChild()
+{
+  return new GMPStorageChild(this);
+}
+
+bool
+GMPChild::DeallocPGMPStorageChild(PGMPStorageChild* aActor)
+{
+  mStorage = nullptr;
+  return true;
+}
+
+GMPStorageChild*
+GMPChild::GetGMPStorage()
+{
+  if (!mStorage) {
+    PGMPStorageChild* sc = SendPGMPStorageConstructor();
+    if (!sc) {
+      return nullptr;
+    }
+    mStorage = static_cast<GMPStorageChild*>(sc);
+  }
+  return mStorage;
+}
+
 bool
 GMPChild::RecvCrashPluginNow()
 {
   MOZ_CRASH();
   return true;
+}
+
+bool
+GMPChild::RecvBeginAsyncShutdown()
+{
+  MOZ_ASSERT(mGMPMessageLoop == MessageLoop::current());
+  if (mAsyncShutdown) {
+    mAsyncShutdown->BeginShutdown();
+  } else {
+    ShutdownComplete();
+  }
+  return true;
+}
+
+void
+GMPChild::ShutdownComplete()
+{
+  MOZ_ASSERT(mGMPMessageLoop == MessageLoop::current());
+  SendAsyncShutdownComplete();
 }
 
 } // namespace gmp

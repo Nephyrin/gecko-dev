@@ -156,6 +156,13 @@ LIRGenerator::visitNewArray(MNewArray *ins)
 }
 
 bool
+LIRGenerator::visitNewArrayCopyOnWrite(MNewArrayCopyOnWrite *ins)
+{
+    LNewArrayCopyOnWrite *lir = new(alloc()) LNewArrayCopyOnWrite(temp());
+    return define(lir, ins) && assignSafepoint(lir, ins);
+}
+
+bool
 LIRGenerator::visitNewObject(MNewObject *ins)
 {
     LNewObject *lir = new(alloc()) LNewObject(temp());
@@ -1675,13 +1682,6 @@ LIRGenerator::visitStart(MStart *start)
 }
 
 bool
-LIRGenerator::visitPcOffset(MPcOffset *pcOffset)
-{
-    LPcOffset *lir = new(alloc()) LPcOffset;
-    return add(lir, pcOffset);
-}
-
-bool
 LIRGenerator::visitNop(MNop *nop)
 {
     return true;
@@ -2170,6 +2170,13 @@ LIRGenerator::visitMaybeToDoubleElement(MMaybeToDoubleElement *ins)
                                                                     useRegisterAtStart(ins->value()),
                                                                     tempDouble());
     return defineBox(lir, ins);
+}
+
+bool
+LIRGenerator::visitMaybeCopyElementsForWrite(MMaybeCopyElementsForWrite *ins)
+{
+    LInstruction *check = new(alloc()) LMaybeCopyElementsForWrite(useRegister(ins->object()), temp());
+    return add(check, ins) && assignSafepoint(check, ins);
 }
 
 bool
@@ -3889,4 +3896,33 @@ LIRGenerator::generate()
 
     lirGraph_.setArgumentSlotCount(maxargslots_);
     return true;
+}
+
+bool
+LIRGenerator::visitPhi(MPhi *phi)
+{
+    // Phi nodes are not lowered because they are only meaningful for the register allocator.
+    MOZ_ASSUME_UNREACHABLE("Unexpected Phi node during Lowering.");
+}
+
+bool
+LIRGenerator::visitBeta(MBeta *beta)
+{
+    // Beta nodes are supposed to be removed before because they are
+    // only used to carry the range information for Range analysis
+    MOZ_ASSUME_UNREACHABLE("Unexpected Beta node during Lowering.");
+}
+
+bool
+LIRGenerator::visitObjectState(MObjectState *objState)
+{
+    // ObjectState nodes are always recovered on bailouts
+    MOZ_ASSUME_UNREACHABLE("Unexpected ObjectState node during Lowering.");
+}
+
+bool
+LIRGenerator::visitArrayState(MArrayState *objState)
+{
+    // ArrayState nodes are always recovered on bailouts
+    MOZ_ASSUME_UNREACHABLE("Unexpected ArrayState node during Lowering.");
 }

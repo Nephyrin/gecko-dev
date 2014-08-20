@@ -65,8 +65,8 @@ private:
   };
 
   class ResourceQueueDeallocator : public nsDequeFunctor {
-    virtual void* operator() (void* anObject) {
-      delete static_cast<ResourceItem*>(anObject);
+    virtual void* operator() (void* aObject) {
+      delete static_cast<ResourceItem*>(aObject);
       return nullptr;
     }
   };
@@ -75,6 +75,7 @@ private:
   public:
     ResourceQueue() :
       nsDeque(new ResourceQueueDeallocator()),
+      mLogicalLength(0),
       mOffset(0)
     {
     }
@@ -87,12 +88,7 @@ private:
     // Returns the length of all items in the queue plus the offset.
     // This is the logical length of the resource.
     inline uint64_t GetLength() {
-      uint64_t s = mOffset;
-      for (uint32_t i = 0; i < GetSize(); ++i) {
-        ResourceItem* item = ResourceAt(i);
-        s += item->mData.Length();
-      }
-      return s;
+      return mLogicalLength;
     }
 
     // Copies aCount bytes from aOffset in the queue into aDest.
@@ -113,6 +109,7 @@ private:
     }
 
     inline void PushBack(ResourceItem* aItem) {
+      mLogicalLength += aItem->mData.Length();
       nsDeque::Push(aItem);
     }
 
@@ -184,8 +181,10 @@ private:
       return static_cast<ResourceItem*>(nsDeque::PopFront());
     }
 
-    // Logical offset into the resource of the first element
-    // in the queue.
+    // Logical length of the resource.
+    uint64_t mLogicalLength;
+
+    // Logical offset into the resource of the first element in the queue.
     uint64_t mOffset;
   };
 
@@ -273,6 +272,8 @@ public:
   void EvictBefore(uint64_t aOffset);
 
 private:
+  nsresult SeekInternal(int64_t aOffset);
+
   nsCOMPtr<nsIPrincipal> mPrincipal;
   const nsCString mType;
 

@@ -85,6 +85,9 @@
          Components.classes["@mozilla.org/autocomplete/search;1?name=unifiedcomplete"]
                    .getService(Components.interfaces.mozIPlacesAutoComplete);
       </field>
+      <field name="PlacesUtils" readonly="true">
+        (Components.utils.import("resource://gre/modules/PlacesUtils.jsm", {})).PlacesUtils;
+      </field>
       <field name="mTabBox" readonly="true">
         document.getAnonymousElementByAttribute(this, "anonid", "tabbox");
       </field>
@@ -773,6 +776,16 @@
                   unifiedComplete.registerOpenPage(aLocation);
                   this.mBrowser.registeredOpenURI = aLocation;
                 }
+
+                // It's possible we've moved from a URL that we cannot load remotely
+                // to one that we can. If so, switch to a remote browser. This will
+                // cause us to re-enter this onLocationChange function, but next time,
+                // updateBrowserRemotenessByURL will return false.
+                if (gMultiProcessBrowser &&
+                    this.mTabBrowser.updateBrowserRemotenessByURL(this.mBrowser,
+                                                                  aLocation.spec)) {
+                  this.mTabBrowser.loadURIWithFlags(aLocation.spec, aFlags);
+                }
               }
 
               if (!this.mBlank) {
@@ -840,9 +853,7 @@
 
             let sizedIconUrl = browser.mIconURL || "";
             if (sizedIconUrl) {
-              let size = Math.round(16 * window.devicePixelRatio);
-              sizedIconUrl += (sizedIconUrl.contains("#") ? "&" : "#") +
-                              "-moz-resolution=" + size + "," + size;
+              sizedIconUrl = this.PlacesUtils.getImageURLForResolution(window, sizedIconUrl);
             }
             if (sizedIconUrl != aTab.getAttribute("image")) {
               if (sizedIconUrl)
