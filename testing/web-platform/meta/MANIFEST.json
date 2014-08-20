@@ -3250,6 +3250,194 @@
         "url": "/js/builtins/Math.maxmin.js"
       },
       {
+        "path": "media-source/import_tests.sh",
+        "url": "/media-source/import_tests.sh"
+      },
+      {
+        "path": "media-source/manifest.txt",
+        "url": "/media-source/manifest.txt"
+      },
+      {
+        "path": "media-source/mediasource-config-changes.js",
+        "url": "/media-source/mediasource-config-changes.js"
+      },
+      {
+        "path": "media-source/mediasource-util.js",
+        "url": "/media-source/mediasource-util.js"
+      },
+      {
+        "path": "media-source/mp4/test-a-128k-44100Hz-1ch-manifest.json",
+        "url": "/media-source/mp4/test-a-128k-44100Hz-1ch-manifest.json"
+      },
+      {
+        "path": "media-source/mp4/test-a-128k-44100Hz-1ch.mp4",
+        "url": "/media-source/mp4/test-a-128k-44100Hz-1ch.mp4"
+      },
+      {
+        "path": "media-source/mp4/test-a-192k-44100Hz-1ch-manifest.json",
+        "url": "/media-source/mp4/test-a-192k-44100Hz-1ch-manifest.json"
+      },
+      {
+        "path": "media-source/mp4/test-a-192k-44100Hz-1ch.mp4",
+        "url": "/media-source/mp4/test-a-192k-44100Hz-1ch.mp4"
+      },
+      {
+        "path": "media-source/mp4/test-av-384k-44100Hz-1ch-320x240-30fps-10kfr-manifest.json",
+        "url": "/media-source/mp4/test-av-384k-44100Hz-1ch-320x240-30fps-10kfr-manifest.json"
+      },
+      {
+        "path": "media-source/mp4/test-av-384k-44100Hz-1ch-320x240-30fps-10kfr.mp4",
+        "url": "/media-source/mp4/test-av-384k-44100Hz-1ch-320x240-30fps-10kfr.mp4"
+      },
+      {
+        "path": "media-source/mp4/test-av-384k-44100Hz-1ch-640x480-30fps-10kfr-manifest.json",
+        "url": "/media-source/mp4/test-av-384k-44100Hz-1ch-640x480-30fps-10kfr-manifest.json"
+      },
+      {
+        "path": "media-source/mp4/test-av-384k-44100Hz-1ch-640x480-30fps-10kfr.mp4",
+        "url": "/media-source/mp4/test-av-384k-44100Hz-1ch-640x480-30fps-10kfr.mp4"
+      },
+      {
+        "path": "media-source/mp4/test-av-448k-44100Hz-1ch-640x480-30fps-10kfr-manifest.json",
+        "url": "/media-source/mp4/test-av-448k-44100Hz-1ch-640x480-30fps-10kfr-manifest.json"
+      },
+      {
+        "path": "media-source/mp4/test-av-448k-44100Hz-1ch-640x480-30fps-10kfr.mp4",
+        "url": "/media-source/mp4/test-av-448k-44100Hz-1ch-640x480-30fps-10kfr.mp4"
+      },
+      {
+        "path": "media-source/mp4/test-av-640k-44100Hz-1ch-640x480-30fps-10kfr-manifest.json",
+        "url": "/media-source/mp4/test-av-640k-44100Hz-1ch-640x480-30fps-10kfr-manifest.json"
+      },
+      {
+        "path": "media-source/mp4/test-av-640k-44100Hz-1ch-640x480-30fps-10kfr.mp4",
+        "url": "/media-source/mp4/test-av-640k-44100Hz-1ch-640x480-30fps-10kfr.mp4"
+      },
+      {
+        "path": "media-source/mp4/test-v-128k-320x240-24fps-8kfr-manifest.json",
+        "url": "/media-source/mp4/test-v-128k-320x240-24fps-8kfr-manifest.json"
+      },
+      {
+        "path": "media-source/mp4/test-v-128k-320x240-24fps-8kfr.mp4",
+        "url": "/media-source/mp4/test-v-128k-320x240-24fps-8kfr.mp4"
+      },
+      {
+        "path": "media-source/mp4/test-v-128k-320x240-30fps-10kfr-manifest.json",
+        "url": "/media-source/mp4/test-v-128k-320x240-30fps-10kfr-manifest.json"
+      },
+      {
+        "path": "media-source/mp4/test-v-128k-320x240-30fps-10kfr.mp4",
+        "url": "/media-source/mp4/test-v-128k-320x240-30fps-10kfr.mp4"
+      },
+      {
+        "path": "media-source/mp4/test-v-128k-640x480-30fps-10kfr-manifest.json",
+        "url": "/media-source/mp4/test-v-128k-640x480-30fps-10kfr-manifest.json"
+      },
+      {
+        "path": "media-source/mp4/test-v-128k-640x480-30fps-10kfr.mp4",
+        "url": "/media-source/mp4/test-v-128k-640x480-30fps-10kfr.mp4"
+      },
+      {
+        "path": "media-source/mp4/test-v-256k-320x240-30fps-10kfr-manifest.json",
+        "url": "/media-source/mp4/test-v-256k-320x240-30fps-10kfr-manifest.json"
+      },
+      {
+        "path": "media-source/mp4/test-v-256k-320x240-30fps-10kfr.mp4",
+        "url": "/media-source/mp4/test-v-256k-320x240-30fps-10kfr.mp4"
+      },
+      {
+        "path": "media-source/mp4/test.mp4",
+        "url": "/media-source/mp4/test.mp4"
+      },
+      {
+        "path": "media-source/webm/test-a-128k-44100Hz-1ch-manifest.json",
+        "url": "/media-source/webm/test-a-128k-44100Hz-1ch-manifest.json"
+      },
+      {
+        "path": "media-source/webm/test-a-128k-44100Hz-1ch.webm",
+        "url": "/media-source/webm/test-a-128k-44100Hz-1ch.webm"
+      },
+      {
+        "path": "media-source/webm/test-a-192k-44100Hz-1ch-manifest.json",
+        "url": "/media-source/webm/test-a-192k-44100Hz-1ch-manifest.json"
+      },
+      {
+        "path": "media-source/webm/test-a-192k-44100Hz-1ch.webm",
+        "url": "/media-source/webm/test-a-192k-44100Hz-1ch.webm"
+      },
+      {
+        "path": "media-source/webm/test-av-384k-44100Hz-1ch-320x240-30fps-10kfr-manifest.json",
+        "url": "/media-source/webm/test-av-384k-44100Hz-1ch-320x240-30fps-10kfr-manifest.json"
+      },
+      {
+        "path": "media-source/webm/test-av-384k-44100Hz-1ch-320x240-30fps-10kfr.webm",
+        "url": "/media-source/webm/test-av-384k-44100Hz-1ch-320x240-30fps-10kfr.webm"
+      },
+      {
+        "path": "media-source/webm/test-av-384k-44100Hz-1ch-640x480-30fps-10kfr-manifest.json",
+        "url": "/media-source/webm/test-av-384k-44100Hz-1ch-640x480-30fps-10kfr-manifest.json"
+      },
+      {
+        "path": "media-source/webm/test-av-384k-44100Hz-1ch-640x480-30fps-10kfr.webm",
+        "url": "/media-source/webm/test-av-384k-44100Hz-1ch-640x480-30fps-10kfr.webm"
+      },
+      {
+        "path": "media-source/webm/test-av-448k-44100Hz-1ch-640x480-30fps-10kfr-manifest.json",
+        "url": "/media-source/webm/test-av-448k-44100Hz-1ch-640x480-30fps-10kfr-manifest.json"
+      },
+      {
+        "path": "media-source/webm/test-av-448k-44100Hz-1ch-640x480-30fps-10kfr.webm",
+        "url": "/media-source/webm/test-av-448k-44100Hz-1ch-640x480-30fps-10kfr.webm"
+      },
+      {
+        "path": "media-source/webm/test-av-640k-44100Hz-1ch-640x480-30fps-10kfr-manifest.json",
+        "url": "/media-source/webm/test-av-640k-44100Hz-1ch-640x480-30fps-10kfr-manifest.json"
+      },
+      {
+        "path": "media-source/webm/test-av-640k-44100Hz-1ch-640x480-30fps-10kfr.webm",
+        "url": "/media-source/webm/test-av-640k-44100Hz-1ch-640x480-30fps-10kfr.webm"
+      },
+      {
+        "path": "media-source/webm/test-v-128k-320x240-24fps-8kfr-manifest.json",
+        "url": "/media-source/webm/test-v-128k-320x240-24fps-8kfr-manifest.json"
+      },
+      {
+        "path": "media-source/webm/test-v-128k-320x240-24fps-8kfr.webm",
+        "url": "/media-source/webm/test-v-128k-320x240-24fps-8kfr.webm"
+      },
+      {
+        "path": "media-source/webm/test-v-128k-320x240-30fps-10kfr-manifest.json",
+        "url": "/media-source/webm/test-v-128k-320x240-30fps-10kfr-manifest.json"
+      },
+      {
+        "path": "media-source/webm/test-v-128k-320x240-30fps-10kfr.webm",
+        "url": "/media-source/webm/test-v-128k-320x240-30fps-10kfr.webm"
+      },
+      {
+        "path": "media-source/webm/test-v-128k-640x480-30fps-10kfr-manifest.json",
+        "url": "/media-source/webm/test-v-128k-640x480-30fps-10kfr-manifest.json"
+      },
+      {
+        "path": "media-source/webm/test-v-128k-640x480-30fps-10kfr.webm",
+        "url": "/media-source/webm/test-v-128k-640x480-30fps-10kfr.webm"
+      },
+      {
+        "path": "media-source/webm/test-v-256k-320x240-30fps-10kfr-manifest.json",
+        "url": "/media-source/webm/test-v-256k-320x240-30fps-10kfr-manifest.json"
+      },
+      {
+        "path": "media-source/webm/test-v-256k-320x240-30fps-10kfr.webm",
+        "url": "/media-source/webm/test-v-256k-320x240-30fps-10kfr.webm"
+      },
+      {
+        "path": "media-source/webm/test-vp8-vorbis-webvtt.webm",
+        "url": "/media-source/webm/test-vp8-vorbis-webvtt.webm"
+      },
+      {
+        "path": "media-source/webm/test.webm",
+        "url": "/media-source/webm/test.webm"
+      },
+      {
         "path": "media/A4.mp4",
         "url": "/media/A4.mp4"
       },
@@ -18457,6 +18645,134 @@
         "url": "/media-source/interfaces.html"
       },
       {
+        "path": "media-source/mediasource-addsourcebuffer.html",
+        "url": "/media-source/mediasource-addsourcebuffer.html"
+      },
+      {
+        "path": "media-source/mediasource-append-buffer.html",
+        "url": "/media-source/mediasource-append-buffer.html"
+      },
+      {
+        "path": "media-source/mediasource-appendwindow.html",
+        "url": "/media-source/mediasource-appendwindow.html"
+      },
+      {
+        "path": "media-source/mediasource-buffered.html",
+        "url": "/media-source/mediasource-buffered.html"
+      },
+      {
+        "path": "media-source/mediasource-closed.html",
+        "url": "/media-source/mediasource-closed.html"
+      },
+      {
+        "path": "media-source/mediasource-config-change-mp4-a-bitrate.html",
+        "url": "/media-source/mediasource-config-change-mp4-a-bitrate.html"
+      },
+      {
+        "path": "media-source/mediasource-config-change-mp4-av-audio-bitrate.html",
+        "url": "/media-source/mediasource-config-change-mp4-av-audio-bitrate.html"
+      },
+      {
+        "path": "media-source/mediasource-config-change-mp4-av-framesize.html",
+        "url": "/media-source/mediasource-config-change-mp4-av-framesize.html"
+      },
+      {
+        "path": "media-source/mediasource-config-change-mp4-av-video-bitrate.html",
+        "url": "/media-source/mediasource-config-change-mp4-av-video-bitrate.html"
+      },
+      {
+        "path": "media-source/mediasource-config-change-mp4-v-bitrate.html",
+        "url": "/media-source/mediasource-config-change-mp4-v-bitrate.html"
+      },
+      {
+        "path": "media-source/mediasource-config-change-mp4-v-framerate.html",
+        "url": "/media-source/mediasource-config-change-mp4-v-framerate.html"
+      },
+      {
+        "path": "media-source/mediasource-config-change-mp4-v-framesize.html",
+        "url": "/media-source/mediasource-config-change-mp4-v-framesize.html"
+      },
+      {
+        "path": "media-source/mediasource-config-change-webm-a-bitrate.html",
+        "url": "/media-source/mediasource-config-change-webm-a-bitrate.html"
+      },
+      {
+        "path": "media-source/mediasource-config-change-webm-av-audio-bitrate.html",
+        "url": "/media-source/mediasource-config-change-webm-av-audio-bitrate.html"
+      },
+      {
+        "path": "media-source/mediasource-config-change-webm-av-framesize.html",
+        "url": "/media-source/mediasource-config-change-webm-av-framesize.html"
+      },
+      {
+        "path": "media-source/mediasource-config-change-webm-av-video-bitrate.html",
+        "url": "/media-source/mediasource-config-change-webm-av-video-bitrate.html"
+      },
+      {
+        "path": "media-source/mediasource-config-change-webm-v-bitrate.html",
+        "url": "/media-source/mediasource-config-change-webm-v-bitrate.html"
+      },
+      {
+        "path": "media-source/mediasource-config-change-webm-v-framerate.html",
+        "url": "/media-source/mediasource-config-change-webm-v-framerate.html"
+      },
+      {
+        "path": "media-source/mediasource-config-change-webm-v-framesize.html",
+        "url": "/media-source/mediasource-config-change-webm-v-framesize.html"
+      },
+      {
+        "path": "media-source/mediasource-duration.html",
+        "url": "/media-source/mediasource-duration.html"
+      },
+      {
+        "path": "media-source/mediasource-endofstream-invaliderror.html",
+        "url": "/media-source/mediasource-endofstream-invaliderror.html"
+      },
+      {
+        "path": "media-source/mediasource-getvideoplaybackquality.html",
+        "url": "/media-source/mediasource-getvideoplaybackquality.html"
+      },
+      {
+        "path": "media-source/mediasource-is-type-supported.html",
+        "url": "/media-source/mediasource-is-type-supported.html"
+      },
+      {
+        "path": "media-source/mediasource-multiple-attach.html",
+        "url": "/media-source/mediasource-multiple-attach.html"
+      },
+      {
+        "path": "media-source/mediasource-play-then-seek-back.html",
+        "url": "/media-source/mediasource-play-then-seek-back.html"
+      },
+      {
+        "path": "media-source/mediasource-play.html",
+        "url": "/media-source/mediasource-play.html"
+      },
+      {
+        "path": "media-source/mediasource-redundant-seek.html",
+        "url": "/media-source/mediasource-redundant-seek.html"
+      },
+      {
+        "path": "media-source/mediasource-remove.html",
+        "url": "/media-source/mediasource-remove.html"
+      },
+      {
+        "path": "media-source/mediasource-seek-beyond-duration.html",
+        "url": "/media-source/mediasource-seek-beyond-duration.html"
+      },
+      {
+        "path": "media-source/mediasource-seek-during-pending-seek.html",
+        "url": "/media-source/mediasource-seek-during-pending-seek.html"
+      },
+      {
+        "path": "media-source/mediasource-sourcebuffer-mode.html",
+        "url": "/media-source/mediasource-sourcebuffer-mode.html"
+      },
+      {
+        "path": "media-source/mediasource-sourcebufferlist.html",
+        "url": "/media-source/mediasource-sourcebufferlist.html"
+      },
+      {
         "path": "mediacapture-streams/obtaining-local-multimedia-content/navigatorusermedia/api-present.html",
         "url": "/mediacapture-streams/obtaining-local-multimedia-content/navigatorusermedia/api-present.html"
       },
@@ -22292,5 +22608,5 @@
     ]
   },
   "local_changes": [],
-  "rev": "7a53a49e4ad0f9d34680b2ba08af31cf62eaf103"
+  "rev": "8203b365c308c430eea1aadc3ca021e30958d9a4"
 }
