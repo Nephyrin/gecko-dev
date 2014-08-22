@@ -30,14 +30,6 @@ class InvalidTestPathError(Exception):
 class WebPlatformTestsRunner(MozbuildObject):
     """Run web platform tests."""
 
-    def __init__(self, topsrcdir, settings, log_manager, **kwargs):
-        import machlogging
-        from mozlog.structured import structuredlog
-
-        log_manager = machlogging.StructuredLoggingManager()
-        self._logger = structuredlog.StructuredLogger("web-platform-tests.mach")
-        MozbuildObject.__init__(self, topsrcdir, settings, log_manager, **kwargs)
-
     def setup_kwargs(self, kwargs):
         build_path = os.path.join(self.topobjdir, 'build')
         if build_path not in sys.path:
@@ -61,10 +53,7 @@ class WebPlatformTestsRunner(MozbuildObject):
 
         self.setup_kwargs(kwargs)
 
-        logger = wptrunner.setup_logging(kwargs, {})
-        self.log_manager.register_structured_logger(logger)
-        self.log_manager.add_terminal_logging()
-
+        logger = wptrunner.setup_logging(kwargs, {"mach": sys.stdout})
         result = wptrunner.run_tests(**kwargs)
 
         return int(not result)
@@ -78,14 +67,6 @@ class WebPlatformTestsRunner(MozbuildObject):
 
 class WebPlatformTestsUpdater(MozbuildObject):
     """Update web platform tests."""
-    def __init__(self, topsrcdir, settings, log_manager, topobjdir=None):
-        import machlogging
-        from mozlog.structured import structuredlog
-
-        log_manager = machlogging.StructuredLoggingManager()
-        self._logger = structuredlog.StructuredLogger("web-platform-tests.update.mach")
-        MozbuildObject.__init__(self, topsrcdir, settings, log_manager, topobjdir)
-
     def run_update(self, **kwargs):
         from wptrunner import update
 
@@ -104,10 +85,7 @@ class WebPlatformTestsReduce(WebPlatformTestsRunner):
         self.setup_kwargs(kwargs)
 
         kwargs["capture_stdio"] = True
-        logger = reduce.setup_logging(kwargs, {})
-        self.log_manager.register_structured_logger(reduce.logger)
-        self.log_manager.add_terminal_logging()
-
+        logger = reduce.setup_logging(kwargs, {"mach": sys.stdout})
         tests = reduce.do_reduce(**kwargs)
 
         if not tests:
