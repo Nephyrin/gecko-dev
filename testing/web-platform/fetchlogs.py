@@ -1,3 +1,7 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
 import argparse
 import cStringIO
 import gzip
@@ -44,9 +48,6 @@ def download(url, prefix, dest, force_suffix=True):
 
     with open(name, "w") as f:
         resp = requests.get(url)
-        #temp_f = cStringIO.StringIO(resp.text.encode(resp.encoding))
-        #gzf  = gzip.GzipFile(fileobj=temp_f)
-        #f.write(gzf.read())
         f.write(resp.text.encode(resp.encoding))
 
 def get_blobber_url(branch, job):
