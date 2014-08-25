@@ -284,30 +284,6 @@ class MozbuildObject(ProcessExecutionMixin):
     def statedir(self):
         return os.path.join(self.topobjdir, '.mozbuild')
 
-    @property
-    def pkg_basename(self):
-        # taken from PKG_BASENAME in toolkit/mozapps/installer/package-name.mk
-        substs = self.substs
-        pkg_platform = '%s-%s' % (substs['TARGET_OS'], substs['TARGET_CPU'])
-        if substs['OS_ARCH'] == 'WINNT':
-            if substs['TARGET_CPU'] == 'x86_64':
-                pkg_platform = 'win64-%s' % substs['TARGET_CPU']
-            else:
-                pkg_platform = 'win32'
-        elif substs['OS_ARCH'] == 'Darwin':
-            if  substs.get('UNIVERSAL_BINARY', False) or substs['TARGET_CPU'] != 'x86_64':
-               pkg_platform = 'mac'
-            else:
-               pkg_platform = 'mac64'
-        elif substs['TARGET_OS'] == 'linux-gnu':
-            pkg_platform = 'linux-%s' % substs['TARGET_CPU']
-
-        return '%s-%s.%s.%s' % (
-            substs['MOZ_APP_NAME'],
-            substs['MOZ_APP_VERSION'],
-            substs['MOZ_UI_LOCALE'],
-            pkg_platform)
-
     def is_clobber_needed(self):
         if not os.path.exists(self.topobjdir):
             return False
