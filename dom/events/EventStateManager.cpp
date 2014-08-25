@@ -2021,6 +2021,9 @@ EventStateManager::DoScrollZoom(nsIFrame* aTargetFrame,
       } else {
         ChangeTextSize(change);
       }
+      nsContentUtils::DispatchChromeEvent(mDocument, static_cast<nsIDocument*>(mDocument),
+                                          NS_LITERAL_STRING("ZoomChangeUsingMouseWheel"),
+                                          true, true);
     }
 }
 
@@ -2251,7 +2254,7 @@ EventStateManager::ComputeScrollTarget(nsIFrame* aTargetFrame,
 }
 
 // Overload ComputeScrollTarget method to allow passing "test" dx and dy when looking
-// for which scrollbarowners to activate when two finger down on trackpad
+// for which scrollbarmediators to activate when two finger down on trackpad
 // and before any actual motion
 nsIScrollableFrame*
 EventStateManager::ComputeScrollTarget(nsIFrame* aTargetFrame,
@@ -4760,7 +4763,8 @@ EventStateManager::ContentRemoved(nsIDocument* aDocument, nsIContent* aContent)
       (aContent->AsElement()->State().HasAtLeastOneOfStates(NS_EVENT_STATE_FOCUS |
                                                             NS_EVENT_STATE_HOVER))) {
     nsGenericHTMLElement* element = static_cast<nsGenericHTMLElement*>(aContent);
-    element->LeaveLink(element->GetPresContext());
+    element->LeaveLink(
+      element->GetPresContext(nsGenericHTMLElement::eForComposedDoc));
   }
 
   IMEStateManager::OnRemoveContent(mPresContext, aContent);

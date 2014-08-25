@@ -178,7 +178,7 @@ BaselineCompiler::compile()
     // Note: There is an extra entry in the bytecode type map for the search hint, see below.
     size_t bytecodeTypeMapEntries = script->nTypeSets() + 1;
 
-    BaselineScript *baselineScript = BaselineScript::New(cx, prologueOffset_.offset(),
+    BaselineScript *baselineScript = BaselineScript::New(script, prologueOffset_.offset(),
                                                          epilogueOffset_.offset(),
                                                          spsPushToggleOffset_.offset(),
                                                          postDebugPrologueOffset_.offset(),
@@ -1394,7 +1394,7 @@ BaselineCompiler::storeValue(const StackValue *source, const Address &dest,
         masm.storeValue(scratch, dest);
         break;
       default:
-        MOZ_ASSUME_UNREACHABLE("Invalid kind");
+        MOZ_CRASH("Invalid kind");
     }
 }
 

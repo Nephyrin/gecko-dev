@@ -169,6 +169,36 @@ UpdatePromise::RejectAllPromises(const ErrorEventInit& aErrorDesc)
   }
 }
 
+void
+ServiceWorkerRegistrationInfo::Clear()
+{
+  if (mInstallingWorker) {
+    // FIXME(nsm): Terminate installing worker.
+    // Bug 1043701 Set state to redundant.
+    // Fire statechange.
+    mInstallingWorker = nullptr;
+    // FIXME(nsm): Abort any inflight requests from installing worker.
+  }
+
+  if (mWaitingWorker) {
+    // FIXME(nsm): Bug 1043701 Set state to redundant.
+    // Fire statechange.
+    mWaitingWorker = nullptr;
+  }
+
+  if (mCurrentWorker) {
+    // FIXME(nsm): Bug 1043701 Set state to redundant.
+    mCurrentWorker = nullptr;
+  }
+
+  nsRefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
+  MOZ_ASSERT(swm);
+  swm->InvalidateServiceWorkerRegistrationWorker(this,
+                                                 WhichServiceWorker::INSTALLING_WORKER |
+                                                 WhichServiceWorker::WAITING_WORKER |
+                                                 WhichServiceWorker::ACTIVE_WORKER);
+}
+
 class FinishFetchOnMainThreadRunnable : public nsRunnable
 {
   nsMainThreadPtrHandle<ServiceWorkerUpdateInstance> mUpdateInstance;
@@ -447,12 +477,225 @@ public:
   }
 };
 
+/*
+ * Implements the async aspects of the unregister algorithm.
+ */
+class UnregisterRunnable : public nsRunnable
+{
+  nsCOMPtr<nsIGlobalObject> mGlobal;
+  nsCOMPtr<nsIURI> mScopeURI;
+  nsRefPtr<Promise> mPromise;
+public:
+  UnregisterRunnable(nsIGlobalObject* aGlobal, nsIURI* aScopeURI,
+                     Promise* aPromise)
+    : mGlobal(aGlobal), mScopeURI(aScopeURI), mPromise(aPromise)
+  {
+    AssertIsOnMainThread();
+  }
+
+  NS_IMETHODIMP
+  Run()
+  {
+    AssertIsOnMainThread();
+
+    nsRefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
+
+    nsRefPtr<ServiceWorkerManager::ServiceWorkerDomainInfo> domainInfo =
+      swm->GetDomainInfo(mScopeURI);
+    MOZ_ASSERT(domainInfo);
+
+    nsCString spec;
+    nsresult rv = mScopeURI->GetSpecIgnoringRef(spec);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      AutoJSAPI api;
+      api.Init(mGlobal);
+      mPromise->MaybeReject(api.cx(), JS::UndefinedHandleValue);
+      return NS_OK;
+    }
+
+    nsRefPtr<ServiceWorkerRegistrationInfo> registration;
+    if (!domainInfo->mServiceWorkerRegistrationInfos.Get(spec,
+                                                         getter_AddRefs(registration))) {
+      mPromise->MaybeResolve(JS::FalseHandleValue);
+      return NS_OK;
+    }
+
+    MOZ_ASSERT(registration);
+
+    registration->mPendingUninstall = true;
+    mPromise->MaybeResolve(JS::TrueHandleValue);
+
+    // The "Wait until no document is using registration" can actually be
+    // handled by [[HandleDocumentUnload]] in Bug 1041340, so we simply check
+    // if the document is currently in use here.
+    if (!registration->IsControllingDocuments()) {
+      if (!registration->mPendingUninstall) {
+        return NS_OK;
+      }
+
+      registration->Clear();
+      domainInfo->RemoveRegistration(registration);
+    }
+
+    return NS_OK;
+  }
+};
+
 // If we return an error code here, the ServiceWorkerContainer will
 // automatically reject the Promise.
 NS_IMETHODIMP
-ServiceWorkerManager::Register(nsIDOMWindow* aWindow, const nsAString& aScope,
+ServiceWorkerManager::Register(const nsAString& aScope,
                                const nsAString& aScriptURL,
                                nsISupports** aPromise)
+{
+  AssertIsOnMainThread();
+
+  // XXXnsm Don't allow chrome callers for now, we don't support chrome
+  // ServiceWorkers.
+  MOZ_ASSERT(!nsContentUtils::IsCallerChrome());
+
+  nsCOMPtr<nsIGlobalObject> sgo = GetEntryGlobal();
+  if (!sgo) {
+    MOZ_CRASH("Register() should only be called from a valid entry settings object!");
+    return NS_ERROR_FAILURE;
+  }
+
+  ErrorResult result;
+  nsRefPtr<Promise> promise = Promise::Create(sgo, result);
+  if (result.Failed()) {
+    return result.ErrorCode();
+  }
+
+  nsCOMPtr<nsIDocument> doc = GetEntryDocument();
+  if (!doc) {
+    return NS_ERROR_FAILURE;
+  }
+
+  // Although the spec says that the same-origin checks should also be done
+  // asynchronously, we do them in sync because the Promise created by the
+  // WebIDL infrastructure due to a returned error will be resolved
+  // asynchronously. We aren't making any internal state changes in these
+  // checks, so ordering of multiple calls is not affected.
+
+  nsCOMPtr<nsIURI> documentURI = doc->GetBaseURI();
+
+  // FIXME(nsm): Bug 1003991. Disable check when devtools are open.
+  if (!Preferences::GetBool("dom.serviceWorkers.testing.enabled")) {
+    bool isHttps;
+    result = documentURI->SchemeIs("https", &isHttps);
+    if (result.Failed() || !isHttps) {
+      NS_WARNING("ServiceWorker registration from insecure websites is not allowed.");
+      return NS_ERROR_DOM_SECURITY_ERR;
+    }
+  }
+
+  nsCOMPtr<nsIURI> scriptURI;
+  result = NS_NewURI(getter_AddRefs(scriptURI), aScriptURL, nullptr, documentURI);
+  if (NS_WARN_IF(result.Failed())) {
+    return result.ErrorCode();
+  }
+
+  // Data URLs are not allowed.
+  nsCOMPtr<nsIPrincipal> documentPrincipal = doc->NodePrincipal();
+
+  result = documentPrincipal->CheckMayLoad(scriptURI, true /* report */,
+                                           false /* allowIfInheritsPrincipal */);
+  if (result.Failed()) {
+    return NS_ERROR_DOM_SECURITY_ERR;
+  }
+
+  nsCOMPtr<nsIURI> scopeURI;
+  result = NS_NewURI(getter_AddRefs(scopeURI), aScope, nullptr, documentURI);
+  if (NS_WARN_IF(result.Failed())) {
+    return NS_ERROR_DOM_SECURITY_ERR;
+  }
+
+  result = documentPrincipal->CheckMayLoad(scopeURI, true /* report */,
+                                           false /* allowIfInheritsPrinciple */);
+  if (result.Failed()) {
+    return NS_ERROR_DOM_SECURITY_ERR;
+  }
+
+  nsCString cleanedScope;
+  result = scopeURI->GetSpecIgnoringRef(cleanedScope);
+  if (NS_WARN_IF(result.Failed())) {
+    return NS_ERROR_FAILURE;
+  }
+
+  nsCOMPtr<nsPIDOMWindow> window = do_QueryObject(sgo);
+  if (!window) {
+    return NS_ERROR_FAILURE;
+  }
+
+  nsRefPtr<nsIRunnable> registerRunnable =
+    new RegisterRunnable(window, cleanedScope, scriptURI, promise);
+  promise.forget(aPromise);
+  return NS_DispatchToCurrentThread(registerRunnable);
+}
+
+/*
+ * Implements the async aspects of the getRegistrations algorithm.
+ */
+class GetRegistrationsRunnable : public nsRunnable
+{
+  nsCOMPtr<nsPIDOMWindow> mWindow;
+  nsRefPtr<Promise> mPromise;
+public:
+  GetRegistrationsRunnable(nsPIDOMWindow* aWindow, Promise* aPromise)
+    : mWindow(aWindow), mPromise(aPromise)
+  { }
+
+  NS_IMETHODIMP
+  Run()
+  {
+    nsRefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
+
+    nsIDocument* doc = mWindow->GetExtantDoc();
+    if (!doc) {
+      mPromise->MaybeReject(NS_ERROR_UNEXPECTED);
+      return NS_OK;
+    }
+
+    nsCOMPtr<nsIURI> docURI = doc->GetDocumentURI();
+    if (!docURI) {
+      mPromise->MaybeReject(NS_ERROR_UNEXPECTED);
+      return NS_OK;
+    }
+
+    nsCOMPtr<nsIPrincipal> principal = doc->NodePrincipal();
+    if (!principal) {
+      mPromise->MaybeReject(NS_ERROR_UNEXPECTED);
+      return NS_OK;
+    }
+
+    nsTArray<nsRefPtr<ServiceWorkerRegistration>> array;
+
+    nsRefPtr<ServiceWorkerManager::ServiceWorkerDomainInfo> domainInfo =
+      swm->GetDomainInfo(docURI);
+
+    if (!domainInfo) {
+      mPromise->MaybeResolve(array);
+      return NS_OK;
+    }
+
+    for (uint32_t i = 0; i < domainInfo->mOrderedScopes.Length(); ++i) {
+      NS_ConvertUTF8toUTF16 scope(domainInfo->mOrderedScopes[i]);
+      nsRefPtr<ServiceWorkerRegistration> swr =
+        new ServiceWorkerRegistration(mWindow, scope);
+
+      array.AppendElement(swr);
+    }
+
+    mPromise->MaybeResolve(array);
+    return NS_OK;
+  }
+};
+
+// If we return an error code here, the ServiceWorkerContainer will
+// automatically reject the Promise.
+NS_IMETHODIMP
+ServiceWorkerManager::GetRegistrations(nsIDOMWindow* aWindow,
+                                       nsISupports** aPromise)
 {
   AssertIsOnMainThread();
   MOZ_ASSERT(aWindow);
@@ -473,70 +716,111 @@ ServiceWorkerManager::Register(nsIDOMWindow* aWindow, const nsAString& aScope,
     return result.ErrorCode();
   }
 
-  nsCOMPtr<nsIURI> documentURI = window->GetDocumentURI();
-  if (!documentURI) {
-    return NS_ERROR_FAILURE;
-  }
-
-  // Although the spec says that the same-origin checks should also be done
-  // asynchronously, we do them in sync because the Promise created by the
-  // WebIDL infrastructure due to a returned error will be resolved
-  // asynchronously. We aren't making any internal state changes in these
-  // checks, so ordering of multiple calls is not affected.
-
-  nsresult rv;
-  // FIXME(nsm): Bug 1003991. Disable check when devtools are open.
-  if (!Preferences::GetBool("dom.serviceWorkers.testing.enabled")) {
-    bool isHttps;
-    rv = documentURI->SchemeIs("https", &isHttps);
-    if (NS_FAILED(rv) || !isHttps) {
-      NS_WARNING("ServiceWorker registration from insecure websites is not allowed.");
-      return NS_ERROR_DOM_SECURITY_ERR;
-    }
-  }
-
-  nsCOMPtr<nsIPrincipal> documentPrincipal;
-  if (window->GetExtantDoc()) {
-    documentPrincipal = window->GetExtantDoc()->NodePrincipal();
-  } else {
-    documentPrincipal = do_CreateInstance("@mozilla.org/nullprincipal;1");
-  }
-
-  nsCOMPtr<nsIURI> scriptURI;
-  rv = NS_NewURI(getter_AddRefs(scriptURI), aScriptURL, nullptr, documentURI);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return rv;
-  }
-
-  // Data URLs are not allowed.
-  rv = documentPrincipal->CheckMayLoad(scriptURI, true /* report */,
-                                       false /* allowIfInheritsPrincipal */);
-  if (NS_FAILED(rv)) {
-    return NS_ERROR_DOM_SECURITY_ERR;
-  }
-
-  nsCOMPtr<nsIURI> scopeURI;
-  rv = NS_NewURI(getter_AddRefs(scopeURI), aScope, nullptr, documentURI);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return NS_ERROR_DOM_SECURITY_ERR;
-  }
-
-  rv = documentPrincipal->CheckMayLoad(scopeURI, true /* report */,
-                                       false /* allowIfInheritsPrinciple */);
-  if (NS_FAILED(rv)) {
-    return NS_ERROR_DOM_SECURITY_ERR;
-  }
-
-  nsCString cleanedScope;
-  rv = scopeURI->GetSpecIgnoringRef(cleanedScope);
-  if (NS_WARN_IF(NS_FAILED(rv))) {
-    return NS_ERROR_FAILURE;
-  }
-
-  nsRefPtr<nsIRunnable> registerRunnable =
-    new RegisterRunnable(window, cleanedScope, scriptURI, promise);
+  nsRefPtr<nsIRunnable> runnable =
+    new GetRegistrationsRunnable(window, promise);
   promise.forget(aPromise);
-  return NS_DispatchToCurrentThread(registerRunnable);
+  return NS_DispatchToCurrentThread(runnable);
+}
+
+/*
+ * Implements the async aspects of the getRegistration algorithm.
+ */
+class GetRegistrationRunnable : public nsRunnable
+{
+  nsCOMPtr<nsPIDOMWindow> mWindow;
+  nsRefPtr<Promise> mPromise;
+  nsString mDocumentURL;
+
+public:
+  GetRegistrationRunnable(nsPIDOMWindow* aWindow, Promise* aPromise,
+                          const nsAString& aDocumentURL)
+    : mWindow(aWindow), mPromise(aPromise), mDocumentURL(aDocumentURL)
+  { }
+
+  NS_IMETHODIMP
+  Run()
+  {
+    nsRefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
+
+    nsIDocument* doc = mWindow->GetExtantDoc();
+    if (!doc) {
+      mPromise->MaybeReject(NS_ERROR_UNEXPECTED);
+      return NS_OK;
+    }
+
+    nsCOMPtr<nsIURI> docURI = doc->GetDocumentURI();
+    if (!docURI) {
+      mPromise->MaybeReject(NS_ERROR_UNEXPECTED);
+      return NS_OK;
+    }
+
+    nsCOMPtr<nsIURI> uri;
+    nsresult rv = NS_NewURI(getter_AddRefs(uri), mDocumentURL, nullptr, docURI);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+      mPromise->MaybeReject(rv);
+      return NS_OK;
+    }
+
+    nsCOMPtr<nsIPrincipal> principal = doc->NodePrincipal();
+    if (!principal) {
+      mPromise->MaybeReject(NS_ERROR_UNEXPECTED);
+      return NS_OK;
+    }
+
+    rv = principal->CheckMayLoad(uri, true /* report */,
+                                 false /* allowIfInheritsPrinciple */);
+    if (NS_FAILED(rv)) {
+      mPromise->MaybeReject(NS_ERROR_DOM_SECURITY_ERR);
+      return NS_OK;
+    }
+
+    nsRefPtr<ServiceWorkerRegistrationInfo> registration =
+      swm->GetServiceWorkerRegistrationInfo(uri);
+
+    if (!registration) {
+      mPromise->MaybeResolve(JS::UndefinedHandleValue);
+      return NS_OK;
+    }
+
+    NS_ConvertUTF8toUTF16 scope(registration->mScope);
+    nsRefPtr<ServiceWorkerRegistration> swr =
+      new ServiceWorkerRegistration(mWindow, scope);
+    mPromise->MaybeResolve(swr);
+
+    return NS_OK;
+  }
+};
+
+// If we return an error code here, the ServiceWorkerContainer will
+// automatically reject the Promise.
+NS_IMETHODIMP
+ServiceWorkerManager::GetRegistration(nsIDOMWindow* aWindow,
+                                      const nsAString& aDocumentURL,
+                                      nsISupports** aPromise)
+{
+  AssertIsOnMainThread();
+  MOZ_ASSERT(aWindow);
+
+  // XXXnsm Don't allow chrome callers for now, we don't support chrome
+  // ServiceWorkers.
+  MOZ_ASSERT(!nsContentUtils::IsCallerChrome());
+
+  nsCOMPtr<nsPIDOMWindow> window = do_QueryInterface(aWindow);
+  if (!window) {
+    return NS_ERROR_FAILURE;
+  }
+
+  nsCOMPtr<nsIGlobalObject> sgo = do_QueryInterface(window);
+  ErrorResult result;
+  nsRefPtr<Promise> promise = Promise::Create(sgo, result);
+  if (result.Failed()) {
+    return result.ErrorCode();
+  }
+
+  nsRefPtr<nsIRunnable> runnable =
+    new GetRegistrationRunnable(window, promise, aDocumentURL);
+  promise.forget(aPromise);
+  return NS_DispatchToCurrentThread(runnable);
 }
 
 void
@@ -569,10 +853,7 @@ ServiceWorkerManager::Update(ServiceWorkerRegistrationInfo* aRegistration,
 {
   if (aRegistration->HasUpdatePromise()) {
     NS_WARNING("Already had a UpdatePromise. Aborting that one!");
-    RejectUpdatePromiseObservers(aRegistration, NS_ERROR_DOM_ABORT_ERR);
-    MOZ_ASSERT(aRegistration->mUpdateInstance);
-    aRegistration->mUpdateInstance->Abort();
-    aRegistration->mUpdateInstance = nullptr;
+    AbortCurrentUpdate(aRegistration);
   }
 
   if (aRegistration->mInstallingWorker) {
@@ -599,20 +880,64 @@ ServiceWorkerManager::Update(ServiceWorkerRegistrationInfo* aRegistration,
   return NS_OK;
 }
 
-// If we return an error, ServiceWorkerREgistration will reject the Promise.
+void
+ServiceWorkerManager::AbortCurrentUpdate(ServiceWorkerRegistrationInfo* aRegistration)
+{
+  MOZ_ASSERT(aRegistration->HasUpdatePromise());
+  RejectUpdatePromiseObservers(aRegistration, NS_ERROR_DOM_ABORT_ERR);
+  MOZ_ASSERT(aRegistration->mUpdateInstance);
+  aRegistration->mUpdateInstance->Abort();
+  aRegistration->mUpdateInstance = nullptr;
+}
+
+// If we return an error, ServiceWorkerContainer will reject the Promise.
 NS_IMETHODIMP
-ServiceWorkerManager::Unregister(nsIDOMWindow* aWindow, const nsAString& aScope,
-                                 nsISupports** aPromise)
+ServiceWorkerManager::Unregister(const nsAString& aScope, nsISupports** aPromise)
 {
   AssertIsOnMainThread();
-  MOZ_ASSERT(aWindow);
 
   // XXXnsm Don't allow chrome callers for now.
   MOZ_ASSERT(!nsContentUtils::IsCallerChrome());
 
-  // FIXME(nsm): Same bug, different patch.
+  nsCOMPtr<nsIGlobalObject> sgo = GetEntryGlobal();
+  if (!sgo) {
+    return NS_ERROR_FAILURE;
+  }
 
-  return NS_ERROR_DOM_NOT_SUPPORTED_ERR;
+  ErrorResult result;
+  nsRefPtr<Promise> promise = Promise::Create(sgo, result);
+  if (result.Failed()) {
+    return result.ErrorCode();
+  }
+
+  // Although the spec says that the same-origin checks should also be done
+  // asynchronously, we do them in sync because the Promise created by the
+  // WebIDL infrastructure due to a returned error will be resolved
+  // asynchronously. We aren't making any internal state changes in these
+  // checks, so ordering of multiple calls is not affected.
+  nsCOMPtr<nsIDocument> document = GetEntryDocument();
+  if (!document) {
+    return NS_ERROR_FAILURE;
+  }
+
+  nsCOMPtr<nsIURI> scopeURI;
+  nsCOMPtr<nsIURI> baseURI = document->GetBaseURI();
+  nsresult rv = NS_NewURI(getter_AddRefs(scopeURI), aScope, nullptr, baseURI);
+  if (NS_WARN_IF(NS_FAILED(rv))) {
+    return NS_ERROR_DOM_SECURITY_ERR;
+  }
+
+  nsCOMPtr<nsIPrincipal> documentPrincipal = document->NodePrincipal();
+  rv = documentPrincipal->CheckMayLoad(scopeURI, true /* report */,
+                                       false /* allowIfInheritsPrinciple */);
+  if (NS_FAILED(rv)) {
+    return NS_ERROR_DOM_SECURITY_ERR;
+  }
+
+  nsRefPtr<nsIRunnable> unregisterRunnable =
+    new UnregisterRunnable(sgo, scopeURI, promise);
+  promise.forget(aPromise);
+  return NS_DispatchToCurrentThread(unregisterRunnable);
 }
 
 /* static */
@@ -1079,6 +1404,10 @@ public:
     nsRefPtr<ServiceWorkerManager> swm = ServiceWorkerManager::GetInstance();
     swm->InvalidateServiceWorkerRegistrationWorker(mRegistration,
                                                    WhichServiceWorker::ACTIVE_WORKER | WhichServiceWorker::WAITING_WORKER);
+    if (!mRegistration->mCurrentWorker) {
+      // FIXME(nsm): Just got unregistered!
+      return NS_OK;
+    }
 
     // FIXME(nsm): Steps 7 of the algorithm.
 
@@ -1228,23 +1557,11 @@ ServiceWorkerManager::GetServiceWorkerRegistrationInfo(nsIURI* aURI)
   // ordered scopes and registrations better be in sync.
   MOZ_ASSERT(registration);
 
+  if (registration->mPendingUninstall) {
+    return nullptr;
+  }
   return registration.forget();
 }
-
-namespace {
-/*
- * Returns string without trailing '*'.
- */
-void ScopeWithoutStar(const nsACString& aScope, nsACString& out)
-{
-  if (aScope.Last() == '*') {
-    out.Assign(StringHead(aScope, aScope.Length() - 1));
-    return;
-  }
-
-  out.Assign(aScope);
-}
-}; // anonymous namespace
 
 /* static */ void
 ServiceWorkerManager::AddScope(nsTArray<nsCString>& aList, const nsACString& aScope)
@@ -1257,28 +1574,11 @@ ServiceWorkerManager::AddScope(nsTArray<nsCString>& aList, const nsACString& aSc
       return;
     }
 
-    nsCString withoutStar;
-    ScopeWithoutStar(current, withoutStar);
-    // Edge case of match without '*'.
-    // /foo should be sorted before /foo*.
-    if (aScope.Equals(withoutStar)) {
+    // Sort by length, with longest match first.
+    // /foo/bar should be before /foo/
+    // Similarly /foo/b is between the two.
+    if (StringBeginsWith(aScope, current)) {
       aList.InsertElementAt(i, aScope);
-      return;
-    }
-
-    // /foo/bar* should be before /foo/*
-    // Similarly /foo/b* is between the two.
-    // But is /foo* categorically different?
-    if (StringBeginsWith(aScope, withoutStar)) {
-      // If the new scope is a pattern and the old one is a path, the new one
-      // goes after.  This way Add(/foo) followed by Add(/foo*) ends up with
-      // [/foo, /foo*].
-      if (aScope.Last() == '*' &&
-          withoutStar.Equals(current)) {
-        aList.InsertElementAt(i+1, aScope);
-      } else {
-        aList.InsertElementAt(i, aScope);
-      }
       return;
     }
   }
@@ -1286,25 +1586,16 @@ ServiceWorkerManager::AddScope(nsTArray<nsCString>& aList, const nsACString& aSc
   aList.AppendElement(aScope);
 }
 
-// aPath can have a '*' at the end, but it is treated literally.
 /* static */ nsCString
 ServiceWorkerManager::FindScopeForPath(nsTArray<nsCString>& aList, const nsACString& aPath)
 {
-  MOZ_ASSERT(aPath.FindChar('*') == -1);
-
   nsCString match;
 
   for (uint32_t i = 0; i < aList.Length(); ++i) {
     const nsCString& current = aList[i];
-    nsCString withoutStar;
-    ScopeWithoutStar(current, withoutStar);
-    if (StringBeginsWith(aPath, withoutStar)) {
-      // If non-pattern match, then check equality.
-      if (current.Last() == '*' ||
-          aPath.Equals(current)) {
-        match = current;
-        break;
-      }
+    if (StringBeginsWith(aPath, current)) {
+      match = current;
+      break;
     }
   }
 
@@ -1441,6 +1732,7 @@ ServiceWorkerManager::AddRegistrationEventListener(nsIURI* aDocumentURI, nsIDOME
 
   // TODO: this is very very bad:
   ServiceWorkerRegistration* registration = static_cast<ServiceWorkerRegistration*>(aListener);
+  MOZ_ASSERT(!domainInfo->mServiceWorkerRegistrations.Contains(registration));
   domainInfo->mServiceWorkerRegistrations.AppendElement(registration);
   return NS_OK;
 }
@@ -1455,6 +1747,7 @@ ServiceWorkerManager::RemoveRegistrationEventListener(nsIURI* aDocumentURI, nsID
   }
 
   ServiceWorkerRegistration* registration = static_cast<ServiceWorkerRegistration*>(aListener);
+  MOZ_ASSERT(domainInfo->mServiceWorkerRegistrations.Contains(registration));
   domainInfo->mServiceWorkerRegistrations.RemoveElement(registration);
   return NS_OK;
 }

@@ -298,10 +298,9 @@ exports.AppManager = AppManager = {
   _selectedRuntime: null,
   set selectedRuntime(value) {
     this._selectedRuntime = value;
-    if (!value &&
-      this.selectedProject &&
-      this.selectedProject.type == "mainProcess" &&
-      this.selectedProject.type == "runtimeApp") {
+    if (!value && this.selectedProject &&
+        (this.selectedProject.type == "mainProcess" ||
+         this.selectedProject.type == "runtimeApp")) {
       this.selectedProject = null;
     }
     this.update("runtime");
@@ -338,7 +337,7 @@ exports.AppManager = AppManager = {
       try {
         this.selectedRuntime.connect(this.connection).then(
           () => {},
-          () => {deferred.reject()});
+          deferred.reject.bind(deferred));
       } catch(e) {
         console.error(e);
         deferred.reject();

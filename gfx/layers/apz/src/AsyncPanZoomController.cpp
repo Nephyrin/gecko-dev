@@ -429,9 +429,9 @@ public:
     // boost the velocity to be the sum of the two. Check separate axes separately
     // because we could have two vertical flings with small horizontal components
     // on the opposite side of zero, and we still want the y-fling to get accelerated.
-    // Note that the acceleration code is only applied on the APZC that receives the
-    // actual touch event; the accelerated velocities are then handed off using the
-    // normal HandOffFling codepath.
+    // Note that the acceleration code is only applied on the APZC that initiates
+    // the fling; the accelerated velocities are then handed off using the
+    // normal DispatchFling codepath.
     if (aApplyAcceleration && !mApzc.mLastFlingTime.IsNull()
         && (now - mApzc.mLastFlingTime).ToMilliseconds() < gfxPrefs::APZFlingAccelInterval()) {
       if (SameDirection(velocity.x, mApzc.mLastFlingVelocity.x)) {
@@ -1020,7 +1020,7 @@ nsEventStatus AsyncPanZoomController::HandleGestureEvent(const InputData& aEvent
 nsEventStatus AsyncPanZoomController::OnTouchStart(const MultiTouchInput& aEvent) {
   APZC_LOG("%p got a touch-start in state %d\n", this, mState);
   mPanDirRestricted = false;
-  ScreenIntPoint point = GetFirstTouchScreenPoint(aEvent);
+  ScreenPoint point = GetFirstTouchScreenPoint(aEvent);
 
   switch (mState) {
     case FLING:
@@ -1147,17 +1147,31 @@ nsEventStatus AsyncPanZoomController::OnTouchEnd(const MultiTouchInput& aEvent) 
   case PANNING:
   case PANNING_LOCKED_X:
   case PANNING_LOCKED_Y:
+  {
     CurrentTouchBlock()->GetOverscrollHandoffChain()->FlushRepaints();
     mX.EndTouch(aEvent.mTime);
     mY.EndTouch(aEvent.mTime);
-    SetState(FLING);
+    ScreenPoint flingVelocity(mX.GetVelocity(), mY.GetVelocity());
+    // Clear our velocities; if DispatchFling() gives the fling to us,
+    // the fling velocity gets *added* to our existing velocity in
+    // AcceptFling().
+    mX.SetVelocity(0);
+    mY.SetVelocity(0);
+    // Clear our state so that we don't stay in the PANNING state
+    // if DispatchFling() gives the fling to somone else.
+    SetState(NOTHING);
     APZC_LOG("%p starting a fling animation\n", this);
-    StartAnimation(new FlingAnimation(*this,
+    // Make a local copy of the tree manager pointer and check that it's not
+    // null before calling DispatchFling(). This is necessary because Destroy(),
+    // which nulls out mTreeManager, could be called concurrently.
+    if (APZCTreeManager* treeManagerLocal = mTreeManager) {
+      treeManagerLocal->DispatchFling(this,
+                                      flingVelocity,
                                       CurrentTouchBlock()->GetOverscrollHandoffChain(),
-                                      true  /* apply acceleration */,
-                                      false /* allow overscroll */));
+                                      false /* not handoff */);
+    }
     return nsEventStatus_eConsumeNoDefault;
-
+  }
   case PINCHING:
     SetState(NOTHING);
     // Scale gesture listener should have handled this.
@@ -1302,8 +1316,14 @@ nsEventStatus AsyncPanZoomController::OnScaleEnd(const PinchGestureInput& aEvent
     // that into a pinch by increasing the span sufficiently. In such a case,
     // there is no snap-back animation to get us out of overscroll, so we need
     // to get out of it somehow.
-    mX.ClearOverscroll();
-    mY.ClearOverscroll();
+    // Moreover, in cases of scroll handoff, the overscroll can be on an APZC
+    // further up in the handoff chain rather than on the current APZC, so
+    // we need to clear overscroll along the entire handoff chain.
+    if (HasReadyTouchBlock()) {
+      CurrentTouchBlock()->GetOverscrollHandoffChain()->ClearOverscroll();
+    } else {
+      ClearOverscroll();
+    }
 
     ScheduleComposite();
     RequestContentRepaint();
@@ -1337,8 +1357,8 @@ AsyncPanZoomController::ConvertToGecko(const ScreenPoint& aPoint, CSSPoint* aOut
 nsEventStatus AsyncPanZoomController::OnPanMayBegin(const PanGestureInput& aEvent) {
   APZC_LOG("%p got a pan-maybegin in state %d\n", this, mState);
 
-  mX.StartTouch(aEvent.mPanStartPoint.x.Truncated(), aEvent.mTime);
-  mY.StartTouch(aEvent.mPanStartPoint.y.Truncated(), aEvent.mTime);
+  mX.StartTouch(aEvent.mPanStartPoint.x, aEvent.mTime);
+  mY.StartTouch(aEvent.mPanStartPoint.y, aEvent.mTime);
   if (mPanGestureState) {
     mPanGestureState->GetOverscrollHandoffChain()->CancelAnimations();
   } else {
@@ -1363,8 +1383,8 @@ nsEventStatus AsyncPanZoomController::OnPanBegin(const PanGestureInput& aEvent) 
 
   mPanGestureState = MakeUnique<InputBlockState>(BuildOverscrollHandoffChain());
 
-  mX.StartTouch(aEvent.mPanStartPoint.x.Truncated(), aEvent.mTime);
-  mY.StartTouch(aEvent.mPanStartPoint.y.Truncated(), aEvent.mTime);
+  mX.StartTouch(aEvent.mPanStartPoint.x, aEvent.mTime);
+  mY.StartTouch(aEvent.mPanStartPoint.y, aEvent.mTime);
 
   if (GetAxisLockMode() == FREE) {
     SetState(PANNING);
@@ -1387,13 +1407,16 @@ nsEventStatus AsyncPanZoomController::OnPan(const PanGestureInput& aEvent, bool 
   // size and position. We need to do so even if this is a momentum pan (i.e.
   // aFingersOnTouchpad == false); in that case the "with touch" part is not
   // really appropriate, so we may want to rethink this at some point.
-  mX.UpdateWithTouchAtDevicePoint(aEvent.mPanStartPoint.x.Truncated(), aEvent.mTime);
-  mY.UpdateWithTouchAtDevicePoint(aEvent.mPanStartPoint.y.Truncated(), aEvent.mTime);
+  mX.UpdateWithTouchAtDevicePoint(aEvent.mPanStartPoint.x, aEvent.mTime);
+  mY.UpdateWithTouchAtDevicePoint(aEvent.mPanStartPoint.y, aEvent.mTime);
 
   HandlePanningUpdate(aEvent.mPanDisplacement.x, aEvent.mPanDisplacement.y);
 
-  CallDispatchScroll(aEvent.mPanStartPoint, aEvent.mPanStartPoint + aEvent.mPanDisplacement,
-                     *mPanGestureState->GetOverscrollHandoffChain(), 0);
+  // TODO: Handle pan events sent without pan begin / pan end events properly.
+  if (mPanGestureState) {
+    CallDispatchScroll(aEvent.mPanStartPoint, aEvent.mPanStartPoint + aEvent.mPanDisplacement,
+                       *mPanGestureState->GetOverscrollHandoffChain(), 0);
+  }
 
   return nsEventStatus_eConsumeNoDefault;
 }
@@ -1638,7 +1661,7 @@ void AsyncPanZoomController::HandlePanningUpdate(float aDX, float aDY) {
 nsEventStatus AsyncPanZoomController::StartPanning(const MultiTouchInput& aEvent) {
   ReentrantMonitorAutoEnter lock(mMonitor);
 
-  ScreenIntPoint point = GetFirstTouchScreenPoint(aEvent);
+  ScreenPoint point = GetFirstTouchScreenPoint(aEvent);
   float dx = mX.PanDistance(point.x);
   float dy = mY.PanDistance(point.y);
 
@@ -1671,7 +1694,7 @@ nsEventStatus AsyncPanZoomController::StartPanning(const MultiTouchInput& aEvent
 }
 
 void AsyncPanZoomController::UpdateWithTouchAtDevicePoint(const MultiTouchInput& aEvent) {
-  ScreenIntPoint point = GetFirstTouchScreenPoint(aEvent);
+  ScreenPoint point = GetFirstTouchScreenPoint(aEvent);
   mX.UpdateWithTouchAtDevicePoint(point.x, aEvent.mTime);
   mY.UpdateWithTouchAtDevicePoint(point.y, aEvent.mTime);
 }
@@ -1765,6 +1788,7 @@ nsRefPtr<const OverscrollHandoffChain> AsyncPanZoomController::BuildOverscrollHa
 
 void AsyncPanZoomController::AcceptFling(const ScreenPoint& aVelocity,
                                          const nsRefPtr<const OverscrollHandoffChain>& aOverscrollHandoffChain,
+                                         bool aHandoff,
                                          bool aAllowOverscroll) {
   // We may have a pre-existing velocity for whatever reason (for example,
   // a previously handed off fling). We don't want to clobber that.
@@ -1772,16 +1796,20 @@ void AsyncPanZoomController::AcceptFling(const ScreenPoint& aVelocity,
   mY.SetVelocity(mY.GetVelocity() + aVelocity.y);
   SetState(FLING);
   StartAnimation(new FlingAnimation(*this,
-                                    aOverscrollHandoffChain,
-                                    false /* no acceleration */,
-                                    aAllowOverscroll));
+      aOverscrollHandoffChain,
+      !aHandoff,  // only apply acceleration if this is an initial fling
+      aAllowOverscroll));
 }
 
-bool AsyncPanZoomController::TakeOverFling(ScreenPoint aVelocity,
-                                           const nsRefPtr<const OverscrollHandoffChain>& aOverscrollHandoffChain) {
+bool AsyncPanZoomController::AttemptFling(ScreenPoint aVelocity,
+                                          const nsRefPtr<const OverscrollHandoffChain>& aOverscrollHandoffChain,
+                                          bool aHandoff) {
   // If we are pannable, take over the fling ourselves.
   if (IsPannable()) {
-    AcceptFling(aVelocity, aOverscrollHandoffChain, false /* do not allow overscroll */);
+    AcceptFling(aVelocity,
+                aOverscrollHandoffChain,
+                aHandoff,
+                false /* do not allow overscroll */);
     return true;
   }
 
@@ -1792,16 +1820,25 @@ bool AsyncPanZoomController::TakeOverFling(ScreenPoint aVelocity,
   // an overscroll fling if nothing further in the chain wants the fling.
   APZCTreeManager* treeManagerLocal = mTreeManager;
   return treeManagerLocal
-      && treeManagerLocal->HandOffFling(this, aVelocity, aOverscrollHandoffChain);
+      && treeManagerLocal->DispatchFling(this,
+                                         aVelocity,
+                                         aOverscrollHandoffChain,
+                                         true /* handoff */);
 }
 
 void AsyncPanZoomController::HandleFlingOverscroll(const ScreenPoint& aVelocity,
                                                    const nsRefPtr<const OverscrollHandoffChain>& aOverscrollHandoffChain) {
   APZCTreeManager* treeManagerLocal = mTreeManager;
-  if (!(treeManagerLocal && treeManagerLocal->HandOffFling(this, aVelocity, aOverscrollHandoffChain))) {
+  if (!(treeManagerLocal && treeManagerLocal->DispatchFling(this,
+                                                            aVelocity,
+                                                            aOverscrollHandoffChain,
+                                                            true /* handoff */))) {
     // No one wanted the fling, so we enter into an overscroll fling ourselves.
     if (IsPannable()) {
-      AcceptFling(aVelocity, aOverscrollHandoffChain, true /* allow overscroll */);
+      AcceptFling(aVelocity,
+                  aOverscrollHandoffChain,
+                  true /* handoff */,
+                  true /* allow overscroll */);
     }
   }
 }
@@ -1826,8 +1863,8 @@ bool AsyncPanZoomController::CallDispatchScroll(const ScreenPoint& aStartPoint,
 }
 
 void AsyncPanZoomController::TrackTouch(const MultiTouchInput& aEvent) {
-  ScreenIntPoint prevTouchPoint(mX.GetPos(), mY.GetPos());
-  ScreenIntPoint touchPoint = GetFirstTouchScreenPoint(aEvent);
+  ScreenPoint prevTouchPoint(mX.GetPos(), mY.GetPos());
+  ScreenPoint touchPoint = GetFirstTouchScreenPoint(aEvent);
 
   float dx = mX.PanDistance(touchPoint.x);
   float dy = mY.PanDistance(touchPoint.y);
@@ -1841,7 +1878,7 @@ void AsyncPanZoomController::TrackTouch(const MultiTouchInput& aEvent) {
   }
 }
 
-ScreenIntPoint& AsyncPanZoomController::GetFirstTouchScreenPoint(const MultiTouchInput& aEvent) {
+ScreenPoint AsyncPanZoomController::GetFirstTouchScreenPoint(const MultiTouchInput& aEvent) {
   return ((SingleTouchData&)aEvent.mTouches[0]).mScreenPoint;
 }
 
@@ -1866,12 +1903,17 @@ void AsyncPanZoomController::CancelAnimation() {
   // preempt normal mechanisms for relieving overscroll, so we need to clear
   // overscroll here.
   if (mX.IsOverscrolled() || mY.IsOverscrolled()) {
-    mX.ClearOverscroll();
-    mY.ClearOverscroll();
+    ClearOverscroll();
     RequestContentRepaint();
     ScheduleComposite();
     UpdateSharedCompositorFrameMetrics();
   }
+}
+
+void AsyncPanZoomController::ClearOverscroll() {
+  ReentrantMonitorAutoEnter lock(mMonitor);
+  mX.ClearOverscroll();
+  mY.ClearOverscroll();
 }
 
 void AsyncPanZoomController::SetCompositorParent(CompositorParent* aCompositorParent) {
@@ -2060,8 +2102,8 @@ void AsyncPanZoomController::RequestContentRepaint(FrameMetrics& aFrameMetrics) 
       fabsf(mLastPaintRequestMetrics.GetScrollOffset().y -
             aFrameMetrics.GetScrollOffset().y) < EPSILON &&
       aFrameMetrics.GetZoom() == mLastPaintRequestMetrics.GetZoom() &&
-      fabsf(aFrameMetrics.mViewport.width - mLastPaintRequestMetrics.mViewport.width) < EPSILON &&
-      fabsf(aFrameMetrics.mViewport.height - mLastPaintRequestMetrics.mViewport.height) < EPSILON) {
+      fabsf(aFrameMetrics.GetViewport().width - mLastPaintRequestMetrics.GetViewport().width) < EPSILON &&
+      fabsf(aFrameMetrics.GetViewport().height - mLastPaintRequestMetrics.GetViewport().height) < EPSILON) {
     return;
   }
 
@@ -2260,6 +2302,10 @@ bool AsyncPanZoomController::AdvanceAnimations(const TimeStamp& aSampleTime)
     delete deferredTasks[i];
   }
 
+  // One of the deferred tasks may have started a new animation. In this case,
+  // we want to ask the compositor to schedule a new composite.
+  requestAnimationFrame |= (mAnimation != nullptr);
+
   // Cancel the mAsyncScrollTimeoutTask because we will fire a
   // mozbrowserasyncscroll event or renew the mAsyncScrollTimeoutTask again.
   if (mAsyncScrollTimeoutTask) {
@@ -2384,11 +2430,11 @@ void AsyncPanZoomController::NotifyLayersUpdated(const FrameMetrics& aLayerMetri
       FuzzyEqualsAdditive(aLayerMetrics.mCompositionBounds.height, mFrameMetrics.mCompositionBounds.height)) {
     // Remote content has sync'd up to the composition geometry
     // change, so we can accept the viewport it's calculated.
-    if (mFrameMetrics.mViewport.width != aLayerMetrics.mViewport.width ||
-        mFrameMetrics.mViewport.height != aLayerMetrics.mViewport.height) {
+    if (mFrameMetrics.GetViewport().width != aLayerMetrics.GetViewport().width ||
+        mFrameMetrics.GetViewport().height != aLayerMetrics.GetViewport().height) {
       needContentRepaint = true;
     }
-    mFrameMetrics.mViewport = aLayerMetrics.mViewport;
+    mFrameMetrics.SetViewport(aLayerMetrics.GetViewport());
   }
 
   // If the layers update was not triggered by our own repaint request, then
@@ -2818,7 +2864,7 @@ void AsyncPanZoomController::SendAsyncScrollEvent() {
   {
     ReentrantMonitorAutoEnter lock(mMonitor);
 
-    isRoot = mFrameMetrics.mIsRoot;
+    isRoot = mFrameMetrics.GetIsRoot();
     scrollableSize = mFrameMetrics.mScrollableRect.Size();
     contentRect = mFrameMetrics.CalculateCompositedRectInCssPixels();
     contentRect.MoveTo(mCurrentAsyncScrollOffset);

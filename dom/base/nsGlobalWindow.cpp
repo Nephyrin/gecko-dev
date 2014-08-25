@@ -2424,8 +2424,9 @@ nsGlobalWindow::SetNewDocument(nsIDocument* aDocument,
   bool thisChrome = IsChromeWindow();
 
   // Check if we're near the stack limit before we get anywhere near the
-  // transplanting code.
-  JS_CHECK_RECURSION(cx, return NS_ERROR_FAILURE);
+  // transplanting code. We use a conservative check since we'll use a little
+  // more space before we actually hit the critical "can't fail" path.
+  JS_CHECK_RECURSION_CONSERVATIVE(cx, return NS_ERROR_FAILURE);
 
   nsCOMPtr<WindowStateHolder> wsh = do_QueryInterface(aState);
   NS_ASSERTION(!aState || wsh, "What kind of weird state are you giving me here?");
@@ -2968,6 +2969,10 @@ nsGlobalWindow::SetOpenerWindow(nsIDOMWindow* aOpener,
   NS_ASSERTION(aOpener || !aOriginalOpener,
                "Shouldn't set mHadOriginalOpener if aOpener is null");
 
+#ifdef DEBUG
+  nsCOMPtr<nsPIDOMWindow> opener = do_QueryInterface(aOpener);
+  MOZ_ASSERT(!opener || opener->IsOuterWindow());
+#endif
   mOpener = do_GetWeakReference(aOpener);
   NS_ASSERTION(mOpener || !aOpener, "Opener must support weak references!");
 
@@ -3995,25 +4000,8 @@ nsGlobalWindow::GetContent(JSContext* aCx,
     return;
   }
 
-  if (!nsContentUtils::IsCallerChrome() || !IsChromeWindow()) {
-    aError.Throw(NS_ERROR_FAILURE);
-    return;
-  }
-
-  // Something tries to get .content on a ChromeWindow, try to fetch the CPOW.
-  nsCOMPtr<nsIDocShellTreeOwner> treeOwner = GetTreeOwner();
-  if (!treeOwner) {
-    aError.Throw(NS_ERROR_FAILURE);
-    return;
-  }
-
-  JS::Rooted<JS::Value> val(aCx, JS::NullValue());
-  aError = treeOwner->GetContentWindow(aCx, &val);
-  if (aError.Failed()) {
-    return;
-  }
-
-  aRetval.set(val.toObjectOrNull());
+  aRetval.set(nullptr);
+  return;
 }
 
 already_AddRefed<nsIDOMWindow>
@@ -4616,7 +4604,7 @@ nsGlobalWindow::SetOpener(JSContext* aCx, JS::Handle<JS::Value> aOpener,
     return;
   }
 
-  nsGlobalWindow* win = nullptr;
+  nsPIDOMWindow* win = nullptr;
   if (aOpener.isObject()) {
     JSObject* unwrapped = js::CheckedUnwrap(&aOpener.toObject(),
                                             /* stopAtOuter = */ false);
@@ -4631,6 +4619,14 @@ nsGlobalWindow::SetOpener(JSContext* aCx, JS::Handle<JS::Value> aOpener,
       aError.Throw(NS_ERROR_INVALID_ARG);
       return;
     }
+  }
+
+  if (win && win->IsInnerWindow()) {
+    if (!win->IsCurrentInnerWindow()) {
+      aError.Throw(NS_ERROR_FAILURE);
+      return;
+    }
+    win = win->GetOuterWindow();
   }
 
   SetOpenerWindow(win, false);
@@ -6551,7 +6547,8 @@ nsGlobalWindow::Focus(ErrorResult& aError)
     return;
   }
 
-  nsCOMPtr<nsIDOMWindow> caller = do_QueryInterface(GetEntryGlobal());
+  nsCOMPtr<nsPIDOMWindow> caller = do_QueryInterface(GetEntryGlobal());
+  caller = caller ? caller->GetOuterWindow() : nullptr;
   nsCOMPtr<nsIDOMWindow> opener;
   GetOpener(getter_AddRefs(opener));
 
@@ -9663,7 +9660,7 @@ nsGlobalWindow::GetPrivateParent()
     if (!chromeElement)
       return nullptr;             // This is ok, just means a null parent.
 
-    nsIDocument* doc = chromeElement->GetDocument();
+    nsIDocument* doc = chromeElement->GetComposedDoc();
     if (!doc)
       return nullptr;             // This is ok, just means a null parent.
 
@@ -9695,7 +9692,7 @@ nsGlobalWindow::GetPrivateRoot()
 
   nsCOMPtr<nsIContent> chromeElement(do_QueryInterface(mChromeEventHandler));
   if (chromeElement) {
-    nsIDocument* doc = chromeElement->GetDocument();
+    nsIDocument* doc = chromeElement->GetComposedDoc();
     if (doc) {
       nsIDOMWindow *parent = doc->GetWindow();
       if (parent) {
@@ -10748,7 +10745,7 @@ nsGlobalWindow::FireOfflineStatusEvent()
   if (!IsCurrentInnerWindow())
     return;
   nsAutoString name;
-  if (NS_IsOffline()) {
+  if (NS_IsOffline() || NS_IsAppOffline(GetPrincipal())) {
     name.AssignLiteral("offline");
   } else {
     name.AssignLiteral("online");
@@ -11304,7 +11301,8 @@ nsresult
 nsGlobalWindow::Observe(nsISupports* aSubject, const char* aTopic,
                         const char16_t* aData)
 {
-  if (!nsCRT::strcmp(aTopic, NS_IOSERVICE_OFFLINE_STATUS_TOPIC)) {
+  if (!nsCRT::strcmp(aTopic, NS_IOSERVICE_OFFLINE_STATUS_TOPIC) ||
+      !nsCRT::strcmp(aTopic, NS_IOSERVICE_APP_OFFLINE_STATUS_TOPIC)) {
     if (IsFrozen()) {
       // if an even number of notifications arrive while we're frozen,
       // we don't need to fire.

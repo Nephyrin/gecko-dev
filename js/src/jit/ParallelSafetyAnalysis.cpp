@@ -161,6 +161,7 @@ class ParallelSafetyVisitor : public MDefinitionVisitor
     SAFE_OP(Ursh)
     SPECIALIZED_OP(MinMax, PERMIT_NUMERIC)
     SAFE_OP(Abs)
+    SAFE_OP(Clz)
     SAFE_OP(Sqrt)
     UNSAFE_OP(Atan2)
     UNSAFE_OP(Hypot)
@@ -344,11 +345,8 @@ static void
 TransplantResumePoint(MInstruction *oldInstruction, MInstruction *replacementInstruction)
 {
     MOZ_ASSERT(!oldInstruction->isDiscarded());
-    if (MResumePoint *rp = oldInstruction->resumePoint()) {
+    if (oldInstruction->resumePoint())
         replacementInstruction->stealResumePoint(oldInstruction);
-        if (rp->instruction() == oldInstruction)
-            rp->setInstruction(replacementInstruction);
-    }
 }
 
 bool

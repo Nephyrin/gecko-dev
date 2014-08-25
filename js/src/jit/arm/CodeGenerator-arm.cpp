@@ -974,6 +974,16 @@ CodeGeneratorARM::visitUrshD(LUrshD *ins)
 }
 
 bool
+CodeGeneratorARM::visitClzI(LClzI *ins)
+{
+    Register input = ToRegister(ins->input());
+    Register output = ToRegister(ins->output());
+
+    masm.ma_clz(input, output);
+    return true;
+}
+
+bool
 CodeGeneratorARM::visitPowHalfD(LPowHalfD *ins)
 {
     FloatRegister input = ToFloatRegister(ins->input());
@@ -1835,10 +1845,10 @@ CodeGeneratorARM::visitAsmJSLoadHeap(LAsmJSLoadHeap *ins)
         FloatRegister dst = ToFloatRegister(ins->output());
         VFPRegister vd(dst);
         if (size == 32) {
-            masm.convertDoubleToFloat32(NANReg, dst, Assembler::AboveOrEqual);
+            masm.ma_vldr(Operand(GlobalReg, AsmJSNaN32GlobalDataOffset), vd.singleOverlay(), Assembler::AboveOrEqual);
             masm.ma_vldr(vd.singleOverlay(), HeapReg, ptrReg, 0, Assembler::Below);
         } else {
-            masm.ma_vmov(NANReg, dst, Assembler::AboveOrEqual);
+            masm.ma_vldr(Operand(GlobalReg, AsmJSNaN64GlobalDataOffset), vd, Assembler::AboveOrEqual);
             masm.ma_vldr(vd, HeapReg, ptrReg, 0, Assembler::Below);
         }
     } else {
