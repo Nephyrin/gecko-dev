@@ -4,8 +4,6 @@
 
 include $(topsrcdir)/config/rules.mk
 
-#ifneq ($(OS_ARCH),WINNT)
-
 WPT_TESTS = \
   tests \
   $(NULL)
@@ -31,5 +29,3 @@ stage-package:
 	$(NSINSTALL) -D $(PKG_STAGE)/web-platform
 	@cp $(DEPTH)/mozinfo.json $(PKG_STAGE)/web-platform
 	@(cd $(DEPTH)/_tests/ && tar $(TAR_CREATE_FLAGS) - web-platform) | (cd $(PKG_STAGE) && tar -xf -)
-
-#endif

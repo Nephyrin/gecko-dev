@@ -10,7 +10,7 @@ import os
 import requests
 import urlparse
 
-treeherder_base = "http://treeherder.mozilla.org/"
+treeherder_base = "https://treeherder.mozilla.org/"
 
 """Simple script for downloading structured logs from treeherder.
 
