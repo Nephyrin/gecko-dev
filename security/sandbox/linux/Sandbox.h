@@ -7,16 +7,29 @@
 #ifndef mozilla_Sandbox_h
 #define mozilla_Sandbox_h
 
+#include "mozilla/Types.h"
+
 namespace mozilla {
 
+// The Set*Sandbox() functions must not be called if the corresponding
+// CanSandbox*() function has returned false; if sandboxing is
+// attempted, any failure to enable it is fatal.
+//
+// If sandboxing is disabled for a process type with the corresponding
+// environment variable, Set*Sandbox() does nothing and CanSandbox*()
+// returns true.
+
 #ifdef MOZ_CONTENT_SANDBOX
-void SetContentProcessSandbox();
+// Disabled by setting env var MOZ_DISABLE_CONTENT_SANDBOX.
+MFBT_API bool CanSandboxContentProcess();
+MFBT_API void SetContentProcessSandbox();
 #endif
 #ifdef MOZ_GMP_SANDBOX
-void SetMediaPluginSandbox(const char *aFilePath);
+// Disabled by setting env var MOZ_DISABLE_GMP_SANDBOX.
+MFBT_API bool CanSandboxMediaPlugin();
+MFBT_API void SetMediaPluginSandbox(const char *aFilePath);
 #endif
 
 } // namespace mozilla
 
 #endif // mozilla_Sandbox_h
-

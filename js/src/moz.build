@@ -71,6 +71,7 @@ EXPORTS.js += [
     '../public/CharacterEncoding.h',
     '../public/Class.h',
     '../public/Date.h',
+    '../public/DebugAPI.h',
     '../public/GCAPI.h',
     '../public/HashTable.h',
     '../public/HeapAPI.h',
@@ -111,6 +112,7 @@ UNIFIED_SOURCES += [
     'builtin/SymbolObject.cpp',
     'builtin/TestingFunctions.cpp',
     'builtin/TypedObject.cpp',
+    'builtin/WeakSetObject.cpp',
     'devtools/sharkctl.cpp',
     'ds/LifoAlloc.cpp',
     'frontend/BytecodeCompiler.cpp',
@@ -167,6 +169,7 @@ UNIFIED_SOURCES += [
     'jit/IonMacroAssembler.cpp',
     'jit/IonOptimizationLevels.cpp',
     'jit/IonSpewer.cpp',
+    'jit/JitcodeMap.cpp',
     'jit/JitOptions.cpp',
     'jit/JSONSpewer.cpp',
     'jit/LICM.cpp',
@@ -361,6 +364,23 @@ elif CONFIG['JS_CODEGEN_ARM']:
         UNIFIED_SOURCES += [
             'jit/arm/Simulator-arm.cpp'
         ]
+elif CONFIG['JS_CODEGEN_MIPS']:
+    UNIFIED_SOURCES += [
+        'jit/mips/Architecture-mips.cpp',
+        'jit/mips/Assembler-mips.cpp',
+        'jit/mips/Bailouts-mips.cpp',
+        'jit/mips/BaselineCompiler-mips.cpp',
+        'jit/mips/BaselineIC-mips.cpp',
+        'jit/mips/CodeGenerator-mips.cpp',
+        'jit/mips/Lowering-mips.cpp',
+        'jit/mips/MacroAssembler-mips.cpp',
+        'jit/mips/MoveEmitter-mips.cpp',
+        'jit/mips/Trampoline-mips.cpp',
+    ]
+    if CONFIG['JS_MIPS_SIMULATOR']:
+        UNIFIED_SOURCES += [
+            'jit/mips/Simulator-mips.cpp'
+        ]
 
 if CONFIG['OS_ARCH'] == 'WINNT':
     SOURCES += [
@@ -372,16 +392,6 @@ else:
     SOURCES += [
         'jit/ExecutableAllocatorPosix.cpp',
     ]
-
-if CONFIG['ENABLE_ION']:
-    if CONFIG['JS_CODEGEN_X86'] or CONFIG['JS_CODEGEN_X64']:
-        SOURCES += [
-            'assembler/assembler/MacroAssemblerX86Common.cpp',
-        ]
-    elif CONFIG['JS_CODEGEN_ARM']:
-        SOURCES += [
-            'assembler/assembler/MacroAssemblerARM.cpp',
-        ]
 
 if CONFIG['JS_HAS_CTYPES']:
     SOURCES += [
@@ -486,12 +496,6 @@ if CONFIG['_MSC_VER']:
     # Prevent floating point errors caused by VC++ optimizations
     # XXX We should add this to CXXFLAGS, too?
     CFLAGS += ['-fp:precise']
-
-# Needed to "configure" it correctly.  Unfortunately these
-# flags wind up being applied to all code in js/src, not just
-# the code in js/src/assembler.
-DEFINES['USE_SYSTEM_MALLOC'] = 1
-DEFINES['ENABLE_ASSEMBLER'] = 1
 
 if CONFIG['OS_ARCH'] not in ('WINNT', 'HP-UX'):
     OS_LIBS += [

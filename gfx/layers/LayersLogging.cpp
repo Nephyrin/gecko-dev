@@ -125,18 +125,22 @@ AppendToString(std::stringstream& aStream, const FrameMetrics& m,
   AppendToString(aStream, m.mCriticalDisplayPort, " cdp=");
   if (!detailed) {
     AppendToString(aStream, m.GetScrollId(), " scrollId=");
+    if (m.GetScrollParentId() != FrameMetrics::NULL_SCROLL_ID) {
+      AppendToString(aStream, m.GetScrollParentId(), " scrollParent=");
+    }
     aStream << nsPrintfCString(" z=%.3f }", m.GetZoom().scale).get();
   } else {
     AppendToString(aStream, m.GetDisplayPortMargins(), " dpm=");
     aStream << nsPrintfCString(" um=%d", m.GetUseDisplayPortMargins()).get();
     AppendToString(aStream, m.GetRootCompositionSize(), " rcs=");
-    AppendToString(aStream, m.mViewport, " v=");
+    AppendToString(aStream, m.GetViewport(), " v=");
     aStream << nsPrintfCString(" z=(ld=%.3f r=%.3f cr=%.3f z=%.3f ts=%.3f)",
             m.mDevPixelsPerCSSPixel.scale, m.mResolution.scale,
             m.mCumulativeResolution.scale, m.GetZoom().scale,
             m.mTransformScale.scale).get();
     aStream << nsPrintfCString(" u=(%d %lu)",
             m.GetScrollOffsetUpdated(), m.GetScrollGeneration()).get();
+    AppendToString(aStream, m.GetScrollParentId(), " p=");
     aStream << nsPrintfCString(" i=(%ld %lld) }",
             m.GetPresShellId(), m.GetScrollId()).get();
   }
@@ -168,6 +172,22 @@ AppendToString(std::stringstream& aStream, const Matrix4x4& m,
   }
   aStream << sfx;
 }
+
+void
+AppendToString(std::stringstream& aStream, const Matrix5x4& m,
+               const char* pfx, const char* sfx)
+{
+  aStream << pfx;
+  aStream << nsPrintfCString(
+    "[ %g %g %g %g; %g %g %g %g; %g %g %g %g; %g %g %g %g; %g %g %g %g]",
+    m._11, m._12, m._13, m._14,
+    m._21, m._22, m._23, m._24,
+    m._31, m._32, m._33, m._34,
+    m._41, m._42, m._43, m._44,
+    m._51, m._52, m._53, m._54).get();
+  aStream << sfx;
+}
+
 
 void
 AppendToString(std::stringstream& aStream, const Filter filter,

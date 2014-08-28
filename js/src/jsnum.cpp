@@ -1558,15 +1558,15 @@ js::NonObjectToNumberSlow(ThreadSafeContext *cx, Value v, double *out)
         *out = 0.0;
         return true;
     }
+    if (v.isSymbol()) {
+        JS_ReportErrorNumber(cx->asJSContext(), js_GetErrorMessage, nullptr, JSMSG_SYMBOL_TO_NUMBER);
+        return false;
+    }
 
-    JS_ASSERT(v.isUndefined() || v.isSymbol());
+    JS_ASSERT(v.isUndefined());
     *out = GenericNaN();
     return true;
 }
-
-#if defined(_MSC_VER)
-# pragma optimize("g", off)
-#endif
 
 bool
 js::ToNumberSlow(ExclusiveContext *cx, Value v, double *out)
@@ -1603,10 +1603,6 @@ js::ToNumberSlow(JSContext *cx, Value v, double *out)
 {
     return ToNumberSlow(static_cast<ExclusiveContext *>(cx), v, out);
 }
-
-#if defined(_MSC_VER)
-# pragma optimize("", on)
-#endif
 
 /*
  * Convert a value to an int64_t, according to the WebIDL rules for long long

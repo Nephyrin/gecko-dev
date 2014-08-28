@@ -11,6 +11,8 @@ import sys
 import tempfile
 import time
 
+import mozfile
+
 from .runner import BaseRunner
 from ..devices import Emulator
 
@@ -37,6 +39,7 @@ class DeviceRunner(BaseRunner):
 
         process_args = {'stream': sys.stdout,
                         'processOutputLine': self.on_output,
+                        'onFinish': self.on_finish,
                         'onTimeout': self.on_timeout }
         process_args.update(kwargs.get('process_args') or {})
 
@@ -68,9 +71,6 @@ class DeviceRunner(BaseRunner):
         # wifi for some reason. It would be good to probe the state of the device
         # to see if we have the homescreen running, or something, before waiting here
         self.device.wait_for_net()
-
-        if not isinstance(self.device, Emulator):
-            self.device.reboot()
 
         if not self.device.wait_for_net():
             raise Exception("Network did not come up when starting device")
@@ -122,9 +122,15 @@ class DeviceRunner(BaseRunner):
         print(msg % (self.last_test, timeout))
         self.check_for_crashes()
 
+    def on_finish(self):
+        self.check_for_crashes()
+
     def check_for_crashes(self):
         dump_dir = self.device.pull_minidumps()
-        BaseRunner.check_for_crashes(self, dump_directory=dump_dir, test_name=self.last_test)
+        crashed = BaseRunner.check_for_crashes(self, dump_directory=dump_dir,
+                                               test_name=self.last_test)
+        mozfile.remove(dump_dir)
+        return crashed
 
     def cleanup(self, *args, **kwargs):
         BaseRunner.cleanup(self, *args, **kwargs)

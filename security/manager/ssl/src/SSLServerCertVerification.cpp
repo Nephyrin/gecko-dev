@@ -97,6 +97,7 @@
 #include <cstring>
 
 #include "pkix/pkixtypes.h"
+#include "pkix/pkixnss.h"
 #include "CertVerifier.h"
 #include "CryptoTask.h"
 #include "ExtendedValidation.h"
@@ -300,9 +301,10 @@ MapCertErrorToProbeValue(PRErrorCode errorCode)
     case SEC_ERROR_CERT_SIGNATURE_ALGORITHM_DISABLED:  return  8;
     case SSL_ERROR_BAD_CERT_DOMAIN:                    return  9;
     case SEC_ERROR_EXPIRED_CERTIFICATE:                return 10;
+    case mozilla::pkix::MOZILLA_PKIX_ERROR_CA_CERT_USED_AS_END_ENTITY: return 11;
   }
   NS_WARNING("Unknown certificate error code. Does MapCertErrorToProbeValue "
-             "handle everything in PRErrorCodeToOverrideType?");
+             "handle everything in DetermineCertOverrideErrors?");
   return 0;
 }
 
@@ -328,6 +330,7 @@ DetermineCertOverrideErrors(CERTCertificate* cert, const char* hostName,
     case SEC_ERROR_CERT_SIGNATURE_ALGORITHM_DISABLED:
     case SEC_ERROR_EXPIRED_ISSUER_CERTIFICATE:
     case SEC_ERROR_UNKNOWN_ISSUER:
+    case mozilla::pkix::MOZILLA_PKIX_ERROR_CA_CERT_USED_AS_END_ENTITY:
     {
       collectedErrors = nsICertOverrideService::ERROR_UNTRUSTED;
       errorCodeTrust = defaultErrorCodeToReport;
@@ -621,6 +624,7 @@ public:
                             const void* fdForLogging,
                             TransportSecurityInfo* infoObject,
                             CERTCertificate* serverCert,
+                            ScopedCERTCertList& peerCertChain,
                             SECItem* stapledOCSPResponse,
                             uint32_t providerFlags,
                             Time time,
@@ -633,6 +637,7 @@ private:
                                const void* fdForLogging,
                                TransportSecurityInfo* infoObject,
                                CERTCertificate* cert,
+                               CERTCertList* peerCertChain,
                                SECItem* stapledOCSPResponse,
                                uint32_t providerFlags,
                                Time time,
@@ -641,6 +646,7 @@ private:
   const void* const mFdForLogging;
   const RefPtr<TransportSecurityInfo> mInfoObject;
   const ScopedCERTCertificate mCert;
+  ScopedCERTCertList mPeerCertChain;
   const uint32_t mProviderFlags;
   const Time mTime;
   const PRTime mPRTime;
@@ -651,12 +657,13 @@ private:
 SSLServerCertVerificationJob::SSLServerCertVerificationJob(
     const RefPtr<SharedCertVerifier>& certVerifier, const void* fdForLogging,
     TransportSecurityInfo* infoObject, CERTCertificate* cert,
-    SECItem* stapledOCSPResponse, uint32_t providerFlags,
-    Time time, PRTime prtime)
+    CERTCertList* peerCertChain, SECItem* stapledOCSPResponse,
+    uint32_t providerFlags, Time time, PRTime prtime)
   : mCertVerifier(certVerifier)
   , mFdForLogging(fdForLogging)
   , mInfoObject(infoObject)
   , mCert(CERT_DupCertificate(cert))
+  , mPeerCertChain(peerCertChain)
   , mProviderFlags(providerFlags)
   , mTime(time)
   , mPRTime(prtime)
@@ -733,9 +740,13 @@ BlockServerCertChangeForSpdy(nsNSSSocketInfo* infoObject,
 }
 
 SECStatus
-AuthCertificate(CertVerifier& certVerifier, TransportSecurityInfo* infoObject,
-                CERTCertificate* cert, SECItem* stapledOCSPResponse,
-                uint32_t providerFlags, Time time)
+AuthCertificate(CertVerifier& certVerifier,
+                TransportSecurityInfo* infoObject,
+                CERTCertificate* cert,
+                ScopedCERTCertList& peerCertChain,
+                SECItem* stapledOCSPResponse,
+                uint32_t providerFlags,
+                Time time)
 {
   MOZ_ASSERT(infoObject);
   MOZ_ASSERT(cert);
@@ -747,12 +758,11 @@ AuthCertificate(CertVerifier& certVerifier, TransportSecurityInfo* infoObject,
   bool saveIntermediates =
     !(providerFlags & nsISocketProvider::NO_PERMANENT_STORAGE);
 
-  ScopedCERTCertList certList;
   SECOidTag evOidPolicy;
   rv = certVerifier.VerifySSLServerCert(cert, stapledOCSPResponse,
                                         time, infoObject,
                                         infoObject->GetHostNameRaw(),
-                                        saveIntermediates, nullptr,
+                                        saveIntermediates, 0, nullptr,
                                         &evOidPolicy);
 
   // We want to remember the CA certs in the temp db, so that the application can find the
@@ -799,6 +809,13 @@ AuthCertificate(CertVerifier& certVerifier, TransportSecurityInfo* infoObject,
     }
   }
 
+  if (rv != SECSuccess) {
+    // Certificate validation failed; store the peer certificate chain on
+    // infoObject so it can be used for error reporting. Note: infoObject
+    // indirectly takes ownership of peerCertChain.
+    infoObject->SetFailedCertChain(peerCertChain);
+  }
+
   return rv;
 }
 
@@ -808,6 +825,7 @@ SSLServerCertVerificationJob::Dispatch(
   const void* fdForLogging,
   TransportSecurityInfo* infoObject,
   CERTCertificate* serverCert,
+  ScopedCERTCertList& peerCertChain,
   SECItem* stapledOCSPResponse,
   uint32_t providerFlags,
   Time time,
@@ -820,10 +838,18 @@ SSLServerCertVerificationJob::Dispatch(
     return SECFailure;
   }
 
+  // Copy the certificate list so the runnable can take ownership of it in the
+  // constructor.
+  // We can safely skip checking if NSS has already shut down here since we're
+  // in the middle of verifying a certificate.
+  nsNSSShutDownPreventionLock lock;
+  CERTCertList* peerCertChainCopy = nsNSSCertList::DupCertList(peerCertChain, lock);
+
   RefPtr<SSLServerCertVerificationJob> job(
     new SSLServerCertVerificationJob(certVerifier, fdForLogging, infoObject,
-                                     serverCert, stapledOCSPResponse,
-                                     providerFlags, time, prtime));
+                                     serverCert, peerCertChainCopy,
+                                     stapledOCSPResponse, providerFlags,
+                                     time, prtime));
 
   nsresult nrv;
   if (!gCertVerificationThreadPool) {
@@ -873,8 +899,8 @@ SSLServerCertVerificationJob::Run()
     // set the error code if/when it fails.
     PR_SetError(0, 0);
     SECStatus rv = AuthCertificate(*mCertVerifier, mInfoObject, mCert.get(),
-                                   mStapledOCSPResponse, mProviderFlags,
-                                   mTime);
+                                   mPeerCertChain, mStapledOCSPResponse,
+                                   mProviderFlags, mTime);
     if (rv == SECSuccess) {
       uint32_t interval = (uint32_t) ((TimeStamp::Now() - mJobStartTime).ToMilliseconds());
       RefPtr<SSLServerCertVerificationResult> restart(
@@ -975,6 +1001,9 @@ AuthCertificateHook(void* arg, PRFileDesc* fd, PRBool checkSig, PRBool isServer)
       return SECFailure;
   }
 
+  // Get the peer certificate chain for error reporting
+  ScopedCERTCertList peerCertChain(SSL_PeerCertificateChain(fd));
+
   socketInfo->SetFullHandshake();
 
   Time now(Now());
@@ -1020,8 +1049,8 @@ AuthCertificateHook(void* arg, PRFileDesc* fd, PRBool checkSig, PRBool isServer)
     socketInfo->SetCertVerificationWaiting();
     SECStatus rv = SSLServerCertVerificationJob::Dispatch(
                      certVerifier, static_cast<const void*>(fd), socketInfo,
-                     serverCert, stapledOCSPResponse, providerFlags, now,
-                     prnow);
+                     serverCert, peerCertChain, stapledOCSPResponse,
+                     providerFlags, now, prnow);
     return rv;
   }
 
@@ -1031,7 +1060,8 @@ AuthCertificateHook(void* arg, PRFileDesc* fd, PRBool checkSig, PRBool isServer)
   // a non-blocking socket.
 
   SECStatus rv = AuthCertificate(*certVerifier, socketInfo, serverCert,
-                                 stapledOCSPResponse, providerFlags, now);
+                                 peerCertChain, stapledOCSPResponse,
+                                 providerFlags, now);
   if (rv == SECSuccess) {
     Telemetry::Accumulate(Telemetry::SSL_CERT_ERROR_OVERRIDES, 1);
     return SECSuccess;

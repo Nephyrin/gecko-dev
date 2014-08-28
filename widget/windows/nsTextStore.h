@@ -24,6 +24,9 @@
 #ifdef INPUTSCOPE_INIT_GUID
 #include <initguid.h>
 #endif
+#ifdef TEXTATTRS_INIT_GUID
+#include <tsattrs.h>
+#endif
 #include <inputscope.h>
 
 // TSF InputScope, for earlier SDK 8
@@ -135,7 +138,7 @@ public:
 
   static nsresult OnFocusChange(bool aGotFocus,
                                 nsWindowBase* aFocusedWidget,
-                                IMEState::Enabled aIMEEnabled);
+                                const IMEState& aIMEState);
   static nsresult OnTextChange(const IMENotification& aIMENotification)
   {
     NS_ENSURE_TRUE(sTsfTextStore, NS_ERROR_NOT_AVAILABLE);
@@ -270,6 +273,8 @@ protected:
                                ITfRange* aRange,
                                TF_DISPLAYATTRIBUTE* aResult);
   HRESULT  RestartCompositionIfNecessary(ITfRange* pRangeNew = nullptr);
+  HRESULT  RestartComposition(ITfCompositionView* aCompositionView,
+                              ITfRange* aNewRange);
 
   // Following methods record composing action(s) to mPendingActions.
   // They will be flushed FlushPendingActions().
@@ -284,9 +289,9 @@ protected:
   void     FlushPendingActions();
 
   nsresult OnLayoutChangeInternal();
-  HRESULT  ProcessScopeRequest(DWORD dwFlags,
-                               ULONG cFilterAttrs,
-                               const TS_ATTRID *paFilterAttrs);
+  HRESULT  HandleRequestAttrs(DWORD aFlags,
+                              ULONG aFilterCount,
+                              const TS_ATTRID* aFilterAttrs);
   void     SetInputScope(const nsString& aHTMLInputType);
 
   // Creates native caret over our caret.  This method only works on desktop
@@ -480,11 +485,11 @@ protected:
   // selection or content is changed without document lock.
   Selection mSelection;
 
-  // Get "current selection" while the document is locked.  The selection is
-  // NOT modified immediately during document lock.  The pending changes will
-  // be flushed at unlocking the document.  The "current selection" is the
-  // modified selection during document lock.  This is also called
-  // CurrentContent() too.
+  // Get "current selection".  If the document is locked, this initializes
+  // mSelection with the selection at the first call during a lock and returns
+  // it.  However, mSelection is NOT modified immediately.  When pending
+  // changes are flushed at unlocking the document, cached mSelection is
+  // modified.  Note that this is also called by LockedContent().
   Selection& CurrentSelection();
 
   struct PendingAction MOZ_FINAL
@@ -612,7 +617,8 @@ protected:
     void ReplaceTextWith(LONG aStart, LONG aLength, const nsAString& aString);
 
     void StartComposition(ITfCompositionView* aCompositionView,
-                          const PendingAction& aCompStart);
+                          const PendingAction& aCompStart,
+                          bool aPreserveSelection);
     void EndComposition(const PendingAction& aCompEnd);
 
     const nsString& Text() const
@@ -651,20 +657,44 @@ protected:
 
     bool mInitialized;
   };
-  // mContent caches "current content" of the document ONLY while the document
+  // mLockedContent caches content of the document ONLY while the document
   // is locked.  I.e., the content is cleared at unlocking the document since
   // we need to reduce the memory usage.  This is initialized by
-  // CurrentContent() automatically, so, don't access this member directly
+  // LockedContent() automatically.  So, don't access this member directly
   // except at calling Clear(), IsInitialized(), IsLayoutChangedAfter() or
   // IsLayoutChanged().
-  Content mContent;
+  Content mLockedContent;
 
-  Content& CurrentContent();
+  Content& LockedContent();
+
+  // While the documet is locked, this returns the text stored by
+  // mLockedContent.  Otherwise, return the current text content.
+  bool GetCurrentText(nsAString& aTextContent);
 
   // The input scopes for this context, defaults to IS_DEFAULT.
   nsTArray<InputScope>         mInputScopes;
-  bool                         mInputScopeDetected;
-  bool                         mInputScopeRequested;
+
+  // Support retrieving attributes.
+  // TODO: We should support RightToLeft, perhaps.
+  enum
+  {
+    // Used for result of GetRequestedAttrIndex()
+    eNotSupported = -1,
+
+    // Supported attributes
+    eInputScope = 0,
+    eTextVerticalWriting,
+
+    // Count of the supported attributes
+    NUM_OF_SUPPORTED_ATTRS
+  };
+  bool mRequestedAttrs[NUM_OF_SUPPORTED_ATTRS];
+
+  int32_t GetRequestedAttrIndex(const TS_ATTRID& aAttrID);
+  TS_ATTRID GetAttrID(int32_t aIndex);
+
+  bool mRequestedAttrValues;
+
   // If edit actions are being recorded without document lock, this is true.
   // Otherwise, false.
   bool                         mIsRecordingActionsWithoutLock;
@@ -716,6 +746,8 @@ protected:
 
   // Enables/Disables hack for specific TIP.
   static bool sCreateNativeCaretForATOK;
+  static bool sDoNotReturnNoLayoutErrorToFreeChangJie;
+  static bool sDoNotReturnNoLayoutErrorToEasyChangjei;
 
   // Message the Tablet Input Panel uses to flush text during blurring.
   // See comments in Destroy

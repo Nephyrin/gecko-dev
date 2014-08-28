@@ -54,7 +54,7 @@ using mozilla::unused;          // <snicker>
 using namespace mozilla;
 using namespace mozilla::dom;
 
-class nsGeolocationRequest
+class nsGeolocationRequest MOZ_FINAL
  : public nsIContentPermissionRequest
  , public nsITimerCallback
  , public nsIGeolocationUpdate
@@ -494,6 +494,17 @@ nsGeolocationRequest::SendLocation(nsIDOMGeoPosition* aPosition)
   if (mShutdown) {
     // Ignore SendLocationEvents issued before we were cleared.
     return;
+  }
+
+  if (mOptions && mOptions->mMaximumAge > 0) {
+    DOMTimeStamp positionTime_ms;
+    aPosition->GetTimestamp(&positionTime_ms);
+    const uint32_t maximumAge_ms = mOptions->mMaximumAge;
+    const bool isTooOld =
+        DOMTimeStamp(PR_Now() / PR_USEC_PER_MSEC - maximumAge_ms) > positionTime_ms;
+    if (isTooOld) {
+      return;
+    }
   }
 
   nsRefPtr<Position> wrapped;

@@ -232,7 +232,7 @@ MozInputMethod.prototype = {
         break;
       case 'Keyboard:SelectionChange':
         if (this.inputcontext) {
-          this._inputcontext.updateSelectionContext(json);
+          this._inputcontext.updateSelectionContext(json, false);
         }
         break;
       case 'Keyboard:GetContext:Result:OK':
@@ -452,6 +452,11 @@ MozInputContext.prototype = {
       return;
     }
 
+    // Update context first before resolving promise to avoid race condition
+    if (json.selectioninfo) {
+      this.updateSelectionContext(json.selectioninfo, true);
+    }
+
     switch (msg.name) {
       case "Keyboard:SendKey:Result:OK":
         resolver.resolve();
@@ -486,7 +491,7 @@ MozInputContext.prototype = {
     }
   },
 
-  updateSelectionContext: function ic_updateSelectionContext(ctx) {
+  updateSelectionContext: function ic_updateSelectionContext(ctx, ownAction) {
     if (!this._context) {
       return;
     }
@@ -504,14 +509,16 @@ MozInputContext.prototype = {
     if (selectionDirty) {
       this._fireEvent("selectionchange", {
         selectionStart: ctx.selectionStart,
-        selectionEnd: ctx.selectionEnd
+        selectionEnd: ctx.selectionEnd,
+        ownAction: ownAction
       });
     }
 
     if (surroundDirty) {
       this._fireEvent("surroundingtextchange", {
         beforeString: ctx.textBeforeCursor,
-        afterString: ctx.textAfterCursor
+        afterString: ctx.textAfterCursor,
+        ownAction: ownAction
       });
     }
   },
@@ -521,8 +528,8 @@ MozInputContext.prototype = {
       detail: aDetail
     };
 
-    let event = new this._window.Event(eventName,
-                                       Cu.cloneInto(aDetail, this._window));
+    let event = new this._window.CustomEvent(eventName,
+                                             Cu.cloneInto(detail, this._window));
     this.__DOM_IMPL__.dispatchEvent(event);
   },
 

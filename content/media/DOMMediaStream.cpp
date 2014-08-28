@@ -196,6 +196,18 @@ DOMMediaStream::GetVideoTracks(nsTArray<nsRefPtr<VideoStreamTrack> >& aTracks)
   }
 }
 
+void
+DOMMediaStream::GetTracks(nsTArray<nsRefPtr<MediaStreamTrack> >& aTracks)
+{
+  aTracks.AppendElements(mTracks);
+}
+
+bool
+DOMMediaStream::HasTrack(const MediaStreamTrack& aTrack) const
+{
+  return mTracks.Contains(&aTrack);
+}
+
 bool
 DOMMediaStream::IsFinished()
 {
@@ -207,7 +219,7 @@ DOMMediaStream::InitSourceStream(nsIDOMWindow* aWindow, TrackTypeHints aHintCont
 {
   mWindow = aWindow;
   SetHintContents(aHintContents);
-  MediaStreamGraph* gm = MediaStreamGraph::GetInstance();
+  MediaStreamGraph* gm = MediaStreamGraph::GetInstance(aHintContents);
   InitStreamCommon(gm->CreateSourceStream(this));
 }
 
@@ -216,7 +228,7 @@ DOMMediaStream::InitTrackUnionStream(nsIDOMWindow* aWindow, TrackTypeHints aHint
 {
   mWindow = aWindow;
   SetHintContents(aHintContents);
-  MediaStreamGraph* gm = MediaStreamGraph::GetInstance();
+  MediaStreamGraph* gm = MediaStreamGraph::GetInstance(aHintContents);
   InitStreamCommon(gm->CreateTrackUnionStream(this));
 }
 
@@ -251,6 +263,14 @@ DOMMediaStream::SetTrackEnabled(TrackID aTrackID, bool aEnabled)
 {
   if (mStream) {
     mStream->SetTrackEnabled(aTrackID, aEnabled);
+  }
+}
+
+void
+DOMMediaStream::StopTrack(TrackID aTrackID)
+{
+  if (mStream && mStream->AsSourceStream()) {
+    mStream->AsSourceStream()->EndTrack(aTrackID);
   }
 }
 

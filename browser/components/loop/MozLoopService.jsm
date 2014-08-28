@@ -14,6 +14,8 @@ Cu.import("resource://gre/modules/Services.jsm");
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
 Cu.import("resource://gre/modules/Promise.jsm");
 Cu.import("resource://gre/modules/osfile.jsm", this);
+Cu.import("resource://gre/modules/Task.jsm");
+Cu.import("resource://gre/modules/FxAccountsOAuthClient.jsm");
 
 this.EXPORTED_SYMBOLS = ["MozLoopService"];
 
@@ -56,6 +58,9 @@ let gHawkClient = null;
 let gRegisteredLoopServer = false;
 let gLocalizedStrings =  null;
 let gInitializeTimer = null;
+let gFxAOAuthClientPromise = null;
+let gFxAOAuthClient = null;
+let gFxAOAuthTokenData = null;
 
 /**
  * Internal helper methods and state
@@ -191,7 +196,10 @@ let MozLoopServiceInternal = {
                                           2 * 32, true);
     }
 
-    return gHawkClient.request(path, method, credentials, payloadObj);
+    return gHawkClient.request(path, method, credentials, payloadObj).catch(error => {
+      console.error("Loop hawkRequest error:", error);
+      throw error;
+    });
   },
 
   /**
@@ -287,7 +295,14 @@ let MozLoopServiceInternal = {
       return;
     }
 
-    this.openChatWindow(null, "LooP", "about:loopconversation#incoming/" + version);
+    // We set this here as it is assumed that once the user receives an incoming
+    // call, they'll have had enough time to see the terms of service. See
+    // bug 1046039 for background.
+    Services.prefs.setCharPref("loop.seenToS", "seen");
+
+    this.openChatWindow(null,
+                        this.localizedStrings["incoming_call_title"].textContent,
+                        "about:loopconversation#incoming/" + version);
   },
 
   /**
@@ -447,7 +462,113 @@ let MozLoopServiceInternal = {
     };
 
     Chat.open(contentWindow, origin, title, url, undefined, undefined, callback);
-  }
+  },
+
+  /**
+   * Fetch Firefox Accounts (FxA) OAuth parameters from the Loop Server.
+   *
+   * @return {Promise} resolved with the body of the hawk request for OAuth parameters.
+   */
+  promiseFxAOAuthParameters: function() {
+    return this.hawkRequest("/fxa-oauth/params", "POST").then(response => {
+      return JSON.parse(response.body);
+    });
+  },
+
+  /**
+   * Get the OAuth client constructed with Loop OAauth parameters.
+   *
+   * @return {Promise}
+   */
+  promiseFxAOAuthClient: Task.async(function* () {
+    // We must make sure to have only a single client otherwise they will have different states and
+    // multiple channels. This would happen if the user clicks the Login button more than once.
+    if (gFxAOAuthClientPromise) {
+      return gFxAOAuthClientPromise;
+    }
+
+    gFxAOAuthClientPromise = this.promiseFxAOAuthParameters().then(
+      parameters => {
+        try {
+          gFxAOAuthClient = new FxAccountsOAuthClient({
+            parameters: parameters,
+          });
+        } catch (ex) {
+          gFxAOAuthClientPromise = null;
+          throw ex;
+        }
+        return gFxAOAuthClient;
+      },
+      error => {
+        gFxAOAuthClientPromise = null;
+        throw error;
+      }
+    );
+
+    return gFxAOAuthClientPromise;
+  }),
+
+  /**
+   * Get the OAuth client and do the authorization web flow to get an OAuth code.
+   *
+   * @return {Promise}
+   */
+  promiseFxAOAuthAuthorization: function() {
+    let deferred = Promise.defer();
+    this.promiseFxAOAuthClient().then(
+      client => {
+        client.onComplete = this._fxAOAuthComplete.bind(this, deferred);
+        client.launchWebFlow();
+      },
+      error => {
+        console.error(error);
+        deferred.reject(error);
+      }
+    );
+    return deferred.promise;
+  },
+
+  /**
+   * Get the OAuth token using the OAuth code and state.
+   *
+   * The caller should approperiately handle 4xx errors (which should lead to a logout)
+   * and 5xx or connectivity issues with messaging to try again later.
+   *
+   * @param {String} code
+   * @param {String} state
+   *
+   * @return {Promise} resolving with OAuth token data.
+   */
+  promiseFxAOAuthToken: function(code, state) {
+    if (!code || !state) {
+      throw new Error("promiseFxAOAuthToken: code and state are required.");
+    }
+
+    let payload = {
+      code: code,
+      state: state,
+    };
+    return this.hawkRequest("/fxa-oauth/token", "POST", payload).then(response => {
+      return JSON.parse(response.body);
+    });
+  },
+
+  /**
+   * Called once gFxAOAuthClient fires onComplete.
+   *
+   * @param {Deferred} deferred used to resolve or reject the gFxAOAuthClientPromise
+   * @param {Object} result (with code and state)
+   */
+  _fxAOAuthComplete: function(deferred, result) {
+    gFxAOAuthClientPromise = null;
+
+    // Note: The state was already verified in FxAccountsOAuthClient.
+    if (result) {
+      deferred.resolve(result);
+    } else {
+      deferred.reject("Invalid token data");
+    }
+  },
 };
 Object.freeze(MozLoopServiceInternal);
 
@@ -467,6 +588,23 @@ let gInitializeTimerFunc = () => {
  * Public API
  */
 this.MozLoopService = {
+#ifdef DEBUG
+  // Test-only helpers
+  get internal() {
+    return MozLoopServiceInternal;
+  },
+
+  get gFxAOAuthTokenData() {
+    return gFxAOAuthTokenData;
+  },
+
+  resetFxA: function() {
+    gFxAOAuthClientPromise = null;
+    gFxAOAuthClient = null;
+    gFxAOAuthTokenData = null;
+  },
+#endif
+
   set initializeTimerFunc(value) {
     gInitializeTimerFunc = value;
   },
@@ -609,6 +747,49 @@ this.MozLoopService = {
         "; exception: " + ex);
       return null;
     }
+  },
+
+  /**
+   * Return any preference under "loop." that's coercible to a character
+   * preference.
+   *
+   * @param {String} prefName The name of the pref without the preceding
+   * "loop."
+   *
+   * Any errors thrown by the Mozilla pref API are logged to the console
+   * and cause null to be returned. This includes the case of the preference
+   * not being found.
+   *
+   * @return {String} on success, null on error
+   */
+  getLoopBoolPref: function(prefName) {
+    try {
+      return Services.prefs.getBoolPref("loop." + prefName);
+    } catch (ex) {
+      console.log("getLoopBoolPref had trouble getting " + prefName +
+        "; exception: " + ex);
+      return null;
+    }
+  },
+
+  /**
+   * Start the FxA login flow using the OAuth client and params from the Loop server.
+   *
+   * The caller should be prepared to handle rejections related to network, server or login errors.
+   *
+   * @return {Promise} that resolves when the FxA login flow is complete.
+   */
+  logInToFxA: function() {
+    return MozLoopServiceInternal.promiseFxAOAuthAuthorization().then(response => {
+      return MozLoopServiceInternal.promiseFxAOAuthToken(response.code, response.state);
+    }).then(tokenData => {
+      gFxAOAuthTokenData = tokenData;
+      return tokenData;
+    },
+    error => {
+      gFxAOAuthTokenData = null;
+      throw error;
+    });
   },
 
   /**

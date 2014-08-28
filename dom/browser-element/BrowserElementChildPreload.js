@@ -81,6 +81,9 @@ let SEC_ERROR_CERT_SIGNATURE_ALGORITHM_DISABLED = (SEC_ERROR_BASE + 176);
 let SSL_ERROR_BASE = Ci.nsINSSErrorsService.NSS_SSL_ERROR_BASE;
 let SSL_ERROR_BAD_CERT_DOMAIN = (SSL_ERROR_BASE + 12);
 
+let MOZILLA_PKIX_ERROR_BASE = Ci.nsINSSErrorsService.MOZILLA_PKIX_ERROR_BASE;
+let MOZILLA_PKIX_ERROR_CA_CERT_USED_AS_END_ENTITY = (MOZILLA_PKIX_ERROR_BASE + 1);
+
 function getErrorClass(errorCode) {
   let NSPRCode = -1 * NS_ERROR_GET_CODE(errorCode);
 
@@ -92,6 +95,7 @@ function getErrorClass(errorCode) {
     case SSL_ERROR_BAD_CERT_DOMAIN:
     case SEC_ERROR_EXPIRED_CERTIFICATE:
     case SEC_ERROR_CERT_SIGNATURE_ALGORITHM_DISABLED:
+    case MOZILLA_PKIX_ERROR_CA_CERT_USED_AS_END_ENTITY:
       return Ci.nsINSSErrorsService.ERROR_CLASS_BAD_CERT;
     default:
       return Ci.nsINSSErrorsService.ERROR_CLASS_SSL_PROTOCOL;
@@ -616,18 +620,12 @@ BrowserElementChild.prototype = {
   },
 
   _selectionChangeHandler: function(e) {
-    let isMouseUp = e.reason & Ci.nsISelectionListener.MOUSEUP_REASON;
-    let isSelectAll = e.reason & Ci.nsISelectionListener.SELECTALL_REASON;
-    // When selectall happened, gecko will first collapse the range then
-    // select all. So we will receive two selection change events with
-    // SELECTALL_REASON. We filter first event by check the length of
-    // selectedText.
-    if (!(isMouseUp || (isSelectAll && e.selectedText.length > 0))) {
+    e.stopPropagation();
+    let boundingClientRect = e.boundingClientRect;
+    if (!boundingClientRect) {
       return;
     }
 
-    e.stopPropagation();
-    let boundingClientRect = e.boundingClientRect;
     let zoomFactor = content.screen.width / content.innerWidth;
 
     let detail = {
@@ -646,17 +644,19 @@ BrowserElementChild.prototype = {
         canPaste: this._isCommandEnabled("paste"),
       },
       zoomFactor: zoomFactor,
+      reasons: e.reasons,
+      isCollapsed: (e.selectedText.length == 0),
     };
 
-    // Get correct geometry information if we have nested <iframe mozbrowser>
+    // Get correct geometry information if we have nested iframe.
     let currentWindow = e.target.defaultView;
-    while (currentWindow.realFrameElement) {
-      let currentRect = currentWindow.realFrameElement.getBoundingClientRect();
+    while (currentWindow.top != currentWindow) {
+      let currentRect = currentWindow.frameElement.getBoundingClientRect();
       detail.rect.top += currentRect.top;
       detail.rect.bottom += currentRect.top;
       detail.rect.left += currentRect.left;
       detail.rect.right += currentRect.left;
-      currentWindow = currentWindow.realFrameElement.ownerDocument.defaultView;
+      currentWindow = currentWindow.parent;
     }
 
     sendAsyncMsg("selectionchange", detail);

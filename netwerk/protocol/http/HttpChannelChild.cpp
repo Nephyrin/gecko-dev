@@ -9,6 +9,7 @@
 #include "HttpLog.h"
 
 #include "nsHttp.h"
+#include "nsICacheEntry.h"
 #include "mozilla/unused.h"
 #include "mozilla/dom/ContentChild.h"
 #include "mozilla/dom/TabChild.h"
@@ -41,7 +42,7 @@ HttpChannelChild::HttpChannelChild()
   : HttpAsyncAborter<HttpChannelChild>(MOZ_THIS_IN_INITIALIZER_LIST())
   , mIsFromCache(false)
   , mCacheEntryAvailable(false)
-  , mCacheExpirationTime(nsICache::NO_EXPIRATION_TIME)
+  , mCacheExpirationTime(nsICacheEntry::NO_EXPIRATION_TIME)
   , mSendResumeAt(false)
   , mIPCOpen(false)
   , mKeptAlive(false)
@@ -336,9 +337,14 @@ HttpChannelChild::OnStartRequest(const nsresult& channelStatus,
   if (mResponseHead)
     SetCookie(mResponseHead->PeekHeader(nsHttp::Set_Cookie));
 
-  rv = ApplyContentConversions();
-  if (NS_FAILED(rv))
+  nsCOMPtr<nsIStreamListener> listener;
+  rv = DoApplyContentConversions(mListener, getter_AddRefs(listener),
+                                 mListenerContext);
+  if (NS_FAILED(rv)) {
     Cancel(rv);
+  } else if (listener) {
+    mListener = listener;
+  }
 
   mSelfAddr = selfAddr;
   mPeerAddr = peerAddr;

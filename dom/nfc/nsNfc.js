@@ -60,9 +60,6 @@ MozNFCTag.prototype = {
   _techTypesMap: null,
 
   // NFCTag interface:
-  getDetailsNDEF: function getDetailsNDEF() {
-    return this._nfcContentHelper.getDetailsNDEF(this._window, this.session);
-  },
   readNDEF: function readNDEF() {
     return this._nfcContentHelper.readNDEF(this._window, this.session);
   },
@@ -71,13 +68,6 @@ MozNFCTag.prototype = {
   },
   makeReadOnlyNDEF: function makeReadOnlyNDEF() {
     return this._nfcContentHelper.makeReadOnlyNDEF(this._window, this.session);
-  },
-  connect: function connect(enum_tech_type) {
-    let int_tech_type = this._techTypesMap[enum_tech_type];
-    return this._nfcContentHelper.connect(this._window, int_tech_type, this.session);
-  },
-  close: function close() {
-    return this._nfcContentHelper.close(this._window, this.session);
   },
 
   classID: Components.ID("{4e1e2e90-3137-11e3-aa6e-0800200c9a66}"),
@@ -157,10 +147,6 @@ mozNfc.prototype = {
   _window: null,
   nfcObject: null,
 
-  _wrap: function _wrap(obj) {
-    return Cu.cloneInto(obj, this._window);
-  },
-
   init: function init(aWindow) {
     debug("mozNfc init called");
     this._window = aWindow;
@@ -201,14 +187,14 @@ mozNfc.prototype = {
   getNFCTag: function getNFCTag(sessionToken) {
     let obj = new MozNFCTag();
     obj.initialize(this._window, sessionToken);
-    if (this._nfcContentHelper.setSessionToken(sessionToken)) {
+    if (this._nfcContentHelper.checkSessionToken(sessionToken)) {
       return this._window.MozNFCTag._create(this._window, obj);
     }
     return null;
   },
 
   getNFCPeer: function getNFCPeer(sessionToken) {
-    if (!sessionToken || !this._nfcContentHelper.setSessionToken(sessionToken)) {
+    if (!sessionToken || !this._nfcContentHelper.checkSessionToken(sessionToken)) {
       return null;
     }
 
@@ -269,10 +255,10 @@ mozNfc.prototype = {
     this.session = sessionToken;
 
     debug("fire onpeerready sessionToken : " + sessionToken);
-    let detail = {
-      "detail":sessionToken
+    let eventData = {
+      "peer":this.getNFCPeer(sessionToken)
     };
-    let event = new this._window.CustomEvent("peerready", this._wrap(detail));
+    let event = new this._window.MozNFCPeerEvent("peerready", eventData);
     this.__DOM_IMPL__.dispatchEvent(event);
   },
 

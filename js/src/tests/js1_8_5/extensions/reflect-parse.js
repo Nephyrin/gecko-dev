@@ -402,6 +402,13 @@ var node = Reflect.parse("a = {[field1]: 5}");
 Pattern({ body: [ { expression: { right: { properties: [ {key: { loc:
     { start: { line: 1, column: 5 }, end: { line: 1, column: 13 }}}}]}}}]}).match(node);
 
+// Bug 1048384 - Getter/setter syntax with computed names
+assertExpr("b = { get [meth]() { } }", aExpr("=", ident("b"),
+              objExpr([{ key: computedName(ident("meth")), value: funExpr(null, [], blockStmt([])),
+                method: false, kind: "get"}])));
+assertExpr("b = { set [meth](a) { } }", aExpr("=", ident("b"),
+              objExpr([{ key: computedName(ident("meth")), value: funExpr(null, [ident("a")],
+                blockStmt([])), method: false, kind: "set"}])));
 
 // statements
 
@@ -501,6 +508,16 @@ assertStmt("try { } catch (e if foo) { } catch (e if bar) { } catch (e) { } fina
                      catchClause(ident("e"), ident("bar"), blockStmt([])) ],
                    catchClause(ident("e"), null, blockStmt([])),
                    blockStmt([])));
+
+
+// Bug 924672: Method definitions
+assertExpr("b = { a() { } }", aExpr("=", ident("b"),
+              objExpr([{ key: ident("a"), value: funExpr(ident("a"), [], blockStmt([])), method:
+              true}])));
+
+assertExpr("b = { *a() { } }", aExpr("=", ident("b"),
+              objExpr([{ key: ident("a"), value: genFunExpr(ident("a"), [], blockStmt([])), method:
+              true}])));
 
 // Bug 632028: yield outside of a function should throw
 (function() {
@@ -640,6 +657,9 @@ testParamPatternCombinations(function(n) ("{a" + n + ":x" + n + "," + "b" + n + 
 testParamPatternCombinations(function(n) ("[x" + n + "," + "y" + n + "," + "z" + n + "]"),
                              function(n) (arrPatt([ident("x" + n), ident("y" + n), ident("z" + n)])));
 
+testParamPatternCombinations(function(n) ("[a" + n + ", ..." + "b" + n + "]"),
+                             function(n) (arrPatt([ident("a" + n), spread(ident("b" + n))])));
+
 
 // destructuring variable declarations
 
@@ -675,6 +695,10 @@ testVarPatternCombinations(function (n) ("{a" + n + ":x" + n + "," + "b" + n + "
 
 testVarPatternCombinations(function(n) ("[x" + n + "," + "y" + n + "," + "z" + n + "] = 0"),
                            function(n) ({ id: arrPatt([ident("x" + n), ident("y" + n), ident("z" + n)]),
+                                          init: lit(0) }));
+
+testVarPatternCombinations(function(n) ("[a" + n + ", ..." + "b" + n + "] = 0"),
+                           function(n) ({ id: arrPatt([ident("a" + n), spread(ident("b" + n))]),
                                           init: lit(0) }));
 
 // destructuring assignment

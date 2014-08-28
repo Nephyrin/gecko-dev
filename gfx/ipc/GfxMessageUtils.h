@@ -507,6 +507,38 @@ struct ParamTraits<nsIntSize>
   }
 };
 
+template<class T>
+struct ParamTraits< mozilla::gfx::CoordTyped<T> >
+{
+  typedef mozilla::gfx::CoordTyped<T> paramType;
+
+  static void Write(Message* msg, const paramType& param)
+  {
+    WriteParam(msg, param.value);
+  }
+
+  static bool Read(const Message* msg, void** iter, paramType* result)
+  {
+    return (ReadParam(msg, iter, &result->value));
+  }
+};
+
+template<class T>
+struct ParamTraits< mozilla::gfx::IntCoordTyped<T> >
+{
+  typedef mozilla::gfx::IntCoordTyped<T> paramType;
+
+  static void Write(Message* msg, const paramType& param)
+  {
+    WriteParam(msg, param.value);
+  }
+
+  static bool Read(const Message* msg, void** iter, paramType* result)
+  {
+    return (ReadParam(msg, iter, &result->value));
+  }
+};
+
 template<class T, class U>
 struct ParamTraits< mozilla::gfx::ScaleFactor<T, U> >
 {
@@ -729,6 +761,7 @@ struct ParamTraits<mozilla::layers::FrameMetrics>
     WriteParam(aMsg, aParam.mCompositionBounds);
     WriteParam(aMsg, aParam.mRootCompositionSize);
     WriteParam(aMsg, aParam.mScrollId);
+    WriteParam(aMsg, aParam.mScrollParentId);
     WriteParam(aMsg, aParam.mResolution);
     WriteParam(aMsg, aParam.mCumulativeResolution);
     WriteParam(aMsg, aParam.mZoom);
@@ -755,6 +788,7 @@ struct ParamTraits<mozilla::layers::FrameMetrics>
             ReadParam(aMsg, aIter, &aResult->mCompositionBounds) &&
             ReadParam(aMsg, aIter, &aResult->mRootCompositionSize) &&
             ReadParam(aMsg, aIter, &aResult->mScrollId) &&
+            ReadParam(aMsg, aIter, &aResult->mScrollParentId) &&
             ReadParam(aMsg, aIter, &aResult->mResolution) &&
             ReadParam(aMsg, aIter, &aResult->mCumulativeResolution) &&
             ReadParam(aMsg, aIter, &aResult->mZoom) &&

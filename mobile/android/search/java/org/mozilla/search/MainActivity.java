@@ -59,7 +59,9 @@ public class MainActivity extends FragmentActivity implements AcceptsSearchQuery
     private View preSearch;
     private View postSearch;
 
-    private View suggestionsContainer;
+    private View settingsButton;
+
+    private View suggestions;
     private SuggestionsFragment suggestionsFragment;
 
     private static final int SUGGESTION_TRANSITION_DURATION = 300;
@@ -109,21 +111,28 @@ public class MainActivity extends FragmentActivity implements AcceptsSearchQuery
                     onSearch(trimmedQuery);
                 }
             }
+
+            @Override
+            public void onFocusChange(boolean hasFocus) {
+                setEditState(hasFocus ? EditState.EDITING : EditState.WAITING);
+            }
         });
 
         preSearch = findViewById(R.id.presearch);
         postSearch = findViewById(R.id.postsearch);
 
-        suggestionsContainer = findViewById(R.id.suggestions_container);
-        suggestionsFragment = (SuggestionsFragment) getSupportFragmentManager().findFragmentById(R.id.suggestions);
+        settingsButton = findViewById(R.id.settings_button);
 
-        // Dismiss edit mode when the user taps outside of the suggestions.
-        findViewById(R.id.suggestions_container).setOnClickListener(new View.OnClickListener() {
+        // Apply click handler to settings button.
+        settingsButton.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                setEditState(EditState.WAITING);
+                startActivity(new Intent(MainActivity.this, SearchPreferenceActivity.class));
             }
         });
+
+        suggestions = findViewById(R.id.suggestions);
+        suggestionsFragment = (SuggestionsFragment) getSupportFragmentManager().findFragmentById(R.id.suggestions);
 
         animationText = (TextView) findViewById(R.id.animation_text);
         animationCard = findViewById(R.id.animation_card);
@@ -144,6 +153,10 @@ public class MainActivity extends FragmentActivity implements AcceptsSearchQuery
                 ((PostSearchFragment) getSupportFragmentManager().findFragmentById(R.id.postsearch))
                         .startSearch(query);
             }
+        } else {
+            // If there isn't a state to restore, the activity will start in the presearch state,
+            // and we should enter editing mode to bring up the keyboard.
+            setEditState(EditState.EDITING);
         }
     }
 
@@ -154,8 +167,9 @@ public class MainActivity extends FragmentActivity implements AcceptsSearchQuery
         editText = null;
         preSearch = null;
         postSearch = null;
+        settingsButton = null;
         suggestionsFragment = null;
-        suggestionsContainer = null;
+        suggestions = null;
         animationText = null;
         animationCard = null;
     }
@@ -177,7 +191,9 @@ public class MainActivity extends FragmentActivity implements AcceptsSearchQuery
         // Reset the activity in the presearch state if it was launched from a new intent.
         setSearchState(SearchState.PRESEARCH);
 
-        // Also clear any existing search term.
+        // Enter editing mode and reset the query. We must reset the query after entering
+        // edit mode in order for the suggestions to update.
+        setEditState(EditState.EDITING);
         editText.setText("");
     }
 
@@ -192,7 +208,7 @@ public class MainActivity extends FragmentActivity implements AcceptsSearchQuery
 
     @Override
     public void onSuggest(String query) {
-       editText.setText(query);
+        editText.setText(query);
     }
 
     @Override
@@ -220,8 +236,8 @@ public class MainActivity extends FragmentActivity implements AcceptsSearchQuery
     /**
      * Animates search suggestion to search bar. This animation has 2 main parts:
      *
-     *   1) Vertically translate query text from suggestion card to search bar.
-     *   2) Expand suggestion card to fill the results view area.
+     * 1) Vertically translate query text from suggestion card to search bar.
+     * 2) Expand suggestion card to fill the results view area.
      *
      * @param query
      * @param suggestionAnimation
@@ -293,8 +309,10 @@ public class MainActivity extends FragmentActivity implements AcceptsSearchQuery
         }
         this.editState = editState;
 
+        updateSettingsButtonVisibility();
+
         editText.setActive(editState == EditState.EDITING);
-        suggestionsContainer.setVisibility(editState == EditState.EDITING ? View.VISIBLE : View.INVISIBLE);
+        suggestions.setVisibility(editState == EditState.EDITING ? View.VISIBLE : View.INVISIBLE);
     }
 
     private void setSearchState(SearchState searchState) {
@@ -303,8 +321,19 @@ public class MainActivity extends FragmentActivity implements AcceptsSearchQuery
         }
         this.searchState = searchState;
 
+        updateSettingsButtonVisibility();
+
         preSearch.setVisibility(searchState == SearchState.PRESEARCH ? View.VISIBLE : View.INVISIBLE);
         postSearch.setVisibility(searchState == SearchState.POSTSEARCH ? View.VISIBLE : View.INVISIBLE);
+    }
+
+    private void updateSettingsButtonVisibility() {
+        // Show button on launch screen when keyboard is down.
+        if (searchState == SearchState.PRESEARCH && editState == EditState.WAITING) {
+            settingsButton.setVisibility(View.VISIBLE);
+        } else {
+            settingsButton.setVisibility(View.INVISIBLE);
+        }
     }
 
     @Override

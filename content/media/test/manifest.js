@@ -8,7 +8,7 @@ var gSmallTests = [
   { name:"small-shot.ogg", type:"audio/ogg", duration:0.276 },
   { name:"small-shot.m4a", type:"audio/mp4", duration:0.29 },
   { name:"small-shot.mp3", type:"audio/mpeg", duration:0.27 },
-  // { name:"small-shot-mp3.mp4", type:"audio/mp4; codecs=mp3", duration:0.34 },
+  { name:"small-shot-mp3.mp4", type:"audio/mp4; codecs=mp3", duration:0.34 },
   { name:"r11025_s16_c1.wav", type:"audio/x-wav", duration:1.0 },
   { name:"320x240.ogv", type:"video/ogg", width:320, height:240, duration:0.266 },
   { name:"seek.webm", type:"video/webm", width:320, height:240, duration:3.966 },
@@ -388,14 +388,6 @@ var gUnseekableTests = [
   { name:"no-cues.webm", type:"video/webm" },
   { name:"bogus.duh", type:"bogus/duh"}
 ];
-// Unfortunately big-buck-bunny-unseekable.mp4 is doesn't play on Windows 7, so
-// only include it in the unseekable tests if we're on later versions of Windows.
-// This test actually only passes on win8 at the moment.
-if (navigator.userAgent.indexOf("Windows") != -1 && IsWindows8OrLater()) {
-  gUnseekableTests = gUnseekableTests.concat([
-    { name:"big-buck-bunny-unseekable.mp4", type:"video/mp4" }
-  ]);
-}
 // Android supports fragmented MP4 playback from 4.3.
 var androidVersion = SpecialPowers.Cc['@mozilla.org/system-info;1']
                                   .getService(SpecialPowers.Ci.nsIPropertyBag2)

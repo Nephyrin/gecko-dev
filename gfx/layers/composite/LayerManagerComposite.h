@@ -19,6 +19,7 @@
 #include "mozilla/layers/CompositorTypes.h"
 #include "mozilla/layers/LayersTypes.h"  // for LayersBackend, etc
 #include "mozilla/RefPtr.h"
+#include "mozilla/UniquePtr.h"
 #include "nsAString.h"
 #include "nsAutoPtr.h"                  // for nsRefPtr
 #include "nsCOMPtr.h"                   // for already_AddRefed
@@ -63,16 +64,17 @@ class SurfaceDescriptor;
 class ThebesLayerComposite;
 class TiledLayerComposer;
 class TextRenderer;
+class CompositingRenderTarget;
 struct FPSState;
 
-class LayerManagerComposite : public LayerManager
+class LayerManagerComposite MOZ_FINAL : public LayerManager
 {
   typedef mozilla::gfx::DrawTarget DrawTarget;
   typedef mozilla::gfx::IntSize IntSize;
   typedef mozilla::gfx::SurfaceFormat SurfaceFormat;
 
 public:
-  LayerManagerComposite(Compositor* aCompositor);
+  explicit LayerManagerComposite(Compositor* aCompositor);
   ~LayerManagerComposite();
 
   virtual void Destroy() MOZ_OVERRIDE;
@@ -268,8 +270,15 @@ private:
 
   void WorldTransformRect(nsIntRect& aRect);
 
+  RefPtr<CompositingRenderTarget> PushGroupForLayerEffects();
+  void PopGroupForLayerEffects(RefPtr<CompositingRenderTarget> aPreviousTarget,
+                               nsIntRect aClipRect,
+                               bool aGrayscaleEffect,
+                               bool aInvertEffect,
+                               float aContrastEffect);
+
   RefPtr<Compositor> mCompositor;
-  nsAutoPtr<LayerProperties> mClonedLayerTreeProperties;
+  UniquePtr<LayerProperties> mClonedLayerTreeProperties;
 
   /**
    * Context target, nullptr when drawing directly to our swap chain.
@@ -279,12 +288,13 @@ private:
 
   gfx::Matrix mWorldMatrix;
   nsIntRegion mInvalidRegion;
-  nsAutoPtr<FPSState> mFPS;
+  UniquePtr<FPSState> mFPS;
 
   bool mInTransaction;
   bool mIsCompositorReady;
   bool mDebugOverlayWantsNextFrame;
 
+  RefPtr<CompositingRenderTarget> mTwoPassTmpTarget;
   RefPtr<TextRenderer> mTextRenderer;
   bool mGeometryChanged;
 };
@@ -310,7 +320,7 @@ private:
 class LayerComposite
 {
 public:
-  LayerComposite(LayerManagerComposite* aManager);
+  explicit LayerComposite(LayerManagerComposite* aManager);
 
   virtual ~LayerComposite();
 
@@ -331,8 +341,9 @@ public:
    * This allows us on to avoid framebuffer switches in the middle of our render
    * which is inefficient. This must be called before RenderLayer.
    */
-  virtual void Prepare(const nsIntRect& aClipRect) {}
+  virtual void Prepare(const RenderTargetIntRect& aClipRect) {}
 
+  // TODO: This should also take RenderTargetIntRect like Prepare.
   virtual void RenderLayer(const nsIntRect& aClipRect) = 0;
 
   virtual bool SetCompositableHost(CompositableHost*)

@@ -124,6 +124,8 @@ class CodeGeneratorARM : public CodeGeneratorShared
     virtual bool visitShiftI(LShiftI *ins);
     virtual bool visitUrshD(LUrshD *ins);
 
+    virtual bool visitClzI(LClzI *ins);
+
     virtual bool visitTestIAndBranch(LTestIAndBranch *test);
     virtual bool visitCompare(LCompare *comp);
     virtual bool visitCompareAndBranch(LCompareAndBranch *comp);
@@ -224,6 +226,16 @@ class CodeGeneratorARM : public CodeGeneratorShared
     bool visitUDiv(LUDiv *ins);
     bool visitUMod(LUMod *ins);
     bool visitSoftUDivOrMod(LSoftUDivOrMod *ins);
+
+  public:
+    // Unimplemented SIMD instructions
+    bool visitSimdValueX4(LSimdValueX4 *lir) { MOZ_ASSUME_UNREACHABLE("NYI"); }
+    bool visitInt32x4(LInt32x4 *ins) { MOZ_ASSUME_UNREACHABLE("NYI"); }
+    bool visitFloat32x4(LFloat32x4 *ins) { MOZ_ASSUME_UNREACHABLE("NYI"); }
+    bool visitSimdExtractElementI(LSimdExtractElementI *ins) { MOZ_ASSUME_UNREACHABLE("NYI"); }
+    bool visitSimdExtractElementF(LSimdExtractElementF *ins) { MOZ_ASSUME_UNREACHABLE("NYI"); }
+    bool visitSimdBinaryArithIx4(LSimdBinaryArithIx4 *lir) { MOZ_ASSUME_UNREACHABLE("NYI"); }
+    bool visitSimdBinaryArithFx4(LSimdBinaryArithFx4 *lir) { MOZ_ASSUME_UNREACHABLE("NYI"); }
 };
 
 typedef CodeGeneratorARM CodeGeneratorSpecific;

@@ -56,6 +56,7 @@ typedef void (*EnterJitCode)(void *code, unsigned argc, Value *argv, Interpreter
                              size_t numStackValues, Value *vp);
 
 class IonBuilder;
+class JitcodeGlobalTable;
 
 // ICStubSpace is an abstraction for allocation policy and storage for stub data.
 // There are two kinds of stubs: optimized stubs and fallback stubs (the latter
@@ -186,6 +187,7 @@ class JitRuntime
     // Thunk that calls the GC pre barrier.
     JitCode *valuePreBarrier_;
     JitCode *shapePreBarrier_;
+    JitCode *typeObjectPreBarrier_;
 
     // Thunk to call malloc/free.
     JitCode *mallocStub_;
@@ -231,6 +233,9 @@ class JitRuntime
     // only in callVM() targets that are about to return *and* have invalidated
     // their callee.
     js::Value ionReturnOverride_;
+
+    // Global table of jitcode native address => bytecode address mappings.
+    JitcodeGlobalTable *jitcodeGlobalTable_;
 
   private:
     JitCode *generateExceptionTailStub(JSContext *cx);
@@ -347,12 +352,13 @@ class JitRuntime
         return enterBaselineJIT_->as<EnterJitCode>();
     }
 
-    JitCode *valuePreBarrier() const {
-        return valuePreBarrier_;
-    }
-
-    JitCode *shapePreBarrier() const {
-        return shapePreBarrier_;
+    JitCode *preBarrier(MIRType type) const {
+        switch (type) {
+          case MIRType_Value: return valuePreBarrier_;
+          case MIRType_Shape: return shapePreBarrier_;
+          case MIRType_TypeObject: return typeObjectPreBarrier_;
+          default: MOZ_CRASH();
+        }
     }
 
     JitCode *mallocStub() const {
@@ -380,6 +386,23 @@ class JitRuntime
         JS_ASSERT(!hasIonReturnOverride());
         JS_ASSERT(!v.isMagic());
         ionReturnOverride_ = v;
+    }
+
+    bool hasJitcodeGlobalTable() const {
+        return jitcodeGlobalTable_ != nullptr;
+    }
+
+    JitcodeGlobalTable *getJitcodeGlobalTable() {
+        JS_ASSERT(hasJitcodeGlobalTable());
+        return jitcodeGlobalTable_;
+    }
+
+    bool isNativeToBytecodeMapEnabled(JSRuntime *rt) {
+#ifdef DEBUG
+        return true;
+#else // DEBUG
+        return rt->spsProfiler.enabled();
+#endif // DEBUG
     }
 };
 

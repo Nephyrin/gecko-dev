@@ -1543,7 +1543,15 @@ PeerConnectionWrapper.prototype = {
     this.streams.push(stream);
 
     if (side === 'local') {
-      this._pc.addStream(stream);
+      // In order to test both the addStream and addTrack APIs, we do video one
+      // way and audio + audiovideo the other.
+      if (type == "video") {
+        this._pc.addStream(stream);
+      } else {
+        stream.getTracks().forEach(function(track) {
+          this._pc.addTrack(track, stream);
+        }.bind(this));
+      }
     }
 
     var element = createMediaElement(type, this.label + '_' + side);
@@ -2270,6 +2278,34 @@ PeerConnectionWrapper.prototype = {
       is(numLocalCandidates, 0, "Have no localcandidate stats");
       is(numRemoteCandidates, 0, "Have no remotecandidate stats");
     }
+  },
+
+  /**
+   * Property-matching function for finding a certain stat in passed-in stats
+   *
+   * @param {object} stats
+   *        The stats to check from this PeerConnectionWrapper
+   * @param {object} props
+   *        The properties to look for
+   * @returns {boolean} Whether an entry containing all match-props was found.
+   */
+  hasStat : function PCW_hasStat(stats, props) {
+    for (var key in stats) {
+      if (stats.hasOwnProperty(key)) {
+        var res = stats[key];
+        var match = true;
+        for (var prop in props) {
+          if (res[prop] !== props[prop]) {
+            match = false;
+            break;
+          }
+        }
+        if (match) {
+          return true;
+        }
+      }
+    }
+    return false;
   },
 
   /**

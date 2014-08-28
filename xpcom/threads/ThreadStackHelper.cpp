@@ -22,6 +22,7 @@
 #include "mozilla/Move.h"
 #include "mozilla/Scoped.h"
 #include "mozilla/UniquePtr.h"
+#include "mozilla/MemoryChecking.h"
 
 #ifdef MOZ_THREADSTACKHELPER_NATIVE
 #include "google_breakpad/processor/call_stack.h"
@@ -186,8 +187,7 @@ void ThreadStackHelper::GetThreadStackBase()
 
 #elif defined(XP_WIN)
   ::MEMORY_BASIC_INFORMATION meminfo = {};
-  NS_ENSURE_TRUE_VOID(::VirtualQuery(
-    &meminfo, &meminfo, sizeof(meminfo)));
+  NS_ENSURE_TRUE_VOID(::VirtualQuery(&meminfo, &meminfo, sizeof(meminfo)));
 #ifdef MOZ_THREADSTACKHELPER_STACK_GROWS_DOWN
   mThreadStackBase = intptr_t(meminfo.BaseAddress) + meminfo.RegionSize;
 #else
@@ -205,7 +205,7 @@ void ThreadStackHelper::GetThreadStackBase()
 #endif // MOZ_THREADSTACKHELPER_NATIVE
 
 namespace {
-template <typename T>
+template<typename T>
 class ScopedSetPtr
 {
 private:
@@ -277,7 +277,8 @@ ThreadStackHelper::GetStack(Stack& aStack)
 
 #ifdef MOZ_THREADSTACKHELPER_NATIVE
 class ThreadStackHelper::CodeModulesProvider
-  : public google_breakpad::CodeModules {
+  : public google_breakpad::CodeModules
+{
 private:
   typedef google_breakpad::CodeModule CodeModule;
   typedef google_breakpad::BasicCodeModule BasicCodeModule;
@@ -289,24 +290,29 @@ public:
   CodeModulesProvider() : mLibs(SharedLibraryInfo::GetInfoForSelf()) {}
   virtual ~CodeModulesProvider() {}
 
-  virtual unsigned int module_count() const {
+  virtual unsigned int module_count() const
+  {
     return mLibs.GetSize();
   }
 
-  virtual const CodeModule* GetModuleForAddress(uint64_t address) const {
+  virtual const CodeModule* GetModuleForAddress(uint64_t aAddress) const
+  {
     MOZ_CRASH("Not implemented");
   }
 
-  virtual const CodeModule* GetMainModule() const {
+  virtual const CodeModule* GetMainModule() const
+  {
     return nullptr;
   }
 
-  virtual const CodeModule* GetModuleAtSequence(unsigned int sequence) const {
+  virtual const CodeModule* GetModuleAtSequence(unsigned int aSequence) const
+  {
     MOZ_CRASH("Not implemented");
   }
 
-  virtual const CodeModule* GetModuleAtIndex(unsigned int index) const {
-    const SharedLibrary& lib = mLibs.GetEntry(index);
+  virtual const CodeModule* GetModuleAtIndex(unsigned int aIndex) const
+  {
+    const SharedLibrary& lib = mLibs.GetEntry(aIndex);
     mModule = new BasicCodeModule(lib.GetStart(), lib.GetEnd() - lib.GetStart(),
                                   lib.GetName(), lib.GetBreakpadId(),
                                   lib.GetName(), lib.GetBreakpadId(), "");
@@ -314,13 +320,15 @@ public:
     return mModule;
   }
 
-  virtual const CodeModules* Copy() const {
+  virtual const CodeModules* Copy() const
+  {
     MOZ_CRASH("Not implemented");
   }
 };
 
 class ThreadStackHelper::ThreadContext
-  : public google_breakpad::MemoryRegion {
+  : public google_breakpad::MemoryRegion
+{
 public:
 #if defined(MOZ_THREADSTACKHELPER_X86)
   typedef MDRawContextX86 Context;
@@ -346,39 +354,41 @@ public:
   // End of stack area
   const void* mStackEnd;
 
-  ThreadContext() : mValid(false)
-                  , mStackBase(0)
-                  , mStackSize(0)
-                  , mStackEnd(nullptr) {}
+  ThreadContext()
+    : mValid(false)
+    , mStackBase(0)
+    , mStackSize(0)
+    , mStackEnd(nullptr) {}
   virtual ~ThreadContext() {}
 
-  virtual uint64_t GetBase() const {
-    return uint64_t(mStackBase);
+  virtual uint64_t GetBase() const { return uint64_t(mStackBase); }
+  virtual uint32_t GetSize() const { return mStackSize; }
+  virtual bool GetMemoryAtAddress(uint64_t aAddress, uint8_t* aValue) const
+  {
+    return GetMemoryAtAddressInternal(aAddress, aValue);
   }
-  virtual uint32_t GetSize() const {
-    return mStackSize;
+  virtual bool GetMemoryAtAddress(uint64_t aAddress, uint16_t* aValue) const
+  {
+    return GetMemoryAtAddressInternal(aAddress, aValue);
   }
-  virtual bool GetMemoryAtAddress(uint64_t address, uint8_t*  value) const {
-    return GetMemoryAtAddressInternal(address, value);
+  virtual bool GetMemoryAtAddress(uint64_t aAddress, uint32_t* aValue) const
+  {
+    return GetMemoryAtAddressInternal(aAddress, aValue);
   }
-  virtual bool GetMemoryAtAddress(uint64_t address, uint16_t*  value) const {
-    return GetMemoryAtAddressInternal(address, value);
-  }
-  virtual bool GetMemoryAtAddress(uint64_t address, uint32_t*  value) const {
-    return GetMemoryAtAddressInternal(address, value);
-  }
-  virtual bool GetMemoryAtAddress(uint64_t address, uint64_t*  value) const {
-    return GetMemoryAtAddressInternal(address, value);
+  virtual bool GetMemoryAtAddress(uint64_t aAddress, uint64_t* aValue) const
+  {
+    return GetMemoryAtAddressInternal(aAddress, aValue);
   }
 
 private:
-  template <typename T>
-  bool GetMemoryAtAddressInternal(uint64_t address, T* value) const {
-    const intptr_t offset = intptr_t(address) - intptr_t(GetBase());
+  template<typename T>
+  bool GetMemoryAtAddressInternal(uint64_t aAddress, T* aValue) const
+  {
+    const intptr_t offset = intptr_t(aAddress) - intptr_t(GetBase());
     if (offset < 0 || uintptr_t(offset) > (GetSize() - sizeof(T))) {
       return false;
     }
-    *value = *reinterpret_cast<const T*>(&mStack[offset]);
+    *aValue = *reinterpret_cast<const T*>(&mStack[offset]);
     return true;
   }
 };
@@ -604,7 +614,10 @@ ThreadStackHelper::FillStackBuffer()
     }
 #endif
     const char* const label = entry->label();
-    if (mStackToFill->IsSameAsEntry(prevLabel, label)) {
+    if (mStackToFill->IsSameAsEntry(prevLabel, label) ||
+        !strcmp(label, "js::RunScript")) {
+      // Avoid duplicate labels to save space in the stack.
+      // Avoid js::RunScript labels because we save actual JS frames above.
       continue;
     }
     mStackToFill->infallibleAppend(label);
@@ -770,6 +783,11 @@ ThreadStackHelper::FillThreadContext(void* aContext)
 
 #ifndef MOZ_ASAN
   memcpy(mContextToFill->mStack.get(), reinterpret_cast<void*>(sp), stackSize);
+  // Valgrind doesn't care about the access outside the stack frame, but
+  // the presence of uninitialised values on the stack does cause it to
+  // later report a lot of false errors when Breakpad comes to unwind it.
+  // So mark the extracted data as defined.
+  MOZ_MAKE_MEM_DEFINED(mContextToFill->mStack.get(), stackSize);
 #else
   // ASan will flag memcpy for access outside of stack frames,
   // so roll our own memcpy here.

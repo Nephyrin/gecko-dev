@@ -3,8 +3,7 @@
             android:launchMode="singleTop"
             android:icon="@drawable/search_launcher"
             android:label="@string/search_app_name"
-            android:theme="@style/AppTheme"
-            android:screenOrientation="portrait">
+            android:theme="@style/AppTheme">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
 
@@ -32,6 +31,10 @@
 
             <intent-filter>
                 <action android:name="org.mozilla.widget.LAUNCH_SEARCH"/>
+            </intent-filter>
+
+            <intent-filter>
+                <action android:name="org.mozilla.widget.LAUNCH_NEW_TAB"/>
             </intent-filter>
 
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/search_widget_info" />

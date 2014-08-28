@@ -89,6 +89,12 @@ this.WebappManager = {
   },
 
   _installApk: function(aMessage, aMessageManager) { return Task.spawn((function*() {
+    if (this.inGuestSession()) {
+      aMessage.error = Strings.GetStringFromName("webappsDisabledInGuest"),
+      aMessageManager.sendAsyncMessage("Webapps:Install:Return:KO", aMessage);
+      return;
+    }
+
     let filePath;
 
     try {
@@ -192,11 +198,12 @@ this.WebappManager = {
       apkPackageName: aApkPackageName,
       origin: aOrigin,
     });
+  },
 
-    let file = Cc["@mozilla.org/file/local;1"].createInstance(Ci.nsILocalFile);
-    file.initWithPath(aProfilePath);
-    let localeManifest = new ManifestHelper(aNewManifest, aOrigin, aManifestUrl);
-    this.writeDefaultPrefs(file, localeManifest);
+  askUninstall: function(aData) {
+    // Android does not currently support automatic uninstalling of apps.
+    // See bug 1019054.
+    DOMApplicationRegistry.denyUninstall(aData, "NOT_SUPPORTED");
   },
 
   launch: function({ apkPackageName }) {
@@ -255,6 +262,10 @@ this.WebappManager = {
     }
 
   }),
+
+  inGuestSession: function() {
+    return Services.wm.getMostRecentWindow("navigator:browser").BrowserApp.isGuest;
+  },
 
   autoInstall: function(aData) {
     debug("autoInstall " + aData.manifestURL);
@@ -638,8 +649,7 @@ this.WebappManager = {
         let app = DOMApplicationRegistry.webapps[id];
         if (aData.apkPackageNames.indexOf(app.apkPackageName) > -1) {
           debug("attempting to uninstall " + app.name);
-          DOMApplicationRegistry.uninstall(
-            app.manifestURL,
+          DOMApplicationRegistry.uninstall(app.manifestURL).then(
             function() {
               debug("success uninstalling " + app.name);
             },
@@ -651,33 +661,4 @@ this.WebappManager = {
       }
     });
   },
-
-  writeDefaultPrefs: function(aProfile, aManifest) {
-      // build any app specific default prefs
-      let prefs = [];
-      if (aManifest.orientation) {
-        let orientation = aManifest.orientation;
-        if (Array.isArray(orientation)) {
-          orientation = orientation.join(",");
-        }
-        prefs.push({ name: "app.orientation.default", value: orientation });
-      }
-
-      // write them into the app profile
-      let defaultPrefsFile = aProfile.clone();
-      defaultPrefsFile.append(this.DEFAULT_PREFS_FILENAME);
-      this._writeData(defaultPrefsFile, prefs);
-  },
-
-  _writeData: function(aFile, aPrefs) {
-    if (aPrefs.length > 0) {
-      let array = new TextEncoder().encode(JSON.stringify(aPrefs));
-      OS.File.writeAtomic(aFile.path, array, { tmpPath: aFile.path + ".tmp" }).then(null, function onError(reason) {
-        debug("Error writing default prefs: " + reason);
-      });
-    }
-  },
-
-  DEFAULT_PREFS_FILENAME: "default-prefs.js",
-
 };

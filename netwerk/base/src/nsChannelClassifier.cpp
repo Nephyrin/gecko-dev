@@ -6,15 +6,21 @@
 
 #include "mozIThirdPartyUtil.h"
 #include "nsNetUtil.h"
-#include "nsICacheEntryDescriptor.h"
+#include "nsICacheEntry.h"
 #include "nsICachingChannel.h"
 #include "nsIChannel.h"
+#include "nsIDocShell.h"
+#include "nsIDocument.h"
 #include "nsIDOMDocument.h"
 #include "nsIDOMWindow.h"
 #include "nsIIOService.h"
 #include "nsIPermissionManager.h"
 #include "nsIProtocolHandler.h"
 #include "nsIScriptSecurityManager.h"
+#include "nsISecureBrowserUI.h"
+#include "nsISecurityEventSink.h"
+#include "nsIWebProgressListener.h"
+#include "nsPIDOMWindow.h"
 
 #include "mozilla/Preferences.h"
 
@@ -35,6 +41,7 @@ NS_IMPL_ISUPPORTS(nsChannelClassifier,
                   nsIURIClassifierCallback)
 
 nsChannelClassifier::nsChannelClassifier()
+  : mIsAllowListed(false)
 {
 #if defined(PR_LOGGING)
     if (!gChannelClassifierLog)
@@ -43,11 +50,15 @@ nsChannelClassifier::nsChannelClassifier()
 }
 
 nsresult
-nsChannelClassifier::ShouldEnableTrackingProtection(nsIChannel* aChannel,
+nsChannelClassifier::ShouldEnableTrackingProtection(nsIChannel *aChannel,
                                                     bool *result)
 {
     NS_ENSURE_ARG(result);
     *result = false;
+
+    if (!Preferences::GetBool("privacy.trackingprotection.enabled", false)) {
+      return NS_OK;
+    }
 
     nsresult rv;
     nsCOMPtr<mozIThirdPartyUtil> thirdPartyUtil =
@@ -112,7 +123,46 @@ nsChannelClassifier::ShouldEnableTrackingProtection(nsIChannel* aChannel,
     }
 #endif
 
-    *result = permissions != nsIPermissionManager::ALLOW_ACTION;
+    if (permissions == nsIPermissionManager::ALLOW_ACTION) {
+      mIsAllowListed = true;
+      *result = false;
+    } else {
+      *result = true;
+    }
+
+    // Tracking protection will be enabled so return without updating
+    // the security state. If any channels are subsequently cancelled
+    // (page elements blocked) the state will be then updated.
+    if (*result) {
+      return NS_OK;
+    }
+
+    // Tracking protection will be disabled so update the security state
+    // of the document and fire a secure change event.
+    nsCOMPtr<nsPIDOMWindow> pwin = do_QueryInterface(win, &rv);
+    NS_ENSURE_SUCCESS(rv, NS_OK);
+    nsCOMPtr<nsIDocShell> docShell = pwin->GetDocShell();
+    if (!docShell) {
+      return NS_OK;
+    }
+    nsCOMPtr<nsIDocument> doc = do_GetInterface(docShell, &rv);
+    NS_ENSURE_SUCCESS(rv, NS_OK);
+
+    // Notify nsIWebProgressListeners of this security event.
+    // Can be used to change the UI state.
+    nsCOMPtr<nsISecurityEventSink> eventSink = do_QueryInterface(docShell, &rv);
+    NS_ENSURE_SUCCESS(rv, NS_OK);
+    uint32_t state = 0;
+    nsCOMPtr<nsISecureBrowserUI> securityUI;
+    docShell->GetSecurityUI(getter_AddRefs(securityUI));
+    if (!securityUI) {
+      return NS_OK;
+    }
+    doc->SetHasTrackingContentLoaded(true);
+    securityUI->GetState(&state);
+    state |= nsIWebProgressListener::STATE_LOADED_TRACKING_CONTENT;
+    eventSink->OnSecurityChange(nullptr, state);
+
     return NS_OK;
 }
 
@@ -215,7 +265,7 @@ void
 nsChannelClassifier::MarkEntryClassified(nsresult status)
 {
     // Don't cache tracking classifications because we support allowlisting.
-    if (status == NS_ERROR_TRACKING_URI) {
+    if (status == NS_ERROR_TRACKING_URI || mIsAllowListed) {
         return;
     }
 
@@ -231,7 +281,7 @@ nsChannelClassifier::MarkEntryClassified(nsresult status)
         return;
     }
 
-    nsCOMPtr<nsICacheEntryDescriptor> cacheEntry =
+    nsCOMPtr<nsICacheEntry> cacheEntry =
         do_QueryInterface(cacheToken);
     if (!cacheEntry) {
         return;
@@ -263,7 +313,7 @@ nsChannelClassifier::HasBeenClassified(nsIChannel *aChannel)
         return false;
     }
 
-    nsCOMPtr<nsICacheEntryDescriptor> cacheEntry =
+    nsCOMPtr<nsICacheEntry> cacheEntry =
         do_QueryInterface(cacheToken);
     if (!cacheEntry) {
         return false;
@@ -272,6 +322,44 @@ nsChannelClassifier::HasBeenClassified(nsIChannel *aChannel)
     nsXPIDLCString tag;
     cacheEntry->GetMetaDataElement("necko:classified", getter_Copies(tag));
     return tag.EqualsLiteral("1");
+}
+
+nsresult
+nsChannelClassifier::SetBlockedTrackingContent(nsIChannel *channel)
+{
+  nsresult rv;
+  nsCOMPtr<nsIDOMWindow> win;
+  nsCOMPtr<mozIThirdPartyUtil> thirdPartyUtil =
+    do_GetService(THIRDPARTYUTIL_CONTRACTID, &rv);
+  NS_ENSURE_SUCCESS(rv, NS_OK);
+  rv = thirdPartyUtil->GetTopWindowForChannel(
+    mSuspendedChannel, getter_AddRefs(win));
+  NS_ENSURE_SUCCESS(rv, NS_OK);
+  nsCOMPtr<nsPIDOMWindow> pwin = do_QueryInterface(win, &rv);
+  NS_ENSURE_SUCCESS(rv, NS_OK);
+  nsCOMPtr<nsIDocShell> docShell = pwin->GetDocShell();
+  if (!docShell) {
+    return NS_OK;
+  }
+  nsCOMPtr<nsIDocument> doc = do_GetInterface(docShell, &rv);
+  NS_ENSURE_SUCCESS(rv, NS_OK);
+
+  // Notify nsIWebProgressListeners of this security event.
+  // Can be used to change the UI state.
+  nsCOMPtr<nsISecurityEventSink> eventSink = do_QueryInterface(docShell, &rv);
+  NS_ENSURE_SUCCESS(rv, NS_OK);
+  uint32_t state = 0;
+  nsCOMPtr<nsISecureBrowserUI> securityUI;
+  docShell->GetSecurityUI(getter_AddRefs(securityUI));
+  if (!securityUI) {
+    return NS_OK;
+  }
+  doc->SetHasTrackingContentBlocked(true);
+  securityUI->GetState(&state);
+  state |= nsIWebProgressListener::STATE_BLOCKED_TRACKING_CONTENT;
+  eventSink->OnSecurityChange(nullptr, state);
+
+  return NS_OK;
 }
 
 NS_IMETHODIMP
@@ -290,8 +378,16 @@ nsChannelClassifier::OnClassifyComplete(nsresult aErrorCode)
                  "with error code: %x", this, mSuspendedChannel.get(),
                  spec.get(), aErrorCode));
 #endif
+
+            // Channel will be cancelled (page element blocked) due to tracking.
+            // Do update the security state of the document and fire a security
+            // change event.
+            if (aErrorCode == NS_ERROR_TRACKING_URI) {
+              SetBlockedTrackingContent(mSuspendedChannel);
+            }
+
             mSuspendedChannel->Cancel(aErrorCode);
-        }
+          }
 #ifdef DEBUG
         LOG(("nsChannelClassifier[%p]: resuming channel %p from "
              "OnClassifyComplete", this, mSuspendedChannel.get()));

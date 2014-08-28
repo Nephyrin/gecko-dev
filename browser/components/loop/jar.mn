@@ -17,6 +17,7 @@ browser.jar:
   content/browser/loop/js/panel.js                  (content/js/panel.js)
 
   # Shared styles
+  content/browser/loop/shared/css/reset.css         (content/shared/css/reset.css)
   content/browser/loop/shared/css/common.css        (content/shared/css/common.css)
   content/browser/loop/shared/css/panel.css         (content/shared/css/panel.css)
   content/browser/loop/shared/css/conversation.css  (content/shared/css/conversation.css)
@@ -46,6 +47,7 @@ browser.jar:
   content/browser/loop/shared/js/router.js            (content/shared/js/router.js)
   content/browser/loop/shared/js/views.js             (content/shared/js/views.js)
   content/browser/loop/shared/js/utils.js             (content/shared/js/utils.js)
+  content/browser/loop/shared/js/websocket.js         (content/shared/js/websocket.js)
 
   # Shared libs
   content/browser/loop/shared/libs/react-0.11.1.js    (content/shared/libs/react-0.11.1.js)

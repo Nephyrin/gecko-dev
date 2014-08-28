@@ -189,6 +189,10 @@ public:
     MOZ_ASSERT(mMediaStream);
   }
 
+  DOMMediaStream* GetMediaStream() const {
+    return mMediaStream;
+  }
+
   // This method exists for stats and the unittests.
   // It allows visibility into the pipelines and flows.
   const std::map<mozilla::TrackID, mozilla::RefPtr<mozilla::MediaPipeline>>&
@@ -214,9 +218,17 @@ public:
                         PeerConnectionMedia *aParent)
       : SourceStreamInfo(aMediaStream, aParent) {}
 
-  DOMMediaStream* GetMediaStream() {
-    return mMediaStream;
-  }
+  // Returns the mPipelines index for the track or -1.
+#if 0
+  int HasTrack(DOMMediaStream* aStream, mozilla::TrackID aTrack);
+#endif
+  int HasTrackType(DOMMediaStream* aStream, bool aIsVideo);
+  // XXX NOTE: does not change mMediaStream, even if it replaces the last track
+  // in a LocalSourceStreamInfo.  Revise when we have support for multiple tracks
+  // of a type.
+  // Note aIndex != aOldTrack!  It's the result of HasTrackType()
+  nsresult ReplaceTrack(int aIndex, DOMMediaStream* aNewStream, mozilla::TrackID aNewTrack);
+
   void StorePipeline(int aTrack,
                      mozilla::RefPtr<mozilla::MediaPipelineTransmit> aPipeline);
 
@@ -226,6 +238,8 @@ public:
 
   void ExpectAudio(const mozilla::TrackID);
   void ExpectVideo(const mozilla::TrackID);
+  void RemoveAudio(const mozilla::TrackID);
+  void RemoveVideo(const mozilla::TrackID);
   unsigned AudioTrackCount();
   unsigned VideoTrackCount();
   void DetachTransport_s();
@@ -249,9 +263,6 @@ class RemoteSourceStreamInfo : public SourceStreamInfo {
     : SourceStreamInfo(aMediaStream, aParent),
       mTrackTypeHints(0) {}
 
-  DOMMediaStream* GetMediaStream() {
-    return mMediaStream;
-  }
   void StorePipeline(int aTrack, bool aIsVideo,
                      mozilla::RefPtr<mozilla::MediaPipelineReceive> aPipeline);
 
@@ -301,10 +312,13 @@ class PeerConnectionMedia : public sigslot::has_slots<> {
   }
 
   // Add a stream (main thread only)
-  nsresult AddStream(nsIDOMMediaStream* aMediaStream, uint32_t *stream_id);
+  nsresult AddStream(nsIDOMMediaStream* aMediaStream, uint32_t hints,
+                     uint32_t *stream_id);
 
   // Remove a stream (main thread only)
-  nsresult RemoveStream(nsIDOMMediaStream* aMediaStream, uint32_t *stream_id);
+  nsresult RemoveStream(nsIDOMMediaStream* aMediaStream,
+                        uint32_t hints,
+                        uint32_t *stream_id);
 
   // Get a specific local stream
   uint32_t LocalStreamsLength()

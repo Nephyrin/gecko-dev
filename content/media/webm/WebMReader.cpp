@@ -613,11 +613,12 @@ bool WebMReader::DecodeAudioPacket(nestegg_packet* aPacket, int64_t aOffset)
 
         total_frames += frames;
         AudioQueue().Push(new AudioData(aOffset,
-                                       time.value(),
-                                       duration.value(),
-                                       frames,
-                                       buffer.forget(),
-                                       mChannels));
+                                        time.value(),
+                                        duration.value(),
+                                        frames,
+                                        buffer.forget(),
+                                        mChannels,
+                                        rate));
         mAudioFrames += frames;
         if (vorbis_synthesis_read(&mVorbisDsp, frames) != 0) {
           return false;
@@ -738,11 +739,12 @@ bool WebMReader::DecodeAudioPacket(nestegg_packet* aPacket, int64_t aOffset)
         return false;
       };
       AudioQueue().Push(new AudioData(mDecoder->GetResource()->Tell(),
-                                     time.value(),
-                                     duration.value(),
-                                     frames,
-                                     buffer.forget(),
-                                     mChannels));
+                                      time.value(),
+                                      duration.value(),
+                                      frames,
+                                      buffer.forget(),
+                                      mChannels,
+                                      rate));
 
       mAudioFrames += frames;
 #else
@@ -942,13 +944,13 @@ bool WebMReader::DecodeVideoFrame(bool &aKeyframeSkip,
       b.mPlanes[1].mHeight = (img->d_h + 1) >> img->y_chroma_shift;
       b.mPlanes[1].mWidth = (img->d_w + 1) >> img->x_chroma_shift;
       b.mPlanes[1].mOffset = b.mPlanes[1].mSkip = 0;
- 
+
       b.mPlanes[2].mData = img->planes[2];
       b.mPlanes[2].mStride = img->stride[2];
       b.mPlanes[2].mHeight = (img->d_h + 1) >> img->y_chroma_shift;
       b.mPlanes[2].mWidth = (img->d_w + 1) >> img->x_chroma_shift;
       b.mPlanes[2].mOffset = b.mPlanes[2].mSkip = 0;
-  
+
       IntRect picture = ToIntRect(mPicture);
       if (img->d_w != static_cast<uint32_t>(mInitialFrame.width) ||
           img->d_h != static_cast<uint32_t>(mInitialFrame.height)) {
@@ -991,7 +993,7 @@ WebMReader::PushVideoPacket(NesteggPacketHolder* aItem)
 }
 
 nsresult WebMReader::Seek(int64_t aTarget, int64_t aStartTime, int64_t aEndTime,
-                            int64_t aCurrentTime)
+                          int64_t aCurrentTime)
 {
   NS_ASSERTION(mDecoder->OnDecodeThread(), "Should be on decode thread.");
 
@@ -1079,6 +1081,16 @@ nsresult WebMReader::GetBuffered(dom::TimeRanges* aBuffered, int64_t aStartTime)
 void WebMReader::NotifyDataArrived(const char* aBuffer, uint32_t aLength, int64_t aOffset)
 {
   mBufferedState->NotifyDataArrived(aBuffer, aLength, aOffset);
+}
+
+int64_t WebMReader::GetEvictionOffset(double aTime)
+{
+  int64_t offset;
+  if (!mBufferedState->GetOffsetForTime(aTime / NS_PER_USEC, &offset)) {
+    return -1;
+  }
+
+  return offset;
 }
 
 } // namespace mozilla

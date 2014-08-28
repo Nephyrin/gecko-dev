@@ -2595,8 +2595,8 @@ nsRuleNode::AdjustLogicalBoxProp(nsStyleContext* aContext,
     if (parentContext) {                                                      \
       parentdata_ = parentContext->Style##type_();                            \
     } else {                                                                  \
-      maybeFakeParentData.construct ctorargs_;                                \
-      parentdata_ = maybeFakeParentData.addr();                               \
+      maybeFakeParentData.emplace ctorargs_;                                  \
+      parentdata_ = maybeFakeParentData.ptr();                                \
     }                                                                         \
   }                                                                           \
   if (aStartStruct)                                                           \
@@ -2608,7 +2608,7 @@ nsRuleNode::AdjustLogicalBoxProp(nsStyleContext* aContext,
     if (aRuleDetail != eRuleFullMixed && aRuleDetail != eRuleFullReset) {     \
       /* No question. We will have to inherit. Go ahead and init */           \
       /* with inherited vals from parent. */                                  \
-      canStoreInRuleTree = false;                                          \
+      canStoreInRuleTree = false;                                             \
       if (parentdata_)                                                        \
         data_ = new (mPresContext) nsStyle##type_(*parentdata_);              \
       else                                                                    \
@@ -2663,8 +2663,8 @@ nsRuleNode::AdjustLogicalBoxProp(nsStyleContext* aContext,
     if (parentContext) {                                                      \
       parentdata_ = parentContext->Style##type_();                            \
     } else {                                                                  \
-      maybeFakeParentData.construct ctorargs_;                                \
-      parentdata_ = maybeFakeParentData.addr();                               \
+      maybeFakeParentData.emplace ctorargs_;                                  \
+      parentdata_ = maybeFakeParentData.ptr();                                \
     }                                                                         \
   }                                                                           \
   bool canStoreInRuleTree = aCanStoreInRuleTree;
@@ -3332,7 +3332,6 @@ nsRuleNode::SetFont(nsPresContext* aPresContext, nsStyleContext* aContext,
       systemFont.fontlist.SetDefaultFontType(eFamily_none);
       systemFont.style = fontStyle.style;
       systemFont.systemFont = fontStyle.systemFont;
-      systemFont.variant = NS_FONT_VARIANT_NORMAL;
       systemFont.weight = fontStyle.weight;
       systemFont.stretch = fontStyle.stretch;
       systemFont.decorations = NS_FONT_DECORATION_NONE;
@@ -3455,14 +3454,6 @@ nsRuleNode::SetFont(nsPresContext* aPresContext, nsStyleContext* aContext,
                 defaultVariableFont->style,
                 0, 0, 0, systemFont.style);
   }
-
-  // font-variant: enum, inherit, initial, -moz-system-font
-  SetDiscrete(*aRuleData->ValueForFontVariant(),
-              aFont->mFont.variant, aCanStoreInRuleTree,
-              SETDSC_ENUMERATED | SETDSC_SYSTEM_FONT | SETDSC_UNSET_INHERIT,
-              aParentFont->mFont.variant,
-              defaultVariableFont->variant,
-              0, 0, 0, systemFont.variant);
 
   // font-weight: int, enum, inherit, initial, -moz-system-font
   // special handling for enum
@@ -3647,15 +3638,15 @@ nsRuleNode::SetFont(nsPresContext* aPresContext, nsStyleContext* aContext,
               defaultVariableFont->variantEastAsian,
               0, 0, 0, systemFont.variantEastAsian);
 
-  // font-variant-ligatures: normal, enum (bit field), inherit, initial,
+  // font-variant-ligatures: normal, none, enum (bit field), inherit, initial,
   //                         -moz-system-font
   SetDiscrete(*aRuleData->ValueForFontVariantLigatures(),
               aFont->mFont.variantLigatures, aCanStoreInRuleTree,
-              SETDSC_NORMAL | SETDSC_ENUMERATED | SETDSC_SYSTEM_FONT |
-                SETDSC_UNSET_INHERIT,
+              SETDSC_NORMAL | SETDSC_NONE | SETDSC_ENUMERATED |
+                SETDSC_SYSTEM_FONT | SETDSC_UNSET_INHERIT,
               aParentFont->mFont.variantLigatures,
               defaultVariableFont->variantLigatures,
-              0, 0, 0, systemFont.variantLigatures);
+              0, NS_FONT_VARIANT_LIGATURES_NONE, 0, systemFont.variantLigatures);
 
   // font-variant-numeric: normal, enum (bit field), inherit, initial,
   //                       -moz-system-font
@@ -8717,7 +8708,9 @@ nsRuleNode::SetStyleFilterToCSSValue(nsStyleFilter* aStyleFilter,
 
   int32_t mask = SETCOORD_PERCENT | SETCOORD_FACTOR;
   if (type == NS_STYLE_FILTER_BLUR) {
-    mask = SETCOORD_LENGTH | SETCOORD_STORE_CALC;
+    mask = SETCOORD_LENGTH |
+           SETCOORD_CALC_LENGTH_ONLY |
+           SETCOORD_CALC_CLAMP_NONNEGATIVE;
   } else if (type == NS_STYLE_FILTER_HUE_ROTATE) {
     mask = SETCOORD_ANGLE;
   }
@@ -9012,9 +9005,9 @@ nsRuleNode::SweepChildren(nsTArray<nsRuleNode*>& aSweepQueue)
   nsRuleNode* survivorsWithChildren = nullptr;
   if (ChildrenAreHashed()) {
     PLDHashTable* children = ChildrenHash();
-    uint32_t oldChildCount = children->entryCount;
+    uint32_t oldChildCount = children->EntryCount();
     PL_DHashTableEnumerate(children, SweepHashEntry, &survivorsWithChildren);
-    childrenDestroyed = oldChildCount - children->entryCount;
+    childrenDestroyed = oldChildCount - children->EntryCount();
     if (childrenDestroyed == oldChildCount) {
       PL_DHashTableDestroy(children);
       mChildren.asVoid = nullptr;

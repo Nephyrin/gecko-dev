@@ -285,6 +285,17 @@ public:
       CSFLogInfo(logTag, "Returning success for OnAddStream()");
       // We are running on main thread here so we shouldn't have a race
       // on this callback
+
+      nsTArray<nsRefPtr<MediaStreamTrack>> tracks;
+      aStream->GetTracks(tracks);
+      for (uint32_t i = 0; i < tracks.Length(); i++) {
+        JSErrorResult rv;
+        mObserver->OnAddTrack(*tracks[i], rv);
+        if (rv.Failed()) {
+          CSFLogError(logTag, ": OnAddTrack(%d) failed! Error: %d", i,
+                      rv.ErrorCode());
+        }
+      }
       JSErrorResult rv;
       mObserver->OnAddStream(*aStream, rv);
       if (rv.Failed()) {
@@ -1297,19 +1308,6 @@ public:
     mTimestamp.Construct(now);
   }
 };
-
-// Specialized helper - push map[key] if specified or all map values onto array
-
-static void
-PushBackSelect(nsTArray<RefPtr<MediaPipeline>>& aDst,
-               const std::map<TrackID, RefPtr<mozilla::MediaPipeline>> & aSrc,
-               TrackID aKey = 0) {
-  auto begin = aKey ? aSrc.find(aKey) : aSrc.begin(), it = begin;
-  for (auto end = (aKey && begin != aSrc.end())? ++begin : aSrc.end();
-       it != end; ++it) {
-    aDst.AppendElement(it->second);
-  }
-}
 #endif
 
 NS_IMETHODIMP
@@ -1438,15 +1436,33 @@ PeerConnectionImpl::PrincipalChanged(DOMMediaStream* aMediaStream) {
 #endif
 
 nsresult
-PeerConnectionImpl::AddStream(DOMMediaStream &aMediaStream)
+PeerConnectionImpl::AddTrack(MediaStreamTrack& aTrack,
+                             const Sequence<OwningNonNull<DOMMediaStream>>& aStreams)
 {
   PC_AUTO_ENTER_API_CALL(true);
 
-  uint32_t hints = aMediaStream.GetHintContents();
+  if (!aStreams.Length()) {
+    CSFLogError(logTag, "%s: At least one stream arg required", __FUNCTION__);
+    return NS_ERROR_FAILURE;
+  }
+  return AddTrack(aTrack, aStreams[0]);
+}
+
+nsresult
+PeerConnectionImpl::AddTrack(MediaStreamTrack& aTrack,
+                             DOMMediaStream& aMediaStream)
+{
+  if (!aMediaStream.HasTrack(aTrack)) {
+    CSFLogError(logTag, "%s: Track is not in stream", __FUNCTION__);
+    return NS_ERROR_FAILURE;
+  }
+  uint32_t hints = aMediaStream.GetHintContents() &
+      ((aTrack.AsAudioStreamTrack()? DOMMediaStream::HINT_CONTENTS_AUDIO : 0) |
+       (aTrack.AsVideoStreamTrack()? DOMMediaStream::HINT_CONTENTS_VIDEO : 0));
 
   // XXX Remove this check once addStream has an error callback
   // available and/or we have plumbing to handle multiple
-  // local audio streams.
+  // local audio streams.  bug 1056650
   if ((hints & DOMMediaStream::HINT_CONTENTS_AUDIO) &&
       mNumAudioStreams > 0) {
     CSFLogError(logTag, "%s: Only one local audio stream is supported for now",
@@ -1456,7 +1472,7 @@ PeerConnectionImpl::AddStream(DOMMediaStream &aMediaStream)
 
   // XXX Remove this check once addStream has an error callback
   // available and/or we have plumbing to handle multiple
-  // local video streams.
+  // local video streams. bug 1056650
   if ((hints & DOMMediaStream::HINT_CONTENTS_VIDEO) &&
       mNumVideoStreams > 0) {
     CSFLogError(logTag, "%s: Only one local video stream is supported for now",
@@ -1464,13 +1480,17 @@ PeerConnectionImpl::AddStream(DOMMediaStream &aMediaStream)
     return NS_ERROR_FAILURE;
   }
 
+  uint32_t num = mMedia->LocalStreamsLength();
+
   uint32_t stream_id;
-  nsresult res = mMedia->AddStream(&aMediaStream, &stream_id);
+  nsresult res = mMedia->AddStream(&aMediaStream, hints, &stream_id);
   if (NS_FAILED(res)) {
     return res;
   }
 
-  aMediaStream.AddPrincipalChangeObserver(this);
+  if (num != mMedia->LocalStreamsLength()) {
+    aMediaStream.AddPrincipalChangeObserver(this);
+  }
 
   // TODO(ekr@rtfm.com): these integers should be the track IDs
   if (hints & DOMMediaStream::HINT_CONTENTS_AUDIO) {
@@ -1487,18 +1507,38 @@ PeerConnectionImpl::AddStream(DOMMediaStream &aMediaStream)
 }
 
 NS_IMETHODIMP
-PeerConnectionImpl::RemoveStream(DOMMediaStream& aMediaStream) {
+PeerConnectionImpl::RemoveTrack(MediaStreamTrack& aTrack) {
   PC_AUTO_ENTER_API_CALL(true);
 
+  DOMMediaStream *stream = nullptr;
+  for (uint32_t i = 0; i < mMedia->LocalStreamsLength(); ++i) {
+    auto* candidate = mMedia->GetLocalStream(i)->GetMediaStream();
+    if (candidate->HasTrack(aTrack)) {
+      stream = candidate;
+      break;
+    }
+  }
+  if (!stream) {
+    CSFLogError(logTag, "%s: Track not found", __FUNCTION__);
+    return NS_OK;
+  }
+  auto& aMediaStream = *stream;
+
+  uint32_t hints = aMediaStream.GetHintContents() &
+      ((aTrack.AsAudioStreamTrack()? DOMMediaStream::HINT_CONTENTS_AUDIO : 0) |
+       (aTrack.AsVideoStreamTrack()? DOMMediaStream::HINT_CONTENTS_VIDEO : 0));
+  uint32_t num = mMedia->LocalStreamsLength();
+
   uint32_t stream_id;
-  nsresult res = mMedia->RemoveStream(&aMediaStream, &stream_id);
+  nsresult res = mMedia->RemoveStream(&aMediaStream, hints, &stream_id);
 
-  if (NS_FAILED(res))
+  if (NS_FAILED(res)) {
     return res;
+  }
 
-  aMediaStream.RemovePrincipalChangeObserver(this);
-
-  uint32_t hints = aMediaStream.GetHintContents();
+  if (num != mMedia->LocalStreamsLength()) {
+    aMediaStream.RemovePrincipalChangeObserver(this);
+  }
 
   if (hints & DOMMediaStream::HINT_CONTENTS_AUDIO) {
     mInternal->mCall->removeStream(stream_id, 0, AUDIO);
@@ -1512,6 +1552,70 @@ PeerConnectionImpl::RemoveStream(DOMMediaStream& aMediaStream) {
     mNumVideoStreams--;
   }
 
+  return NS_OK;
+}
+
+NS_IMETHODIMP
+PeerConnectionImpl::ReplaceTrack(MediaStreamTrack& aThisTrack,
+                                 MediaStreamTrack& aWithTrack,
+                                 DOMMediaStream& aStream) {
+  PC_AUTO_ENTER_API_CALL(true);
+
+  // TODO: Do an aStream.HasTrack() check on both track args someday.
+  //
+  // The proposed API will be that both tracks must already be in the same
+  // stream. However, since our MediaStreams currently are limited to one
+  // track per type, we allow replacement with an outside track not already
+  // in the same stream. This works because sync happens receiver-side and
+  // timestamps are tied to capture.
+  //
+  // Since a track may be replaced more than once, the track being replaced
+  // may not be in the stream either, so we check neither arg right now.
+
+  // XXX This MUST be addressed when we add multiple tracks of a type!!
+  // This is needed because the track IDs used by MSG are from TrackUnion
+  // (for getUserMedia streams) and aren't the same as the values the source tracks
+  // have.  Solution is to have SIPCC/VcmSIPCCBinding read track ids and use those.
+
+  // Because DirectListeners see the SourceMediaStream's TrackID's, and not the
+  // TrackUnionStream's TrackID's, this value won't currently match what is used in
+  // MediaPipelineTransmit.  Bug 1056652
+  //  TrackID thisID = aThisTrack.GetTrackID();
+  TrackID withID = aWithTrack.GetTrackID();
+
+  bool success = false;
+  for(uint32_t i = 0; i < media()->LocalStreamsLength(); ++i) {
+    LocalSourceStreamInfo *info = media()->GetLocalStream(i);
+    // XXX use type instead of TrackID - bug 1056650
+    int pipeline = info->HasTrackType(&aStream, !!(aThisTrack.AsVideoStreamTrack()));
+    if (pipeline >= 0) {
+      // XXX GetStream() will likely be invalid once a track can be in more than one
+      info->ReplaceTrack(pipeline, aWithTrack.GetStream(), withID);
+      success = true;
+      break;
+    }
+  }
+  if (!success) {
+    return NS_ERROR_FAILURE;
+  }
+
+  nsRefPtr<PeerConnectionObserver> pco = do_QueryObjectReferent(mPCObserver);
+  if (!pco) {
+    return NS_ERROR_UNEXPECTED;
+  }
+  JSErrorResult rv;
+
+  if (success) {
+    pco->OnReplaceTrackSuccess(rv);
+  } else {
+    pco->OnReplaceTrackError(kInternalError,
+                             ObString("Failed to replace track"),
+                             rv);
+  }
+  if (rv.Failed()) {
+    CSFLogError(logTag, "Error firing replaceTrack callback");
+    return NS_ERROR_UNEXPECTED;
+  }
   return NS_OK;
 }
 
@@ -2160,18 +2264,40 @@ PeerConnectionImpl::BuildStatsQuery_m(
   }
 
   // Gather up pipelines from mMedia so they may be inspected on STS
-  TrackID trackId = aSelector ? aSelector->GetTrackID() : 0;
 
   for (int i = 0, len = mMedia->LocalStreamsLength(); i < len; i++) {
-    PushBackSelect(query->pipelines,
-                   mMedia->GetLocalStream(i)->GetPipelines(),
-                   trackId);
+    auto& pipelines = mMedia->GetLocalStream(i)->GetPipelines();
+    if (aSelector) {
+      if (mMedia->GetLocalStream(i)->GetMediaStream()->HasTrack(*aSelector)) {
+        // XXX use type instead of TrackID - bug 1056650
+        for (auto it = pipelines.begin(); it != pipelines.end(); ++it) {
+          if (it->second->IsVideo() == !!aSelector->AsVideoStreamTrack()) {
+            query->pipelines.AppendElement(it->second);
+          }
+        }
+      }
+    } else {
+      for (auto it = pipelines.begin(); it != pipelines.end(); ++it) {
+        query->pipelines.AppendElement(it->second);
+      }
+    }
   }
 
   for (int i = 0, len = mMedia->RemoteStreamsLength(); i < len; i++) {
-    PushBackSelect(query->pipelines,
-                   mMedia->GetRemoteStream(i)->GetPipelines(),
-                   trackId);
+    auto& pipelines = mMedia->GetRemoteStream(i)->GetPipelines();
+    if (aSelector) {
+      if (mMedia->GetRemoteStream(i)->GetMediaStream()->HasTrack(*aSelector)) {
+        for (auto it = pipelines.begin(); it != pipelines.end(); ++it) {
+          if (it->second->trackid() == aSelector->GetTrackID()) {
+            query->pipelines.AppendElement(it->second);
+          }
+        }
+      }
+    } else {
+      for (auto it = pipelines.begin(); it != pipelines.end(); ++it) {
+        query->pipelines.AppendElement(it->second);
+      }
+    }
   }
 
   query->iceCtx = mMedia->ice_ctx();
@@ -2179,7 +2305,7 @@ PeerConnectionImpl::BuildStatsQuery_m(
   // From the list of MediaPipelines, determine the set of NrIceMediaStreams
   // we are interested in.
   std::set<size_t> levelsToGrab;
-  if (trackId) {
+  if (aSelector) {
     for (size_t p = 0; p < query->pipelines.Length(); ++p) {
       size_t level = query->pipelines[p]->level();
       MOZ_ASSERT(level);
@@ -2302,8 +2428,10 @@ PeerConnectionImpl::ExecuteStatsQuery_s(RTCStatsQuery *query) {
   for (size_t p = 0; p < query->pipelines.Length(); ++p) {
     const MediaPipeline& mp = *query->pipelines[p];
     bool isAudio = (mp.Conduit()->type() == MediaSessionConduit::AUDIO);
-    nsString idstr = isAudio ?
-        NS_LITERAL_STRING("audio_") : NS_LITERAL_STRING("video_");
+    nsString mediaType = isAudio ?
+        NS_LITERAL_STRING("audio") : NS_LITERAL_STRING("video");
+    nsString idstr = mediaType;
+    idstr.AppendLiteral("_");
     idstr.AppendInt(mp.trackid());
 
     // Gather pipeline stats.
@@ -2339,6 +2467,7 @@ PeerConnectionImpl::ExecuteStatsQuery_s(RTCStatsQuery *query) {
             if (ssrc.Length()) {
               s.mSsrc.Construct(ssrc);
             }
+            s.mMediaType.Construct(mediaType);
             s.mJitter.Construct(double(jitterMs)/1000);
             s.mRemoteId.Construct(localId);
             s.mIsRemote = true;
@@ -2358,6 +2487,7 @@ PeerConnectionImpl::ExecuteStatsQuery_s(RTCStatsQuery *query) {
           if (ssrc.Length()) {
             s.mSsrc.Construct(ssrc);
           }
+          s.mMediaType.Construct(mediaType);
           s.mRemoteId.Construct(remoteId);
           s.mIsRemote = false;
           s.mPacketsSent.Construct(mp.rtp_packets_sent());
@@ -2409,6 +2539,7 @@ PeerConnectionImpl::ExecuteStatsQuery_s(RTCStatsQuery *query) {
             if (ssrc.Length()) {
               s.mSsrc.Construct(ssrc);
             }
+            s.mMediaType.Construct(mediaType);
             s.mRemoteId.Construct(localId);
             s.mIsRemote = true;
             s.mPacketsSent.Construct(packetsSent);
@@ -2424,6 +2555,7 @@ PeerConnectionImpl::ExecuteStatsQuery_s(RTCStatsQuery *query) {
         if (ssrc.Length()) {
           s.mSsrc.Construct(ssrc);
         }
+        s.mMediaType.Construct(mediaType);
         unsigned int jitterMs, packetsLost;
         if (mp.Conduit()->GetRTPStats(&jitterMs, &packetsLost)) {
           s.mJitter.Construct(double(jitterMs)/1000);

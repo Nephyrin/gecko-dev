@@ -586,7 +586,13 @@ Element::GetScrollFrame(nsIFrame **aStyledFrame, bool aFlushLayout)
 }
 
 void
-Element::ScrollIntoView(bool aTop)
+Element::ScrollIntoView()
+{
+  ScrollIntoView(true, ScrollOptions());
+}
+
+void
+Element::ScrollIntoView(bool aTop, const ScrollOptions &aOptions)
 {
   nsIDocument *document = GetCurrentDoc();
   if (!document) {
@@ -602,12 +608,17 @@ Element::ScrollIntoView(bool aTop)
   int16_t vpercent = aTop ? nsIPresShell::SCROLL_TOP :
     nsIPresShell::SCROLL_BOTTOM;
 
+  uint32_t flags = nsIPresShell::SCROLL_OVERFLOW_HIDDEN;
+  if (aOptions.mBehavior == ScrollBehavior::Smooth) {
+    flags |= nsIPresShell::SCROLL_SMOOTH;
+  }
+
   presShell->ScrollContentIntoView(this,
                                    nsIPresShell::ScrollAxis(
                                      vpercent,
                                      nsIPresShell::SCROLL_ALWAYS),
                                    nsIPresShell::ScrollAxis(),
-                                   nsIPresShell::SCROLL_OVERFLOW_HIDDEN);
+                                   flags);
 }
 
 bool
@@ -959,10 +970,8 @@ Element::SetAttribute(const nsAString& aName,
     nsCOMPtr<nsIAtom> nameAtom;
     if (IsHTML() && IsInHTMLDocument()) {
       nsAutoString lower;
-      nsresult rv = nsContentUtils::ASCIIToLower(aName, lower);
-      if (NS_SUCCEEDED(rv)) {
-        nameAtom = do_GetAtom(lower);
-      }
+      nsContentUtils::ASCIIToLower(aName, lower);
+      nameAtom = do_GetAtom(lower);
     }
     else {
       nameAtom = do_GetAtom(aName);
@@ -1652,7 +1661,7 @@ Element::ShouldBlur(nsIContent *aContent)
 {
   // Determine if the current element is focused, if it is not focused
   // then we should not try to blur
-  nsIDocument *document = aContent->GetDocument();
+  nsIDocument* document = aContent->GetComposedDoc();
   if (!document)
     return false;
 

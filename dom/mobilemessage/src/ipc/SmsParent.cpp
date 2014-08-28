@@ -14,7 +14,6 @@
 #include "SmsMessage.h"
 #include "MmsMessage.h"
 #include "nsIMobileMessageDatabaseService.h"
-#include "SmsFilter.h"
 #include "MobileMessageThread.h"
 #include "nsIDOMFile.h"
 #include "mozilla/dom/ipc/Blob.h"
@@ -22,7 +21,6 @@
 #include "mozilla/dom/mobilemessage/Constants.h" // For MessageType
 #include "nsContentUtils.h"
 #include "nsTArrayHelpers.h"
-#include "nsCxPusher.h"
 #include "xpcpublic.h"
 #include "nsServiceManagerUtils.h"
 #include "DeletedMessageInfo.h"
@@ -496,7 +494,7 @@ SmsRequestParent::DoRequest(const SendMessageRequest& aRequest)
       // jsval to ::Send. Only system code should be looking at the result here,
       // so we just create it in the System-Principaled Junk Scope.
       AutoJSContext cx;
-      JSAutoCompartment ac(cx, xpc::GetJunkScope());
+      JSAutoCompartment ac(cx, xpc::PrivilegedJunkScope());
       JS::Rooted<JS::Value> params(cx);
       const SendMmsMessageRequest &req = aRequest.get_SendMmsMessageRequest();
       if (!GetParamsFromSendMmsMessageRequest(cx,
@@ -775,10 +773,31 @@ MobileMessageCursorParent::DoRequest(const CreateMessageCursorRequest& aRequest)
   nsCOMPtr<nsIMobileMessageDatabaseService> dbService =
     do_GetService(MOBILE_MESSAGE_DATABASE_SERVICE_CONTRACTID);
   if (dbService) {
-    nsCOMPtr<nsIDOMMozSmsFilter> filter = new SmsFilter(aRequest.filter());
-    bool reverse = aRequest.reverse();
+    const SmsFilterData& filter = aRequest.filter();
 
-    rv = dbService->CreateMessageCursor(filter, reverse, this,
+    const nsTArray<nsString>& numbers = filter.numbers();
+    nsAutoArrayPtr<const char16_t*> ptrNumbers;
+    uint32_t numbersCount = numbers.Length();
+    if (numbersCount) {
+      uint32_t index;
+
+      ptrNumbers = new const char16_t* [numbersCount];
+      for (index = 0; index < numbersCount; index++) {
+        ptrNumbers[index] = numbers[index].get();
+      }
+    }
+
+    rv = dbService->CreateMessageCursor(filter.hasStartDate(),
+                                        filter.startDate(),
+                                        filter.hasEndDate(),
+                                        filter.endDate(),
+                                        ptrNumbers, numbersCount,
+                                        filter.delivery(),
+                                        filter.hasRead(),
+                                        filter.read(),
+                                        filter.threadId(),
+                                        aRequest.reverse(),
+                                        this,
                                         getter_AddRefs(mContinueCallback));
   }
 

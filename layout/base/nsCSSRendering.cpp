@@ -1694,7 +1694,7 @@ nsCSSRendering::GetBackgroundClip(const nsStyleBackground::Layer& aLayer,
       NS_STYLE_BG_CLIP_MOZ_ALMOST_PADDING : NS_STYLE_BG_CLIP_PADDING;
   }
 
-  aClipState->mBGClipArea = aBorderArea;
+  aClipState->mBGClipArea = clipBorderArea;
   aClipState->mHasAdditionalBGClipArea = false;
   aClipState->mCustomClip = false;
 
@@ -2684,6 +2684,7 @@ nsCSSRendering::PaintBackgroundWithSC(nsPresContext* aPresContext,
   if (aBGClipRect) {
     clipState.mBGClipArea = *aBGClipRect;
     clipState.mCustomClip = true;
+    clipState.mHasRoundedCorners = false;
     SetupDirtyRects(clipState.mBGClipArea, aDirtyRect, appUnitsPerPixel,
                     &clipState.mDirtyRect, &clipState.mDirtyRectGfx);
   } else {

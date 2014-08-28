@@ -9,18 +9,21 @@
 #include "DecoderTraits.h"
 #include "MediaDecoder.h"
 #include "MediaSourceDecoder.h"
+#include "MediaSourceUtils.h"
 #include "SourceBufferResource.h"
 #include "mozilla/Endian.h"
 #include "mozilla/ErrorResult.h"
 #include "mozilla/FloatingPoint.h"
 #include "mozilla/dom/MediaSourceBinding.h"
 #include "mozilla/dom/TimeRanges.h"
+#include "mp4_demuxer/BufferStream.h"
+#include "mp4_demuxer/MoofParser.h"
 #include "nsError.h"
 #include "nsIEventTarget.h"
 #include "nsIRunnable.h"
 #include "nsThreadUtils.h"
 #include "prlog.h"
-#include "SubBufferDecoder.h"
+#include "SourceBufferDecoder.h"
 #include "mozilla/Preferences.h"
 
 struct JSContext;
@@ -84,6 +87,8 @@ public:
 
 class MP4ContainerParser : public ContainerParser {
 public:
+  MP4ContainerParser() : mTimescale(0) {}
+
   bool IsInitSegmentPresent(const uint8_t* aData, uint32_t aLength)
   {
     ContainerParser::IsInitSegmentPresent(aData, aLength);
@@ -110,6 +115,33 @@ public:
     return aData[4] == 'f' && aData[5] == 't' && aData[6] == 'y' &&
            aData[7] == 'p';
   }
+
+  virtual bool ParseStartAndEndTimestamps(const uint8_t* aData, uint32_t aLength,
+                                          double& aStart, double& aEnd)
+  {
+    mp4_demuxer::MoofParser parser(new mp4_demuxer::BufferStream(aData, aLength), 0);
+    parser.mMdhd.mTimescale = mTimescale;
+
+    nsTArray<MediaByteRange> byteRanges;
+    byteRanges.AppendElement(MediaByteRange(0, aLength));
+    parser.RebuildFragmentedIndex(byteRanges);
+
+    // Persist the timescale for when it is absent in later chunks
+    mTimescale = parser.mMdhd.mTimescale;
+
+    mp4_demuxer::Interval<mp4_demuxer::Microseconds> compositionRange =
+        parser.GetCompositionRange();
+
+    if (compositionRange.IsNull()) {
+      return false;
+    }
+    aStart = static_cast<double>(compositionRange.start) / USECS_PER_S;
+    aEnd = static_cast<double>(compositionRange.end) / USECS_PER_S;
+    return true;
+  }
+
+  private:
+    uint32_t mTimescale;
 };
 
 
@@ -150,7 +182,7 @@ void
 SourceBuffer::SetTimestampOffset(double aTimestampOffset, ErrorResult& aRv)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  MSE_API("SourceBuffer(%p)::SetTimestampOffset(aTimestampOffset=%d)", this, aTimestampOffset);
+  MSE_API("SourceBuffer(%p)::SetTimestampOffset(aTimestampOffset=%f)", this, aTimestampOffset);
   if (!IsAttached() || mUpdating) {
     aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
     return;
@@ -172,6 +204,7 @@ SourceBuffer::GetBuffered(ErrorResult& aRv)
     aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
     return nullptr;
   }
+  double highestEndTime = 0;
   nsRefPtr<TimeRanges> ranges = new TimeRanges();
   // TODO: Need to adjust mDecoders so it only tracks active decoders.
   // Once we have an abstraction for track buffers, this needs to report the
@@ -179,11 +212,19 @@ SourceBuffer::GetBuffered(ErrorResult& aRv)
   for (uint32_t i = 0; i < mDecoders.Length(); ++i) {
     nsRefPtr<TimeRanges> r = new TimeRanges();
     mDecoders[i]->GetBuffered(r);
-    ranges->Union(r);
+    if (r->Length() > 0) {
+      highestEndTime = std::max(highestEndTime, r->GetEndTime());
+      ranges->Union(r);
+    }
   }
-  ranges->Normalize();
-  MSE_DEBUGV("SourceBuffer(%p)::GetBuffered startTime=%f endTime=%f length=%u",
-             this, ranges->GetStartTime(), ranges->GetEndTime(), ranges->Length());
+  if (mMediaSource->ReadyState() == MediaSourceReadyState::Ended) {
+    // Set the end time on the last range to highestEndTime by adding a
+    // new range spanning the current end time to highestEndTime, which
+    // Normalize() will then merge with the old last range.
+    ranges->Add(ranges->GetEndTime(), highestEndTime);
+    ranges->Normalize();
+  }
+  MSE_DEBUGV("SourceBuffer(%p)::GetBuffered ranges=%s", this, DumpTimeRanges(ranges).get());
   return ranges.forget();
 }
 
@@ -191,7 +232,7 @@ void
 SourceBuffer::SetAppendWindowStart(double aAppendWindowStart, ErrorResult& aRv)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  MSE_API("SourceBuffer(%p)::SetAppendWindowStart(aAppendWindowStart=%d)", this, aAppendWindowStart);
+  MSE_API("SourceBuffer(%p)::SetAppendWindowStart(aAppendWindowStart=%f)", this, aAppendWindowStart);
   if (!IsAttached() || mUpdating) {
     aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
     return;
@@ -207,7 +248,7 @@ void
 SourceBuffer::SetAppendWindowEnd(double aAppendWindowEnd, ErrorResult& aRv)
 {
   MOZ_ASSERT(NS_IsMainThread());
-  MSE_API("SourceBuffer(%p)::SetAppendWindowEnd(aAppendWindowEnd=%d)", this, aAppendWindowEnd);
+  MSE_API("SourceBuffer(%p)::SetAppendWindowEnd(aAppendWindowEnd=%f)", this, aAppendWindowEnd);
   if (!IsAttached() || mUpdating) {
     aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
     return;
@@ -268,14 +309,15 @@ SourceBuffer::Remove(double aStart, double aEnd, ErrorResult& aRv)
 {
   MOZ_ASSERT(NS_IsMainThread());
   MSE_API("SourceBuffer(%p)::Remove(aStart=%f, aEnd=%f)", this, aStart, aEnd);
+  if (IsNaN(mMediaSource->Duration()) ||
+      aStart < 0 || aStart > mMediaSource->Duration() ||
+      aEnd <= aStart || IsNaN(aEnd)) {
+    aRv.Throw(NS_ERROR_DOM_INVALID_ACCESS_ERR);
+    return;
+  }
   if (!IsAttached() || mUpdating ||
       mMediaSource->ReadyState() != MediaSourceReadyState::Open) {
     aRv.Throw(NS_ERROR_DOM_INVALID_STATE_ERR);
-    return;
-  }
-  if (aStart < 0 || aStart > mMediaSource->Duration() ||
-      aEnd <= aStart) {
-    aRv.Throw(NS_ERROR_DOM_INVALID_ACCESS_ERR);
     return;
   }
   StartUpdating();
@@ -370,7 +412,7 @@ SourceBuffer::InitNewDecoder()
   MSE_DEBUG("SourceBuffer(%p)::InitNewDecoder", this);
   MOZ_ASSERT(!mDecoder);
   MediaSourceDecoder* parentDecoder = mMediaSource->GetDecoder();
-  nsRefPtr<SubBufferDecoder> decoder = parentDecoder->CreateSubDecoder(mType);
+  nsRefPtr<SourceBufferDecoder> decoder = parentDecoder->CreateSubDecoder(mType);
   if (!decoder) {
     return false;
   }
@@ -488,7 +530,7 @@ SourceBuffer::AppendData(const uint8_t* aData, uint32_t aLength, ErrorResult& aR
   // if required when data is appended.
   mMediaSource->GetDecoder()->ScheduleStateMachineThread();
 
-  mMediaSource->NotifyGotData();
+  mMediaSource->GetDecoder()->NotifyGotData();
 }
 
 double
@@ -528,24 +570,6 @@ SourceBuffer::Evict(double aStart, double aEnd)
     mDecoder->GetResource()->EvictBefore(endOffset);
   }
   MSE_DEBUG("SourceBuffer(%p)::Evict offset=%lld", this, endOffset);
-}
-
-bool
-SourceBuffer::ContainsTime(double aTime)
-{
-  MOZ_ASSERT(NS_IsMainThread());
-  ErrorResult dummy;
-  nsRefPtr<TimeRanges> ranges = GetBuffered(dummy);
-  if (!ranges || ranges->Length() == 0) {
-    return false;
-  }
-  for (uint32_t i = 0; i < ranges->Length(); ++i) {
-    if (aTime >= ranges->Start(i, dummy) &&
-        aTime <= ranges->End(i, dummy)) {
-      return true;
-    }
-  }
-  return false;
 }
 
 NS_IMPL_CYCLE_COLLECTION_INHERITED(SourceBuffer, DOMEventTargetHelper,

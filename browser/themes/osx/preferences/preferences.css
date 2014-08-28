@@ -167,22 +167,10 @@ caption {
   font: message-box !important;
 }
 
-/**
- * Privacy Pane
- */
+/* General Pane */
 
-html|a.inline-link {
-  color: -moz-nativehyperlinktext;
-  text-decoration: none;
-}
-
-html|a.inline-link:hover {
-  text-decoration: underline;
-}
-
-html|a.inline-link:-moz-focusring {
-  outline-width: 0;
-  box-shadow: @focusRingShadow@;
+#isNotDefaultLabel {
+  font-weight: bold;
 }
 
 /**

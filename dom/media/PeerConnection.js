@@ -22,6 +22,8 @@ const PC_MANAGER_CONTRACT = "@mozilla.org/dom/peerconnectionmanager;1";
 const PC_STATS_CONTRACT = "@mozilla.org/dom/rtcstatsreport;1";
 const PC_IDENTITY_CONTRACT = "@mozilla.org/dom/rtcidentityassertion;1";
 const PC_STATIC_CONTRACT = "@mozilla.org/dom/peerconnectionstatic;1";
+const PC_SENDER_CONTRACT = "@mozilla.org/dom/rtpsender;1";
+const PC_RECEIVER_CONTRACT = "@mozilla.org/dom/rtpreceiver;1";
 
 const PC_CID = Components.ID("{00e0e20d-1494-4776-8e0e-0f0acbea3c79}");
 const PC_OBS_CID = Components.ID("{d1748d4c-7f6a-4dc5-add6-d55b7678537e}");
@@ -31,6 +33,8 @@ const PC_MANAGER_CID = Components.ID("{7293e901-2be3-4c02-b4bd-cbef6fc24f78}");
 const PC_STATS_CID = Components.ID("{7fe6e18b-0da3-4056-bf3b-440ef3809e06}");
 const PC_IDENTITY_CID = Components.ID("{1abc7499-3c54-43e0-bd60-686e2703f072}");
 const PC_STATIC_CID = Components.ID("{0fb47c47-a205-4583-a9fc-cbadf8c95880}");
+const PC_SENDER_CID = Components.ID("{4fff5d46-d827-4cd4-a970-8fd53977440e}");
+const PC_RECEIVER_CID = Components.ID("{d974b814-8fde-411c-8c45-b86791b81030}");
 
 // Global list of PeerConnection objects, so they can be cleaned up when
 // a page is torn down. (Maps inner window ID to an array of PC objects).
@@ -206,12 +210,6 @@ RTCSessionDescription.prototype = {
 };
 
 function RTCStatsReport(win, dict) {
-  function appendStats(stats, report) {
-    stats.forEach(function(stat) {
-        report[stat.id] = stat;
-      });
-  }
-
   this._win = win;
   this._pcid = dict.pcid;
   this._report = convertToRTCStatsReport(dict);
@@ -283,6 +281,8 @@ RTCIdentityAssertion.prototype = {
 
 function RTCPeerConnection() {
   this._queue = [];
+  this._senders = [];
+  this._receivers = [];
 
   this._pc = null;
   this._observer = null;
@@ -294,6 +294,10 @@ function RTCPeerConnection() {
   this._onCreateAnswerFailure = null;
   this._onGetStatsSuccess = null;
   this._onGetStatsFailure = null;
+  this._onReplaceTrackSender = null;
+  this._onReplaceTrackWithTrack = null;
+  this._onReplaceTrackSuccess = null;
+  this._onReplaceTrackFailure = null;
 
   this._pendingType = null;
   this._localType = null;
@@ -337,6 +341,7 @@ RTCPeerConnection.prototype = {
     }
 
     this.makeGetterSetterEH("onaddstream");
+    this.makeGetterSetterEH("onaddtrack");
     this.makeGetterSetterEH("onicecandidate");
     this.makeGetterSetterEH("onnegotiationneeded");
     this.makeGetterSetterEH("onsignalingstatechange");
@@ -780,16 +785,7 @@ RTCPeerConnection.prototype = {
   },
 
   addStream: function(stream) {
-    if (stream.currentTime === undefined) {
-      throw new this._win.DOMError("", "Invalid stream passed to addStream!");
-    }
-    this._queueOrRun({ func: this._addStream,
-                       args: [stream],
-                       wait: false });
-  },
-
-  _addStream: function(stream) {
-    this._impl.addStream(stream);
+    stream.getTracks().forEach(track => this.addTrack(track, stream));
   },
 
   removeStream: function(stream) {
@@ -799,6 +795,46 @@ RTCPeerConnection.prototype = {
 
   getStreamById: function(id) {
     throw new this._win.DOMError("", "getStreamById not yet implemented");
+  },
+
+  addTrack: function(track, stream) {
+    if (stream.currentTime === undefined) {
+      throw new this._win.DOMError("", "invalid stream.");
+    }
+    if (stream.getTracks().indexOf(track) == -1) {
+      throw new this._win.DOMError("", "track is not in stream.");
+    }
+    this._checkClosed();
+    this._impl.addTrack(track, stream);
+    let sender = this._win.RTCRtpSender._create(this._win,
+                                                new RTCRtpSender(this, track,
+                                                                 stream));
+    this._senders.push({ sender: sender, stream: stream });
+    return sender;
+  },
+
+  removeTrack: function(sender) {
+     // Bug 844295: Not implementing this functionality.
+     throw new this._win.DOMError("", "removeTrack not yet implemented");
+  },
+
+  _replaceTrack: function(sender, withTrack, onSuccess, onError) {
+    // TODO: Do a (sender._stream.getTracks().indexOf(track) == -1) check
+    //       on both track args someday.
+    //
+    // The proposed API will be that both tracks must already be in the same
+    // stream. However, since our MediaStreams currently are limited to one
+    // track per type, we allow replacement with an outside track not already
+    // in the same stream.
+    //
+    // Since a track may be replaced more than once, the track being replaced
+    // may not be in the stream either, so we check neither arg right now.
+
+    this._onReplaceTrackSender = sender;
+    this._onReplaceTrackWithTrack = withTrack;
+    this._onReplaceTrackSuccess = onSuccess;
+    this._onReplaceTrackFailure = onError;
+    this._impl.replaceTrack(sender.track, withTrack, sender._stream);
   },
 
   close: function() {
@@ -824,6 +860,36 @@ RTCPeerConnection.prototype = {
   getRemoteStreams: function() {
     this._checkClosed();
     return this._impl.getRemoteStreams();
+  },
+
+  getSenders: function() {
+    this._checkClosed();
+    let streams = this._impl.getLocalStreams();
+    let senders = [];
+    // prune senders in case any streams have disappeared down below
+    for (let i = this._senders.length - 1; i >= 0; i--) {
+      if (streams.indexOf(this._senders[i].stream) != -1) {
+        senders.push(this._senders[i].sender);
+      } else {
+        this._senders.splice(i,1);
+      }
+    }
+    return senders;
+  },
+
+  getReceivers: function() {
+    this._checkClosed();
+    let streams = this._impl.getRemoteStreams();
+    let receivers = [];
+    // prune receivers in case any streams have disappeared down below
+    for (let i = this._receivers.length - 1; i >= 0; i--) {
+      if (streams.indexOf(this._receivers[i].stream) != -1) {
+        receivers.push(this._receivers[i].receiver);
+      } else {
+        this._receivers.splice(i,1);
+      }
+    }
+    return receivers;
   },
 
   get localDescription() {
@@ -1244,6 +1310,32 @@ PeerConnectionObserver.prototype = {
                                                              { stream: stream }));
   },
 
+  onAddTrack: function(track) {
+    let ev = new this._dompc._win.MediaStreamTrackEvent("addtrack",
+                                                        { track: track });
+    this._dompc.dispatchEvent(ev);
+  },
+
+  onRemoveTrack: function(track, type) {
+    this.dispatchEvent(new this._dompc._win.MediaStreamTrackEvent("removetrack",
+                                                                  { track: track }));
+  },
+
+  onReplaceTrackSuccess: function() {
+    var pc = this._dompc;
+    pc._onReplaceTrackSender.track = pc._onReplaceTrackWithTrack;
+    pc._onReplaceTrackWithTrack = null;
+    pc._onReplaceTrackSender = null;
+    pc.callCB(pc._onReplaceTrackSuccess);
+  },
+
+  onReplaceTrackError: function(code, message) {
+    var pc = this._dompc;
+    pc._onReplaceTrackWithTrack = null;
+    pc._onReplaceTrackSender = null;
+    pc.callCB(pc._onReplaceTrackError, new RTCError(code, message));
+  },
+
   foundIceCandidate: function(cand) {
     this.dispatchEvent(new this._dompc._win.RTCPeerConnectionIceEvent("icecandidate",
                                                                       { candidate: cand } ));
@@ -1275,12 +1367,46 @@ RTCPeerConnectionStatic.prototype = {
   },
 };
 
+function RTCRtpSender(pc, track, stream) {
+  this._pc = pc;
+  this.track = track;
+  this._stream = stream;
+}
+RTCRtpSender.prototype = {
+  classDescription: "RTCRtpSender",
+  classID: PC_SENDER_CID,
+  contractID: PC_SENDER_CONTRACT,
+  QueryInterface: XPCOMUtils.generateQI([Ci.nsISupports]),
+
+  replaceTrack: function(withTrack, onSuccess, onError) {
+    this._pc._checkClosed();
+    this._pc._queueOrRun({
+      func: this._pc._replaceTrack,
+      args: [this, withTrack, onSuccess, onError],
+      wait: false
+    });
+  }
+};
+
+function RTCRtpReceiver(pc, track) {
+  this.pc = pc;
+  this.track = track;
+}
+RTCRtpReceiver.prototype = {
+  classDescription: "RTCRtpReceiver",
+  classID: PC_RECEIVER_CID,
+  contractID: PC_RECEIVER_CONTRACT,
+  QueryInterface: XPCOMUtils.generateQI([Ci.nsISupports]),
+};
+
 this.NSGetFactory = XPCOMUtils.generateNSGetFactory(
   [GlobalPCList,
    RTCIceCandidate,
    RTCSessionDescription,
    RTCPeerConnection,
    RTCPeerConnectionStatic,
+   RTCRtpReceiver,
+   RTCRtpSender,
    RTCStatsReport,
    RTCIdentityAssertion,
    PeerConnectionObserver]

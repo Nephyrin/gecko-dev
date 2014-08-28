@@ -277,7 +277,8 @@ class MacroAssemblerARM : public Assembler
     // Division - depends on integer divide instructions being supported.
     void ma_sdiv(Register num, Register div, Register dest, Condition cond = Always);
     void ma_udiv(Register num, Register div, Register dest, Condition cond = Always);
-
+    // Misc operations
+    void ma_clz(Register src, Register dest, Condition cond = Always);
     // Memory:
     // Shortcut for when we know we're transferring 32 bits of data.
     void ma_dtr(LoadStore ls, Register rn, Imm32 offset, Register rt,
@@ -1019,6 +1020,9 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
     void moveValue(const Value &val, Register type, Register data);
 
     CodeOffsetJump jumpWithPatch(RepatchLabel *label, Condition cond = Always);
+    CodeOffsetJump backedgeJump(RepatchLabel *label) {
+        return jumpWithPatch(label);
+    }
     template <typename T>
     CodeOffsetJump branchPtrWithPatch(Condition cond, Register reg, T ptr, RepatchLabel *label) {
         ma_cmp(reg, ptr);
@@ -1332,6 +1336,16 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
 
     void loadPrivate(const Address &address, Register dest);
 
+    void loadAlignedInt32x4(const Address &addr, FloatRegister dest) { MOZ_ASSUME_UNREACHABLE("NYI"); }
+    void storeAlignedInt32x4(FloatRegister src, Address addr) { MOZ_ASSUME_UNREACHABLE("NYI"); }
+    void loadUnalignedInt32x4(const Address &addr, FloatRegister dest) { MOZ_ASSUME_UNREACHABLE("NYI"); }
+    void storeUnalignedInt32x4(FloatRegister src, Address addr) { MOZ_ASSUME_UNREACHABLE("NYI"); }
+
+    void loadAlignedFloat32x4(const Address &addr, FloatRegister dest) { MOZ_ASSUME_UNREACHABLE("NYI"); }
+    void storeAlignedFloat32x4(FloatRegister src, Address addr) { MOZ_ASSUME_UNREACHABLE("NYI"); }
+    void loadUnalignedFloat32x4(const Address &addr, FloatRegister dest) { MOZ_ASSUME_UNREACHABLE("NYI"); }
+    void storeUnalignedFloat32x4(FloatRegister src, Address addr) { MOZ_ASSUME_UNREACHABLE("NYI"); }
+
     void loadDouble(const Address &addr, FloatRegister dest);
     void loadDouble(const BaseIndex &src, FloatRegister dest);
 
@@ -1613,7 +1627,7 @@ class MacroAssemblerARMCompat : public MacroAssemblerARM
 #endif
 
     void loadAsmJSActivation(Register dest) {
-        loadPtr(Address(GlobalReg, AsmJSActivationGlobalDataOffset), dest);
+        loadPtr(Address(GlobalReg, AsmJSActivationGlobalDataOffset - AsmJSGlobalRegBias), dest);
     }
 };
 

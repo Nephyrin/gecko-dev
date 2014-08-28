@@ -156,12 +156,14 @@ this.EventManager.prototype = {
         let reason = event.reason;
         let oldAccessible = event.oldAccessible;
 
-        if (this.editState.editing) {
+        if (this.editState.editing &&
+            !Utils.getState(position).contains(States.FOCUSED)) {
           aEvent.accessibleDocument.takeFocus();
         }
         this.present(
           Presentation.pivotChanged(position, oldAccessible, reason,
-                                    pivot.startOffset, pivot.endOffset));
+                                    pivot.startOffset, pivot.endOffset,
+                                    aEvent.isFromUserInput));
 
         break;
       }
@@ -279,8 +281,10 @@ this.EventManager.prototype = {
         // Put vc where the focus is at
         let acc = aEvent.accessible;
         let doc = aEvent.accessibleDocument;
-        if (acc.role != Roles.DOCUMENT && doc.role != Roles.CHROME_WINDOW) {
-         this.contentControl.autoMove(acc);
+        if ([Roles.CHROME_WINDOW,
+             Roles.DOCUMENT,
+             Roles.APPLICATION].indexOf(acc.role) < 0) {
+          this.contentControl.autoMove(acc);
        }
        break;
       }

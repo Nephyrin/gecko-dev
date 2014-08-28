@@ -153,6 +153,7 @@ class CodeGeneratorX86Shared : public CodeGeneratorShared
     virtual bool visitMinMaxD(LMinMaxD *ins);
     virtual bool visitAbsD(LAbsD *ins);
     virtual bool visitAbsF(LAbsF *ins);
+    virtual bool visitClzI(LClzI *ins);
     virtual bool visitSqrtD(LSqrtD *ins);
     virtual bool visitSqrtF(LSqrtF *ins);
     virtual bool visitPowHalfD(LPowHalfD *ins);
@@ -203,6 +204,15 @@ class CodeGeneratorX86Shared : public CodeGeneratorShared
     bool visitNegI(LNegI *lir);
     bool visitNegD(LNegD *lir);
     bool visitNegF(LNegF *lir);
+
+    // SIMD operators
+    bool visitSimdValueX4(LSimdValueX4 *lir);
+    bool visitInt32x4(LInt32x4 *ins);
+    bool visitFloat32x4(LFloat32x4 *ins);
+    bool visitSimdExtractElementI(LSimdExtractElementI *lir);
+    bool visitSimdExtractElementF(LSimdExtractElementF *lir);
+    bool visitSimdBinaryArithIx4(LSimdBinaryArithIx4 *lir);
+    bool visitSimdBinaryArithFx4(LSimdBinaryArithFx4 *lir);
 
     // Out of line visitors.
     bool visitOutOfLineBailout(OutOfLineBailout *ool);

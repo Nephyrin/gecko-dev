@@ -552,7 +552,7 @@ class NodeBuilder
                      MutableHandleValue dst);
 
     bool propertyInitializer(HandleValue key, HandleValue val, PropKind kind, bool isShorthand,
-                             TokenPos *pos, MutableHandleValue dst);
+                             bool isMethod, TokenPos *pos, MutableHandleValue dst);
 
 
     /*
@@ -1314,7 +1314,7 @@ NodeBuilder::propertyPattern(HandleValue key, HandleValue patt, bool isShorthand
 
 bool
 NodeBuilder::propertyInitializer(HandleValue key, HandleValue val, PropKind kind, bool isShorthand,
-                                 TokenPos *pos, MutableHandleValue dst)
+                                 bool isMethod, TokenPos *pos, MutableHandleValue dst)
 {
     RootedValue kindName(cx);
     if (!atomValue(kind == PROP_INIT
@@ -1326,6 +1326,7 @@ NodeBuilder::propertyInitializer(HandleValue key, HandleValue val, PropKind kind
     }
 
     RootedValue isShorthandVal(cx, BooleanValue(isShorthand));
+    RootedValue isMethodVal(cx, BooleanValue(isMethod));
 
     RootedValue cb(cx, callbacks[AST_PROPERTY]);
     if (!cb.isNull())
@@ -1335,6 +1336,7 @@ NodeBuilder::propertyInitializer(HandleValue key, HandleValue val, PropKind kind
                    "key", key,
                    "value", val,
                    "kind", kindName,
+                   "method", isMethodVal,
                    "shorthand", isShorthandVal,
                    dst);
 }
@@ -3030,10 +3032,11 @@ ASTSerializer::property(ParseNode *pn, MutableHandleValue dst)
     }
 
     bool isShorthand = pn->isKind(PNK_SHORTHAND);
+    bool isMethod = pn->pn_right->isKind(PNK_FUNCTION) && kind == PROP_INIT;
     RootedValue key(cx), val(cx);
     return propertyName(pn->pn_left, &key) &&
            expression(pn->pn_right, &val) &&
-           builder.propertyInitializer(key, val, kind, isShorthand, &pn->pn_pos, dst);
+           builder.propertyInitializer(key, val, kind, isShorthand, isMethod, &pn->pn_pos, dst);
 }
 
 bool
@@ -3094,6 +3097,14 @@ ASTSerializer::arrayPattern(ParseNode *pn, VarDeclKind *pkind, MutableHandleValu
     for (ParseNode *next = pn->pn_head; next; next = next->pn_next) {
         if (next->isKind(PNK_ELISION)) {
             elts.infallibleAppend(NullValue());
+        } else if (next->isKind(PNK_SPREAD)) {
+            RootedValue target(cx);
+            RootedValue spread(cx);
+            if (!pattern(next->pn_kid, pkind, &target))
+                return false;
+            if(!builder.spreadExpression(target, &next->pn_pos, &spread))
+                return false;
+            elts.infallibleAppend(spread);
         } else {
             RootedValue patt(cx);
             if (!pattern(next, pkind, &patt))

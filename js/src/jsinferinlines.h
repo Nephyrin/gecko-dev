@@ -1108,6 +1108,16 @@ HeapTypeSet::setNonWritableProperty(ExclusiveContext *cx)
     newPropertyState(cx);
 }
 
+inline void
+HeapTypeSet::setNonConstantProperty(ExclusiveContext *cx)
+{
+    if (flags & TYPE_FLAG_NON_CONSTANT_PROPERTY)
+        return;
+
+    flags |= TYPE_FLAG_NON_CONSTANT_PROPERTY;
+    newPropertyState(cx);
+}
+
 inline unsigned
 TypeSet::getObjectCount() const
 {
@@ -1274,20 +1284,6 @@ TypeObject::getProperty(unsigned i)
         return (Property *) propertySet;
     }
     return propertySet[i];
-}
-
-inline void
-TypeObjectAddendum::writeBarrierPre(TypeObjectAddendum *type)
-{
-#ifdef JSGC_INCREMENTAL
-    if (!type)
-        return;
-
-    switch (type->kind) {
-      case NewScript:
-        return TypeNewScript::writeBarrierPre(type->asNewScript());
-    }
-#endif
 }
 
 inline void

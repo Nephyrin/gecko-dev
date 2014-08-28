@@ -694,6 +694,7 @@ let SessionStoreInternal = {
         break;
       case "TabPinned":
       case "TabUnpinned":
+      case "SwapDocShells":
         this.saveStateDelayed(win);
         break;
     }
@@ -1003,7 +1004,7 @@ let SessionStoreInternal = {
       this._collectWindowData(aWindow);
 
       if (isFullyLoaded) {
-        winData.title = aWindow.content.document.title || tabbrowser.selectedTab.label;
+        winData.title = tabbrowser.selectedBrowser.contentTitle || tabbrowser.selectedTab.label;
         winData.title = this._replaceLoadingTitle(winData.title, tabbrowser,
                                                   tabbrowser.selectedTab);
         SessionCookies.update([winData]);
@@ -1263,6 +1264,8 @@ let SessionStoreInternal = {
    *        bool Do not save state if we're updating an existing tab
    */
   onTabAdd: function ssi_onTabAdd(aWindow, aTab, aNoNotification) {
+    let browser = aTab.linkedBrowser;
+    browser.addEventListener("SwapDocShells", this);
     if (!aNoNotification) {
       this.saveStateDelayed(aWindow);
     }
@@ -1280,6 +1283,7 @@ let SessionStoreInternal = {
   onTabRemove: function ssi_onTabRemove(aWindow, aTab, aNoNotification) {
     let browser = aTab.linkedBrowser;
     delete browser.__SS_data;
+    browser.removeEventListener("SwapDocShells", this);
 
     // If this tab was in the middle of restoring or still needs to be restored,
     // we need to reset that state. If the tab was restoring, we will attempt to
@@ -2652,8 +2656,8 @@ let SessionStoreInternal = {
     var _this = this;
     aWindow.setTimeout(function() {
       _this.restoreDimensions.apply(_this, [aWindow,
-        +aWinData.width || 0,
-        +aWinData.height || 0,
+        +(aWinData.width || 0),
+        +(aWinData.height || 0),
         "screenX" in aWinData ? +aWinData.screenX : NaN,
         "screenY" in aWinData ? +aWinData.screenY : NaN,
         aWinData.sizemode || "", aWinData.sidebar || ""]);

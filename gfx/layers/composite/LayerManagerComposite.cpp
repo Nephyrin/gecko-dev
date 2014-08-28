@@ -38,6 +38,7 @@
 #include "mozilla/layers/Compositor.h"  // for Compositor
 #include "mozilla/layers/CompositorTypes.h"
 #include "mozilla/layers/Effects.h"     // for Effect, EffectChain, etc
+#include "mozilla/layers/LayerMetricsWrapper.h" // for LayerMetricsWrapper
 #include "mozilla/layers/LayersTypes.h"  // for etc
 #include "ipc/CompositorBench.h"        // for CompositorBench
 #include "ipc/ShadowLayerUtils.h"
@@ -340,7 +341,7 @@ LayerManagerComposite::RenderDebugOverlay(const Rect& aBounds)
 
   if (drawFps) {
     if (!mFPS) {
-      mFPS = new FPSState();
+      mFPS = MakeUnique<FPSState>();
     }
 
     float fillRatio = mCompositor->GetFillRatio();
@@ -410,6 +411,94 @@ LayerManagerComposite::RenderDebugOverlay(const Rect& aBounds)
   }
 }
 
+RefPtr<CompositingRenderTarget>
+LayerManagerComposite::PushGroupForLayerEffects()
+{
+  // This is currently true, so just making sure that any new use of this
+  // method is flagged for investigation
+  MOZ_ASSERT(gfxPrefs::LayersEffectInvert() ||
+             gfxPrefs::LayersEffectGrayscale() ||
+             gfxPrefs::LayersEffectContrast() != 0.0);
+
+  RefPtr<CompositingRenderTarget> previousTarget = mCompositor->GetCurrentRenderTarget();
+  // make our render target the same size as the destination target
+  // so that we don't have to change size if the drawing area changes.
+  IntRect rect(previousTarget->GetOrigin(), previousTarget->GetSize());
+  // XXX: I'm not sure if this is true or not...
+  MOZ_ASSERT(rect.x == 0 && rect.y == 0);
+  if (!mTwoPassTmpTarget ||
+      mTwoPassTmpTarget->GetSize() != previousTarget->GetSize() ||
+      mTwoPassTmpTarget->GetOrigin() != previousTarget->GetOrigin()) {
+    mTwoPassTmpTarget = mCompositor->CreateRenderTarget(rect, INIT_MODE_NONE);
+  }
+  mCompositor->SetRenderTarget(mTwoPassTmpTarget);
+  return previousTarget;
+}
+void
+LayerManagerComposite::PopGroupForLayerEffects(RefPtr<CompositingRenderTarget> aPreviousTarget,
+                                               nsIntRect aClipRect,
+                                               bool aGrayscaleEffect,
+                                               bool aInvertEffect,
+                                               float aContrastEffect)
+{
+  MOZ_ASSERT(mTwoPassTmpTarget);
+
+  // This is currently true, so just making sure that any new use of this
+  // method is flagged for investigation
+  MOZ_ASSERT(aInvertEffect || aGrayscaleEffect || aContrastEffect != 0.0);
+
+  mCompositor->SetRenderTarget(aPreviousTarget);
+
+  EffectChain effectChain(RootLayer());
+  Matrix5x4 effectMatrix;
+  if (aGrayscaleEffect) {
+    // R' = G' = B' = luminance
+    // R' = 0.2126*R + 0.7152*G + 0.0722*B
+    // G' = 0.2126*R + 0.7152*G + 0.0722*B
+    // B' = 0.2126*R + 0.7152*G + 0.0722*B
+    Matrix5x4 grayscaleMatrix(0.2126f, 0.2126f, 0.2126f, 0,
+                              0.7152f, 0.7152f, 0.7152f, 0,
+                              0.0722f, 0.0722f, 0.0722f, 0,
+                              0,       0,       0,       1,
+                              0,       0,       0,       0);
+    effectMatrix = grayscaleMatrix;
+  }
+
+  if (aInvertEffect) {
+    // R' = 1 - R
+    // G' = 1 - G
+    // B' = 1 - B
+    Matrix5x4 colorInvertMatrix(-1,  0,  0, 0,
+                                 0, -1,  0, 0,
+                                 0,  0, -1, 0,
+                                 0,  0,  0, 1,
+                                 1,  1,  1, 0);
+    effectMatrix = effectMatrix * colorInvertMatrix;
+  }
+
+  if (aContrastEffect != 0.0) {
+    // Multiplying with:
+    // R' = (1 + c) * (R - 0.5) + 0.5
+    // G' = (1 + c) * (G - 0.5) + 0.5
+    // B' = (1 + c) * (B - 0.5) + 0.5
+    float cP1 = aContrastEffect + 1;
+    float hc = 0.5*aContrastEffect;
+    Matrix5x4 contrastMatrix( cP1,   0,   0, 0,
+                                0, cP1,   0, 0,
+                                0,   0, cP1, 0,
+                                0,   0,   0, 1,
+                              -hc, -hc, -hc, 0);
+    effectMatrix = effectMatrix * contrastMatrix;
+  }
+
+  effectChain.mPrimaryEffect = new EffectRenderTarget(mTwoPassTmpTarget);
+  effectChain.mSecondaryEffects[EffectTypes::COLOR_MATRIX] = new EffectColorMatrix(effectMatrix);
+
+  gfx::Rect clipRectF(aClipRect.x, aClipRect.y, aClipRect.width, aClipRect.height);
+  mCompositor->DrawQuad(Rect(Point(0, 0), Size(mTwoPassTmpTarget->GetSize())), clipRectF, effectChain, 1.,
+                        Matrix4x4());
+}
+
 void
 LayerManagerComposite::Render()
 {
@@ -421,8 +510,15 @@ LayerManagerComposite::Render()
     return;
   }
 
-  /** Our more efficient but less powerful alter ego, if one is available. */
-  nsRefPtr<Composer2D> composer2D = mCompositor->GetWidget()->GetComposer2D();
+  // At this time, it doesn't really matter if these preferences change
+  // during the execution of the function; we should be safe in all
+  // permutations. However, may as well just get the values onces and
+  // then use them, just in case the consistency becomes important in
+  // the future.
+  bool invertVal = gfxPrefs::LayersEffectInvert();
+  bool grayscaleVal = gfxPrefs::LayersEffectGrayscale();
+  float contrastVal = gfxPrefs::LayersEffectContrast();
+  bool haveLayerEffects = (invertVal || grayscaleVal || contrastVal != 0.0);
 
   // Set LayerScope begin/end frame
   LayerScopeAutoFrame frame(PR_Now());
@@ -440,6 +536,15 @@ LayerManagerComposite::Render()
     layerscope::LayersPacket* layersPacket = packet->mutable_layers();
     this->Dump(layersPacket);
     LayerScope::SendLayerDump(Move(packet));
+  }
+
+  /** Our more efficient but less powerful alter ego, if one is available. */
+  nsRefPtr<Composer2D> composer2D;
+
+  // We can't use composert2D if we have layer effects, so only get it
+  // when we don't have any effects.
+  if (!haveLayerEffects) {
+    composer2D = mCompositor->GetWidget()->GetComposer2D();
   }
 
   if (!mTarget && composer2D && composer2D->TryRender(mRoot, mWorldMatrix, mGeometryChanged)) {
@@ -501,8 +606,15 @@ LayerManagerComposite::Render()
                                                                actualBounds.width,
                                                                actualBounds.height));
 
+  RefPtr<CompositingRenderTarget> previousTarget;
+  if (haveLayerEffects) {
+    previousTarget = PushGroupForLayerEffects();
+  } else {
+    mTwoPassTmpTarget = nullptr;
+  }
+
   // Render our layers.
-  RootLayer()->Prepare(clipRect);
+  RootLayer()->Prepare(RenderTargetPixel::FromUntyped(clipRect));
   RootLayer()->RenderLayer(clipRect);
 
   if (!mRegionToClear.IsEmpty()) {
@@ -511,6 +623,12 @@ LayerManagerComposite::Render()
     while ((r = iter.Next())) {
       mCompositor->ClearRect(Rect(r->x, r->y, r->width, r->height));
     }
+  }
+
+  if (mTwoPassTmpTarget) {
+    MOZ_ASSERT(haveLayerEffects);
+    PopGroupForLayerEffects(previousTarget, clipRect,
+                            grayscaleVal, invertVal, contrastVal);
   }
 
   // Allow widget to render a custom foreground.
@@ -646,7 +764,7 @@ LayerManagerComposite::ComputeRenderIntegrityInternal(Layer* aLayer,
   }
 }
 
-#ifdef MOZ_ANDROID_OMTC
+#ifdef MOZ_WIDGET_ANDROID
 static float
 GetDisplayportCoverage(const CSSRect& aDisplayPort,
                        const Matrix4x4& aTransformToScreen,
@@ -668,7 +786,7 @@ GetDisplayportCoverage(const CSSRect& aDisplayPort,
 
   return 1.0f;
 }
-#endif // MOZ_ANDROID_OMTC
+#endif // MOZ_WIDGET_ANDROID
 
 float
 LayerManagerComposite::ComputeRenderIntegrity()
@@ -679,7 +797,13 @@ LayerManagerComposite::ComputeRenderIntegrity()
     return 1.f;
   }
 
-  const FrameMetrics& rootMetrics = root->AsContainerLayer()->GetFrameMetrics();
+  FrameMetrics rootMetrics = LayerMetricsWrapper::TopmostScrollableMetrics(root);
+  if (!rootMetrics.IsScrollable()) {
+    // The root may not have any scrollable metrics, in which case rootMetrics
+    // will just be an empty FrameMetrics. Instead use the actual metrics from
+    // the root layer.
+    rootMetrics = LayerMetricsWrapper(root).Metrics();
+  }
   ParentLayerIntRect bounds = RoundedToInt(rootMetrics.mCompositionBounds);
   nsIntRect screenRect(bounds.x,
                        bounds.y,
@@ -689,15 +813,17 @@ LayerManagerComposite::ComputeRenderIntegrity()
   float lowPrecisionMultiplier = 1.0f;
   float highPrecisionMultiplier = 1.0f;
 
-#ifdef MOZ_ANDROID_OMTC
+#ifdef MOZ_WIDGET_ANDROID
   // Use the transform on the primary scrollable layer and its FrameMetrics
   // to find out how much of the viewport the current displayport covers
-  Layer* primaryScrollable = GetPrimaryScrollableLayer();
-  if (primaryScrollable) {
+  nsTArray<Layer*> rootScrollableLayers;
+  GetRootScrollableLayers(rootScrollableLayers);
+  if (rootScrollableLayers.Length() > 0) {
     // This is derived from the code in
     // AsyncCompositionManager::TransformScrollableLayer
-    const FrameMetrics& metrics = primaryScrollable->AsContainerLayer()->GetFrameMetrics();
-    Matrix4x4 transform = primaryScrollable->GetEffectiveTransform();
+    Layer* rootScrollable = rootScrollableLayers[0];
+    const FrameMetrics& metrics = LayerMetricsWrapper::TopmostScrollableMetrics(rootScrollable);
+    Matrix4x4 transform = rootScrollable->GetEffectiveTransform();
     transform.ScalePost(metrics.mResolution.scale, metrics.mResolution.scale, 1);
 
     // Clip the screen rect to the document bounds
@@ -740,7 +866,7 @@ LayerManagerComposite::ComputeRenderIntegrity()
   if (highPrecisionMultiplier <= 0.0f && lowPrecisionMultiplier <= 0.0f) {
     return 0.0f;
   }
-#endif // MOZ_ANDROID_OMTC
+#endif // MOZ_WIDGET_ANDROID
 
   nsIntRegion screenRegion(screenRect);
   nsIntRegion lowPrecisionScreenRegion(screenRect);
