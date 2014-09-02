@@ -746,9 +746,15 @@ ifdef MOZ_CODE_COVERAGE
 	# Package code coverage gcno tree
 	@echo 'Packaging code coverage data...'
 	$(RM) $(CODE_COVERAGE_ARCHIVE_BASENAME).zip
-	$(PYTHON) $(MOZILLA_DIR)/python/mozbuild/mozbuild/codecoverage/packager.py \
+	$(PYTHON) -mmozbuild.codecoverage.packager \
 		--output-file='$(DIST)/$(PKG_PATH)$(CODE_COVERAGE_ARCHIVE_BASENAME).zip'
 endif
+ifeq (Darwin, $(OS_ARCH))
+ifdef MOZ_ASAN
+	@echo "Rewriting ASan runtime dylib paths for all binaries in $(DIST)/$(STAGEPATH)$(MOZ_PKG_DIR)$(_BINPATH) ..."
+	$(PYTHON) $(MOZILLA_DIR)/build/unix/rewrite_asan_dylib.py $(DIST)/$(STAGEPATH)$(MOZ_PKG_DIR)$(_BINPATH)
+endif # MOZ_ASAN
+endif # Darwin
 
 prepare-package: stage-package
 

@@ -184,7 +184,7 @@ FrameLayerBuilder::DisplayItemData::GetFrameListChanges()
  */
 class LayerManagerData : public LayerUserData {
 public:
-  LayerManagerData(LayerManager *aManager)
+  explicit LayerManagerData(LayerManager *aManager)
     : mLayerManager(aManager)
 #ifdef DEBUG_DISPLAY_ITEM_DATA
     , mParent(nullptr)
@@ -3220,7 +3220,7 @@ FrameLayerBuilder::AddThebesDisplayItem(ThebesLayerData* aLayerData,
         layerBuilder->DidBeginRetainedLayerTransaction(tempManager);
       }
 
-      nsAutoPtr<LayerProperties> props(LayerProperties::CloneFrom(tempManager->GetRoot()));
+      UniquePtr<LayerProperties> props(LayerProperties::CloneFrom(tempManager->GetRoot()));
       nsRefPtr<Layer> tmpLayer =
         aItem->BuildLayer(mDisplayListBuilder, tempManager, ContainerLayerParameters());
       // We have no easy way of detecting if this transaction will ever actually get finished.

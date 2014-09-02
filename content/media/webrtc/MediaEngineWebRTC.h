@@ -214,6 +214,8 @@ public:
     return NS_OK;
   }
 
+  void Refresh(int aIndex);
+
 protected:
   ~MediaEngineWebRTCVideoSource() { Shutdown(); }
 
@@ -388,7 +390,7 @@ private:
 class MediaEngineWebRTC : public MediaEngine
 {
 public:
-  MediaEngineWebRTC(MediaEnginePrefs &aPrefs);
+  explicit MediaEngineWebRTC(MediaEnginePrefs &aPrefs);
 
   // Clients should ensure to clean-up sources video/audio sources
   // before invoking Shutdown on this class.
@@ -404,7 +406,6 @@ private:
 #ifdef MOZ_B2G_CAMERA
     AsyncLatencyLogger::Get()->Release();
 #endif
-    // XXX
     gFarendObserver = nullptr;
   }
 

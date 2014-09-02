@@ -81,7 +81,7 @@ var AccessFuTest = {
       isDeeply(data.details, aWaitForData, "Data is correct");
       aListener.apply(listener);
     };
-    Services.obs.addObserver(listener, 'accessfu-output', false);
+    Services.obs.addObserver(listener, 'accessibility-output', false);
     return listener;
   },
 
@@ -90,12 +90,12 @@ var AccessFuTest = {
   },
 
   off: function AccessFuTest_off(aListener) {
-    Services.obs.removeObserver(aListener, 'accessfu-output');
+    Services.obs.removeObserver(aListener, 'accessibility-output');
   },
 
   once: function AccessFuTest_once(aWaitForData, aListener) {
     return this._addObserver(aWaitForData, function observerAndRemove() {
-      Services.obs.removeObserver(this, 'accessfu-output');
+      Services.obs.removeObserver(this, 'accessibility-output');
       aListener();
     });
   },
@@ -301,6 +301,12 @@ AccessFuContentTest.prototype = {
         var checkFunc = SimpleTest[expected.android_checkFunc] || ok;
         checkFunc.apply(SimpleTest,
           this.lazyCompare(android, expected.android));
+      }
+
+      if (expected.focused) {
+        var doc = currentTabDocument();
+        is(doc.activeElement, doc.querySelector(expected.focused),
+          'Correct element is focused');
       }
 
       this.pump();

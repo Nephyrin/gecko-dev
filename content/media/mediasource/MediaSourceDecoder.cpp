@@ -93,8 +93,12 @@ MediaSourceDecoder::GetSeekable(dom::TimeRanges* aSeekable)
 void
 MediaSourceDecoder::Shutdown()
 {
+  MSE_DEBUG("MediaSourceDecoder(%p)::Shutdown", this);
   MediaDecoder::Shutdown();
 
+  if (mMediaSource) {
+    mMediaSource->Detach();
+  }
   // Kick WaitForData out of its slumber.
   ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
   mon.NotifyAll();
@@ -126,6 +130,14 @@ MediaSourceDecoder::CreateSubDecoder(const nsACString& aType)
 {
   MOZ_ASSERT(mReader);
   return mReader->CreateSubDecoder(aType);
+}
+
+void
+MediaSourceDecoder::Ended()
+{
+  ReentrantMonitorAutoEnter mon(GetReentrantMonitor());
+  mReader->Ended();
+  mon.NotifyAll();
 }
 
 void

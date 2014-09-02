@@ -9,6 +9,7 @@
 
 #include "nsIServiceManager.h"
 #include "nsMathUtils.h"
+#include "SVGImageContext.h"
 
 #include "nsContentUtils.h"
 
@@ -91,6 +92,7 @@
 #include "mozilla/dom/CanvasRenderingContext2DBinding.h"
 #include "mozilla/dom/HTMLImageElement.h"
 #include "mozilla/dom/HTMLVideoElement.h"
+#include "mozilla/dom/SVGMatrix.h"
 #include "mozilla/dom/TextMetrics.h"
 #include "mozilla/dom/UnionTypes.h"
 #include "mozilla/dom/SVGMatrix.h"
@@ -1988,7 +1990,7 @@ CanvasRenderingContext2D::ArcTo(double x1, double y1, double x2,
   }
 
   // Check for colinearity
-  dir = (p2.x - p1.x).value * (p0.y - p1.y).value + (p2.y - p1.y).value * (p1.x - p0.x).value;
+  dir = (p2.x - p1.x) * (p0.y - p1.y) + (p2.y - p1.y) * (p1.x - p0.x);
   if (dir == 0) {
     LineTo(p1.x, p1.y);
     return;
@@ -3483,11 +3485,13 @@ CanvasRenderingContext2D::DrawDirectlyToCanvas(
   // FLAG_CLAMP is added for increased performance, since we never tile here.
   uint32_t modifiedFlags = image.mDrawingFlags | imgIContainer::FLAG_CLAMP;
 
+  SVGImageContext svgContext(scaledImageSize, Nothing(), CurrentState().globalAlpha);
+
   nsresult rv = image.mImgContainer->
     Draw(context, scaledImageSize,
          ImageRegion::Create(gfxRect(src.x, src.y, src.width, src.height)),
          image.mWhichFrame, GraphicsFilter::FILTER_GOOD,
-         Nothing(), modifiedFlags);
+         Some(svgContext), modifiedFlags);
 
   NS_ENSURE_SUCCESS_VOID(rv);
 }
@@ -4513,7 +4517,7 @@ CanvasPath::ArcTo(double x1, double y1, double x2, double y2, double radius,
   }
 
   // Check for colinearity
-  dir = (p2.x - p1.x).value * (p0.y - p1.y).value + (p2.y - p1.y).value * (p1.x - p0.x).value;
+  dir = (p2.x - p1.x) * (p0.y - p1.y) + (p2.y - p1.y) * (p1.x - p0.x);
   if (dir == 0) {
     LineTo(p1.x, p1.y);
     return;
@@ -4592,6 +4596,25 @@ CanvasPath::BezierTo(const gfx::Point& aCP1,
   EnsurePathBuilder();
 
   mPathBuilder->BezierTo(aCP1, aCP2, aCP3);
+}
+
+void
+CanvasPath::AddPath(CanvasPath& aCanvasPath, const Optional<NonNull<SVGMatrix>>& aMatrix)
+{
+  RefPtr<gfx::Path> tempPath = aCanvasPath.GetPath(CanvasWindingRule::Nonzero,
+                                                   gfxPlatform::GetPlatform()->ScreenReferenceDrawTarget());
+
+  if (aMatrix.WasPassed()) {
+    const SVGMatrix& m = aMatrix.Value();
+    Matrix transform(m.A(), m.B(), m.C(), m.D(), m.E(), m.F());
+
+    if (!transform.IsIdentity()) {
+      RefPtr<PathBuilder> tempBuilder = tempPath->TransformedCopyToBuilder(transform, FillRule::FILL_WINDING);
+      tempPath = tempBuilder->Finish();
+    }
+  }
+
+  tempPath->StreamToSink(mPathBuilder);
 }
 
 TemporaryRef<gfx::Path>

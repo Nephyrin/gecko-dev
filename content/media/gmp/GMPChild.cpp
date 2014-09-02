@@ -24,7 +24,7 @@ using mozilla::dom::CrashReporterChild;
 #include <unistd.h> // for _exit()
 #endif
 
-#if defined(XP_WIN)
+#if defined(MOZ_SANDBOX) && defined(XP_WIN)
 #define TARGET_SANDBOX_EXPORTS
 #include "mozilla/sandboxTarget.h"
 #elif defined (MOZ_GMP_SANDBOX)
@@ -126,12 +126,64 @@ GetPluginPaths(const std::string& aPluginPath,
   return true;
 }
 
+static bool
+GetAppPaths(nsCString &aAppPath, nsCString &aAppBinaryPath)
+{
+  nsAutoCString appPath;
+  nsAutoCString appBinaryPath(
+    (CommandLine::ForCurrentProcess()->argv()[0]).c_str());
+
+  nsAutoCString::const_iterator start, end;
+  appBinaryPath.BeginReading(start);
+  appBinaryPath.EndReading(end);
+  if (RFindInReadable(NS_LITERAL_CSTRING(".app/Contents/MacOS/"), start, end)) {
+    end = start;
+    ++end; ++end; ++end; ++end;
+    appBinaryPath.BeginReading(start);
+    appPath.Assign(Substring(start, end));
+  } else {
+    return false;
+  }
+
+  nsCOMPtr<nsIFile> app, appBinary;
+  nsresult rv = NS_NewLocalFile(NS_ConvertUTF8toUTF16(appPath),
+                                true, getter_AddRefs(app));
+  if (NS_FAILED(rv)) {
+    return false;
+  }
+  rv = NS_NewLocalFile(NS_ConvertUTF8toUTF16(appBinaryPath),
+                       true, getter_AddRefs(appBinary));
+  if (NS_FAILED(rv)) {
+    return false;
+  }
+
+  bool isLink;
+  app->IsSymlink(&isLink);
+  if (isLink) {
+    app->GetNativeTarget(aAppPath);
+  } else {
+    app->GetNativePath(aAppPath);
+  }
+  appBinary->IsSymlink(&isLink);
+  if (isLink) {
+    appBinary->GetNativeTarget(aAppBinaryPath);
+  } else {
+    appBinary->GetNativePath(aAppBinaryPath);
+  }
+
+  return true;
+}
+
 void
 GMPChild::OnChannelConnected(int32_t aPid)
 {
   nsAutoCString pluginDirectoryPath, pluginFilePath;
   if (!GetPluginPaths(mPluginPath, pluginDirectoryPath, pluginFilePath)) {
     MOZ_CRASH("Error scanning plugin path");
+  }
+  nsAutoCString appPath, appBinaryPath;
+  if (!GetAppPaths(appPath, appBinaryPath)) {
+    MOZ_CRASH("Error resolving child process path");
   }
 
   MacSandboxInfo info;
@@ -140,6 +192,8 @@ GMPChild::OnChannelConnected(int32_t aPid)
   info.pluginInfo.pluginPath.Assign(pluginDirectoryPath);
   mPluginBinaryPath.Assign(pluginFilePath);
   info.pluginInfo.pluginBinaryPath.Assign(pluginFilePath);
+  info.appPath.Assign(appPath);
+  info.appBinaryPath.Assign(appBinaryPath);
 
   nsAutoCString err;
   if (!mozilla::StartMacSandbox(info, err)) {
@@ -181,7 +235,7 @@ GMPChild::Init(const std::string& aPluginPath,
   return true;
 #endif
 
-#if defined(XP_WIN)
+#if defined(MOZ_SANDBOX) && defined(XP_WIN)
   mozilla::SandboxTarget::Instance()->StartSandbox();
 #endif
 

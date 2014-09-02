@@ -1875,7 +1875,7 @@ class AutoSaveRestoreBlendMode
   nsDisplayListBuilder& mBuilder;
   EnumSet<gfx::CompositionOp> mSavedBlendModes;
 public:
-  AutoSaveRestoreBlendMode(nsDisplayListBuilder& aBuilder)
+  explicit AutoSaveRestoreBlendMode(nsDisplayListBuilder& aBuilder)
     : mBuilder(aBuilder)
     , mSavedBlendModes(aBuilder.ContainedBlendModes())
   { }
@@ -8146,7 +8146,7 @@ nsFrame::DoLayout(nsBoxLayoutState& aState)
   const WritingMode outerWM = aState.OuterReflowState() ?
     aState.OuterReflowState()->GetWritingMode() : ourWM;
   nsHTMLReflowMetrics desiredSize(outerWM);
-  LogicalSize ourSize = GetLogicalSize().ConvertTo(outerWM, ourWM);
+  LogicalSize ourSize = GetLogicalSize(outerWM);
 
   if (rendContext) {
 
@@ -8186,7 +8186,7 @@ nsFrame::DoLayout(nsBoxLayoutState& aState)
   }
 
   // Should we do this if IsCollapsed() is true?
-  LogicalSize size(GetLogicalSize().ConvertTo(outerWM, ourWM));
+  LogicalSize size(GetLogicalSize(outerWM));
   desiredSize.ISize(outerWM) = size.ISize(outerWM);
   desiredSize.BSize(outerWM) = size.BSize(outerWM);
   desiredSize.UnionOverflowAreasWithDesiredBounds();
@@ -8195,7 +8195,7 @@ nsFrame::DoLayout(nsBoxLayoutState& aState)
     // Set up a |reflowState| to pass into ReflowAbsoluteFrames
     nsHTMLReflowState reflowState(aState.PresContext(), this,
                                   aState.GetRenderingContext(),
-                                  LogicalSize(ourWM, size.ISize(ourWM),
+                                  LogicalSize(ourWM, ISize(),
                                               NS_UNCONSTRAINEDSIZE),
                                   nsHTMLReflowState::DUMMY_PARENT_REFLOW_STATE);
 
@@ -8959,7 +8959,7 @@ static DR_State *DR_state; // the one and only DR_State
 
 struct DR_RulePart 
 {
-  DR_RulePart(nsIAtom* aFrameType) : mFrameType(aFrameType), mNext(0) {}
+  explicit DR_RulePart(nsIAtom* aFrameType) : mFrameType(aFrameType), mNext(0) {}
   void Destroy();
 
   nsIAtom*     mFrameType;

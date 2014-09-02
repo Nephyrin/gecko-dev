@@ -10,6 +10,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "console",
                                   "resource://gre/modules/devtools/Console.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "LoopStorage",
                                   "resource:///modules/loop/LoopStorage.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "CardDavImporter",
+                                  "resource:///modules/loop/CardDavImporter.jsm");
 XPCOMUtils.defineLazyGetter(this, "eventEmitter", function() {
   const {EventEmitter} = Cu.import("resource://gre/modules/devtools/event-emitter.js", {});
   return new EventEmitter();
@@ -319,6 +321,13 @@ LoopStorage.on("upgrade", function(e, db) {
  */
 let LoopContactsInternal = Object.freeze({
   /**
+   * Map of contact importer names to instances
+   */
+  _importServices: {
+    "carddav": new CardDavImporter()
+  },
+
+  /**
    * Add a contact to the data store.
    *
    * @param {Object}   details  An object that will be added to the data store
@@ -427,7 +436,9 @@ let LoopContactsInternal = Object.freeze({
         }
 
         request.onsuccess = event => {
-          eventEmitter.emit("remove", contact);
+          if (contact) {
+            eventEmitter.emit("remove", contact);
+          }
           callback(null, event.target.result);
         };
         request.onerror = event => callback(event.target.error);
@@ -489,6 +500,9 @@ let LoopContactsInternal = Object.freeze({
    *                            finished. The first argument passed will be an
    *                            `Error` object or `null`. The second argument will
    *                            be the contact object, if successful.
+   *                            If no object matching guid could be found,
+   *                            then the callback is called with both arguments
+   *                            set to `null`.
    */
   get: function(guid, callback) {
     LoopStorage.getStore(kObjectStoreName, (err, store) => {
@@ -507,8 +521,7 @@ let LoopContactsInternal = Object.freeze({
 
       request.onsuccess = event => {
         if (!event.target.result) {
-          callback(new Error("Contact with " + kKeyPath + " '" +
-                             guid + "' could not be found"));;
+          callback(null, null);
           return;
         }
         let contact = extend({}, event.target.result);
@@ -528,6 +541,9 @@ let LoopContactsInternal = Object.freeze({
    *                             finished. The first argument passed will be an
    *                             `Error` object or `null`. The second argument will
    *                             be the contact object, if successfull.
+   *                             If no object matching serviceId could be found,
+   *                             then the callback is called with both arguments
+   *                             set to `null`.
    */
   getByServiceId: function(serviceId, callback) {
     LoopStorage.getStore(kObjectStoreName, (err, store) => {
@@ -547,8 +563,7 @@ let LoopContactsInternal = Object.freeze({
 
       request.onsuccess = event => {
         if (!event.target.result) {
-          callback(new Error("Contact with " + kServiceIdIndex + " '" +
-                             serviceId + "' could not be found"));
+          callback(null, null);
           return;
         }
 
@@ -658,6 +673,12 @@ let LoopContactsInternal = Object.freeze({
         return;
       }
 
+      if (!contact) {
+        callback(new Error("Contact with " + kKeyPath + " '" +
+                           guid + "' could not be found"));
+        return;
+      }
+
       LoopStorage.getStore(kObjectStoreName, (err, store) => {
         if (err) {
           callback(err);
@@ -702,6 +723,12 @@ let LoopContactsInternal = Object.freeze({
         return;
       }
 
+      if (!contact) {
+        callback(new Error("Contact with " + kKeyPath + " '" +
+                           guid + "' could not be found"));
+        return;
+      }
+
       contact.blocked = true;
       this.update(contact, callback);
     });
@@ -723,6 +750,12 @@ let LoopContactsInternal = Object.freeze({
         return;
       }
 
+      if (!contact) {
+        callback(new Error("Contact with " + kKeyPath + " '" +
+                           guid + "' could not be found"));
+        return;
+      }
+
       contact.blocked = false;
       this.update(contact, callback);
     });
@@ -738,8 +771,15 @@ let LoopContactsInternal = Object.freeze({
    *                            be the result of the operation, if successfull.
    */
   startImport: function(options, callback) {
-    //TODO in bug 972000.
-    callback(new Error("Not implemented yet!"));
+    if (!("service" in options)) {
+      callback(new Error("No import service specified in options"));
+      return;
+    }
+    if (!(options.service in this._importServices)) {
+      callback(new Error("Unknown import service specified: " + options.service));
+      return;
+    }
+    this._importServices[options.service].startImport(options, callback, this);
   },
 
   /**

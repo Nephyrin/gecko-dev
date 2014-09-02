@@ -31,7 +31,7 @@ class MediaSource;
 class MediaSourceDecoder : public MediaDecoder
 {
 public:
-  MediaSourceDecoder(dom::HTMLMediaElement* aElement);
+  explicit MediaSourceDecoder(dom::HTMLMediaElement* aElement);
 
   virtual MediaDecoder* Clone() MOZ_OVERRIDE;
   virtual MediaDecoderStateMachine* CreateStateMachine() MOZ_OVERRIDE;
@@ -46,6 +46,8 @@ public:
   void DetachMediaSource();
 
   already_AddRefed<SourceBufferDecoder> CreateSubDecoder(const nsACString& aType);
+
+  void Ended();
 
   void SetMediaSourceDuration(double aDuration);
 

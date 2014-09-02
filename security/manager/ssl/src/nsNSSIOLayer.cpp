@@ -558,7 +558,7 @@ nsNSSSocketInfo::SetFileDescPtr(PRFileDesc* aFilePtr)
 class PreviousCertRunnable : public SyncRunnableBase
 {
 public:
-  PreviousCertRunnable(nsIInterfaceRequestor* callbacks)
+  explicit PreviousCertRunnable(nsIInterfaceRequestor* callbacks)
     : mCallbacks(callbacks)
   {
   }
@@ -638,7 +638,7 @@ nsNSSSocketInfo::SetCertVerificationResult(PRErrorCode errorCode,
 
   if (mPlaintextBytesRead && !errorCode) {
     Telemetry::Accumulate(Telemetry::SSL_BYTES_BEFORE_CERT_CALLBACK,
-                          SafeCast<uint32_t>(mPlaintextBytesRead));
+                          AssertedCast<uint32_t>(mPlaintextBytesRead));
   }
 
   mCertVerificationState = after_cert_verification;
@@ -1441,7 +1441,7 @@ class PrefObserver : public nsIObserver {
 public:
   NS_DECL_THREADSAFE_ISUPPORTS
   NS_DECL_NSIOBSERVER
-  PrefObserver(nsSSLIOLayerHelpers* aOwner) : mOwner(aOwner) {}
+  explicit PrefObserver(nsSSLIOLayerHelpers* aOwner) : mOwner(aOwner) {}
 
 protected:
   virtual ~PrefObserver() {}

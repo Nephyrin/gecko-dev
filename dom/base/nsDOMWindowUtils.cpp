@@ -2702,12 +2702,16 @@ nsDOMWindowUtils::SetAsyncScrollOffset(nsIDOMNode* aNode,
       return NS_ERROR_UNEXPECTED;
     }
   }
+  FrameMetrics::ViewID viewId;
+  if (!nsLayoutUtils::FindIDFor(element, &viewId)) {
+    return NS_ERROR_UNEXPECTED;
+  }
   ShadowLayerForwarder* forwarder = layer->Manager()->AsShadowForwarder();
   if (!forwarder || !forwarder->HasShadowManager()) {
     return NS_ERROR_UNEXPECTED;
   }
   forwarder->GetShadowManager()->SendSetAsyncScrollOffset(
-    layer->AsShadowableLayer()->GetShadow(), aX, aY);
+    layer->AsShadowableLayer()->GetShadow(), viewId, aX, aY);
   return NS_OK;
 }
 
@@ -3699,7 +3703,7 @@ namespace {
 class HandlingUserInputHelper MOZ_FINAL : public nsIJSRAIIHelper
 {
 public:
-  HandlingUserInputHelper(bool aHandlingUserInput);
+  explicit HandlingUserInputHelper(bool aHandlingUserInput);
 
   NS_DECL_ISUPPORTS
   NS_DECL_NSIJSRAIIHELPER

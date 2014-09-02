@@ -863,12 +863,8 @@ nsHttpChannel::CallOnStartRequest()
         }
     }
 
-    bool shouldSniff = mResponseHead && (mResponseHead->ContentType().IsEmpty() ||
-        ((mResponseHead->ContentType().EqualsLiteral(APPLICATION_OCTET_STREAM) &&
-        (mLoadFlags & LOAD_TREAT_APPLICATION_OCTET_STREAM_AS_UNKNOWN))));
-
     bool unknownDecoderStarted = false;
-    if (shouldSniff) {
+    if (mResponseHead && mResponseHead->ContentType().IsEmpty()) {
         MOZ_ASSERT(mConnectionInfo, "Should have connection info here");
         if (!mContentTypeHint.IsEmpty())
             mResponseHead->SetContentType(mContentTypeHint);
@@ -2561,16 +2557,8 @@ nsHttpChannel::OpenCacheEntry(bool usingSSL)
         openURI = mURI;
     }
 
-    uint32_t appId = info->AppId();
-    bool appOffline = false;
-
-    if (appId != NECKO_NO_APP_ID) {
-        gIOService->IsAppOffline(appId, &appOffline);
-        LOG(("nsHttpChannel::OpenCacheEntry appId: %u, offline: %d\n", appId, appOffline));
-    }
-
     uint32_t cacheEntryOpenFlags;
-    bool offline = gIOService->IsOffline() || appOffline;
+    bool offline = gIOService->IsOffline();
     if (offline || (mLoadFlags & INHIBIT_CACHING)) {
         if (BYPASS_LOCAL_CACHE(mLoadFlags) && !offline) {
             goto bypassCacheEntryOpen;

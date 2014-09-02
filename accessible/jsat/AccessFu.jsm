@@ -235,6 +235,10 @@ this.AccessFu = { // jshint ignore:line
   },
 
   _output: function _output(aPresentationData, aBrowser) {
+    if (!Utils.isAliveAndVisible(
+      Utils.AccRetrieval.getAccessibleFor(aBrowser))) {
+      return;
+    }
     for (let presenter of aPresentationData) {
       if (!presenter) {
         continue;
@@ -248,7 +252,7 @@ this.AccessFu = { // jshint ignore:line
     }
 
     if (this._notifyOutputPref.value) {
-      Services.obs.notifyObservers(null, 'accessfu-output',
+      Services.obs.notifyObservers(null, 'accessibility-output',
                                    JSON.stringify(aPresentationData));
     }
   },
@@ -514,7 +518,7 @@ var Output = {
   },
 
   B2G: function B2G(aDetails) {
-    Utils.dispatchChromeEvent('accessfu-output', aDetails);
+    Utils.dispatchChromeEvent('accessibility-output', aDetails);
   },
 
   Visual: function Visual(aDetail, aBrowser) {

@@ -43,7 +43,6 @@
 #include "nsContentUtils.h"             // for nsContentUtils
 #include "nsDOMString.h"                // for DOMStringIsNull
 #include "nsDebug.h"                    // for NS_ENSURE_TRUE, etc
-#include "nsEditProperty.h"             // for nsEditProperty, etc
 #include "nsEditor.h"
 #include "nsEditorEventListener.h"      // for nsEditorEventListener
 #include "nsEditorUtils.h"              // for nsAutoRules, etc
@@ -1174,16 +1173,17 @@ nsEditor::CanPasteTransferable(nsITransferable *aTransferable, bool *aCanPaste)
   return NS_ERROR_NOT_IMPLEMENTED; 
 }
 
-NS_IMETHODIMP 
-nsEditor::SetAttribute(nsIDOMElement *aElement, const nsAString & aAttribute, const nsAString & aValue)
+NS_IMETHODIMP
+nsEditor::SetAttribute(nsIDOMElement* aElement, const nsAString& aAttribute,
+                       const nsAString& aValue)
 {
-  nsRefPtr<ChangeAttributeTxn> txn;
-  nsresult result = CreateTxnForSetAttribute(aElement, aAttribute, aValue,
-                                             getter_AddRefs(txn));
-  if (NS_SUCCEEDED(result))  {
-    result = DoTransaction(txn);  
-  }
-  return result;
+  nsCOMPtr<Element> element = do_QueryInterface(aElement);
+  NS_ENSURE_TRUE(element, NS_ERROR_NULL_POINTER);
+  nsCOMPtr<nsIAtom> attribute = do_GetAtom(aAttribute);
+
+  nsRefPtr<ChangeAttributeTxn> txn =
+    CreateTxnForSetAttribute(*element, *attribute, aValue);
+  return DoTransaction(txn);
 }
 
 NS_IMETHODIMP 
@@ -1207,16 +1207,16 @@ nsEditor::GetAttributeValue(nsIDOMElement *aElement,
   return rv;
 }
 
-NS_IMETHODIMP 
-nsEditor::RemoveAttribute(nsIDOMElement *aElement, const nsAString& aAttribute)
+NS_IMETHODIMP
+nsEditor::RemoveAttribute(nsIDOMElement* aElement, const nsAString& aAttribute)
 {
-  nsRefPtr<ChangeAttributeTxn> txn;
-  nsresult result = CreateTxnForRemoveAttribute(aElement, aAttribute,
-                                                getter_AddRefs(txn));
-  if (NS_SUCCEEDED(result))  {
-    result = DoTransaction(txn);  
-  }
-  return result;
+  nsCOMPtr<Element> element = do_QueryInterface(aElement);
+  NS_ENSURE_TRUE(element, NS_ERROR_NULL_POINTER);
+  nsCOMPtr<nsIAtom> attribute = do_GetAtom(aAttribute);
+
+  nsRefPtr<ChangeAttributeTxn> txn =
+    CreateTxnForRemoveAttribute(*element, *attribute);
+  return DoTransaction(txn);
 }
 
 
@@ -1239,7 +1239,7 @@ nsEditor::MarkNodeDirty(nsIDOMNode* aNode)
   }
   nsCOMPtr<dom::Element> element = do_QueryInterface(aNode);
   if (element) {
-    element->SetAttr(kNameSpaceID_None, nsEditProperty::mozdirty,
+    element->SetAttr(kNameSpaceID_None, nsGkAtoms::mozdirty,
                      EmptyString(), false);
   }
   return NS_OK;
@@ -1689,14 +1689,15 @@ nsEditor::MoveNode(nsIContent* aNode, nsINode* aParent, int32_t aOffset)
   MOZ_ASSERT(aNode);
   MOZ_ASSERT(aParent);
   MOZ_ASSERT(aOffset == -1 ||
-             (0 <= aOffset && SafeCast<uint32_t>(aOffset) <= aParent->Length()));
+             (0 <= aOffset &&
+              AssertedCast<uint32_t>(aOffset) <= aParent->Length()));
 
   nsCOMPtr<nsINode> oldParent = aNode->GetParentNode();
   int32_t oldOffset = oldParent ? oldParent->IndexOf(aNode) : -1;
 
   if (aOffset == -1) {
     // Magic value meaning "move to end of aParent"
-    aOffset = SafeCast<int32_t>(aParent->Length());
+    aOffset = AssertedCast<int32_t>(aParent->Length());
   }
 
   // Don't do anything if it's already in right place
@@ -2334,17 +2335,15 @@ nsEditor::InsertTextImpl(const nsAString& aStringToInsert,
       node = newNode;
       offset = 0;
     }
-    nsCOMPtr<nsIDOMCharacterData> charDataNode = do_QueryInterface(node);
-    NS_ENSURE_STATE(charDataNode);
-    res = InsertTextIntoTextNodeImpl(aStringToInsert, charDataNode, offset);
+    res = InsertTextIntoTextNodeImpl(aStringToInsert, *node->GetAsText(),
+                                     offset);
     NS_ENSURE_SUCCESS(res, res);
     offset += aStringToInsert.Length();
   } else {
     if (node->IsNodeOfType(nsINode::eTEXT)) {
       // we are inserting text into an existing text node.
-      nsCOMPtr<nsIDOMCharacterData> charDataNode = do_QueryInterface(node);
-      NS_ENSURE_STATE(charDataNode);
-      res = InsertTextIntoTextNodeImpl(aStringToInsert, charDataNode, offset);
+      res = InsertTextIntoTextNodeImpl(aStringToInsert, *node->GetAsText(),
+                                       offset);
       NS_ENSURE_SUCCESS(res, res);
       offset += aStringToInsert.Length();
     } else {
@@ -2367,29 +2366,19 @@ nsEditor::InsertTextImpl(const nsAString& aStringToInsert,
 }
 
 
-nsresult nsEditor::InsertTextIntoTextNodeImpl(const nsAString& aStringToInsert,
-                                              Text* aTextNode,
-                                              int32_t aOffset,
-                                              bool aSuppressIME)
-{
-  return InsertTextIntoTextNodeImpl(aStringToInsert,
-      static_cast<nsIDOMCharacterData*>(GetAsDOMNode(aTextNode)),
-      aOffset, aSuppressIME);
-}
-
-nsresult nsEditor::InsertTextIntoTextNodeImpl(const nsAString& aStringToInsert, 
-                                              nsIDOMCharacterData *aTextNode, 
-                                              int32_t aOffset,
-                                              bool aSuppressIME)
+nsresult
+nsEditor::InsertTextIntoTextNodeImpl(const nsAString& aStringToInsert,
+                                     Text& aTextNode,
+                                     int32_t aOffset, bool aSuppressIME)
 {
   nsRefPtr<EditTxn> txn;
-  nsresult result = NS_OK;
   bool isIMETransaction = false;
   // aSuppressIME is used when editor must insert text, yet this text is not
-  // part of current ime operation.  example: adjusting whitespace around an ime insertion.
+  // part of the current IME operation. Example: adjusting whitespace around an
+  // IME insertion.
   if (mComposition && !aSuppressIME) {
     if (!mIMETextNode) {
-      mIMETextNode = aTextNode;
+      mIMETextNode = &aTextNode;
       mIMETextOffset = aOffset;
     }
     // Modify mPhonetic with raw text input clauses.
@@ -2408,59 +2397,54 @@ nsresult nsEditor::InsertTextIntoTextNodeImpl(const nsAString& aStringToInsert,
                          textRange.mStartOffset, textRange.Length());
     }
 
-    nsRefPtr<IMETextTxn> imeTxn;
-    result = CreateTxnForIMEText(aStringToInsert, getter_AddRefs(imeTxn));
-    txn = imeTxn;
+    txn = CreateTxnForIMEText(aStringToInsert);
     isIMETransaction = true;
+  } else {
+    txn = CreateTxnForInsertText(aStringToInsert, aTextNode, aOffset);
   }
-  else
-  {
-    nsRefPtr<InsertTextTxn> insertTxn;
-    result = CreateTxnForInsertText(aStringToInsert, aTextNode, aOffset,
-                                    getter_AddRefs(insertTxn));
-    txn = insertTxn;
-  }
-  NS_ENSURE_SUCCESS(result, result);
 
-  // let listeners know what's up
-  int32_t i;
-  for (i = 0; i < mActionListeners.Count(); i++)
-    mActionListeners[i]->WillInsertText(aTextNode, aOffset, aStringToInsert);
-  
-  // XXX we may not need these view batches anymore.  This is handled at a higher level now I believe
+  // Let listeners know what's up
+  for (int32_t i = 0; i < mActionListeners.Count(); i++) {
+    mActionListeners[i]->WillInsertText(
+      static_cast<nsIDOMCharacterData*>(aTextNode.AsDOMNode()), aOffset,
+      aStringToInsert);
+  }
+
+  // XXX We may not need these view batches anymore.  This is handled at a
+  // higher level now I believe.
   BeginUpdateViewBatch();
-  result = DoTransaction(txn);
+  nsresult res = DoTransaction(txn);
   EndUpdateViewBatch();
 
   mRangeUpdater.SelAdjInsertText(aTextNode, aOffset, aStringToInsert);
-  
-  // let listeners know what happened
-  for (i = 0; i < mActionListeners.Count(); i++)
-    mActionListeners[i]->DidInsertText(aTextNode, aOffset, aStringToInsert, result);
 
-  // Added some cruft here for bug 43366.  Layout was crashing because we left an 
-  // empty text node lying around in the document.  So I delete empty text nodes
-  // caused by IME.  I have to mark the IME transaction as "fixed", which means
-  // that furure ime txns won't merge with it.  This is because we don't want
-  // future ime txns trying to put their text into a node that is no longer in
-  // the document.  This does not break undo/redo, because all these txns are 
-  // wrapped in a parent PlaceHolder txn, and placeholder txns are already 
-  // savvy to having multiple ime txns inside them.
-  
-  // delete empty ime text node if there is one
-  if (isIMETransaction && mIMETextNode)
-  {
-    uint32_t len;
-    mIMETextNode->GetLength(&len);
-    if (!len)
-    {
+  // let listeners know what happened
+  for (int32_t i = 0; i < mActionListeners.Count(); i++) {
+    mActionListeners[i]->DidInsertText(
+      static_cast<nsIDOMCharacterData*>(aTextNode.AsDOMNode()),
+      aOffset, aStringToInsert, res);
+  }
+
+  // Added some cruft here for bug 43366.  Layout was crashing because we left
+  // an empty text node lying around in the document.  So I delete empty text
+  // nodes caused by IME.  I have to mark the IME transaction as "fixed", which
+  // means that furure IME txns won't merge with it.  This is because we don't
+  // want future IME txns trying to put their text into a node that is no
+  // longer in the document.  This does not break undo/redo, because all these
+  // txns are wrapped in a parent PlaceHolder txn, and placeholder txns are
+  // already savvy to having multiple ime txns inside them.
+
+  // Delete empty IME text node if there is one
+  if (isIMETransaction && mIMETextNode) {
+    uint32_t len = mIMETextNode->Length();
+    if (!len) {
       DeleteNode(mIMETextNode);
       mIMETextNode = nullptr;
-      static_cast<IMETextTxn*>(txn.get())->MarkFixed();  // mark the ime txn "fixed"
+      static_cast<IMETextTxn*>(txn.get())->MarkFixed();
     }
   }
-  
-  return result;
+
+  return res;
 }
 
 
@@ -2548,22 +2532,13 @@ nsEditor::NotifyDocumentListeners(TDocumentListenerNotification aNotificationTyp
 }
 
 
-NS_IMETHODIMP nsEditor::CreateTxnForInsertText(const nsAString & aStringToInsert,
-                                               nsIDOMCharacterData *aTextNode,
-                                               int32_t aOffset,
-                                               InsertTextTxn ** aTxn)
+already_AddRefed<InsertTextTxn>
+nsEditor::CreateTxnForInsertText(const nsAString& aStringToInsert,
+                                 Text& aTextNode, int32_t aOffset)
 {
-  NS_ENSURE_TRUE(aTextNode && aTxn, NS_ERROR_NULL_POINTER);
-  nsresult rv;
-
-  nsRefPtr<InsertTextTxn> txn = new InsertTextTxn();
-  rv = txn->Init(aTextNode, aOffset, aStringToInsert, this);
-  if (NS_SUCCEEDED(rv))
-  {
-    txn.forget(aTxn);
-  }
-
-  return rv;
+  nsRefPtr<InsertTextTxn> txn = new InsertTextTxn(aTextNode, aOffset,
+                                                  aStringToInsert, *this);
+  return txn.forget();
 }
 
 
@@ -2870,7 +2845,7 @@ nsEditor::JoinNodesImpl(nsINode* aNodeToKeep,
 
   if (GetShouldTxnSetSelection()) {
     // editor wants us to set selection at join point
-    selection->Collapse(aNodeToKeep, SafeCast<int32_t>(firstNodeLength));
+    selection->Collapse(aNodeToKeep, AssertedCast<int32_t>(firstNodeLength));
   } else if (selStartNode) {
     // and adjust the selection if needed
     // HACK: this is overly simplified - multi-range selections need more work than this
@@ -4253,42 +4228,24 @@ nsEditor::DoAfterRedoTransaction()
     IncrementModificationCount(1)));
 }
 
-NS_IMETHODIMP 
-nsEditor::CreateTxnForSetAttribute(nsIDOMElement *aElement, 
-                                   const nsAString& aAttribute, 
-                                   const nsAString& aValue,
-                                   ChangeAttributeTxn ** aTxn)
+already_AddRefed<ChangeAttributeTxn>
+nsEditor::CreateTxnForSetAttribute(Element& aElement, nsIAtom& aAttribute,
+                                   const nsAString& aValue)
 {
-  NS_ENSURE_TRUE(aElement, NS_ERROR_NULL_POINTER);
+  nsRefPtr<ChangeAttributeTxn> txn =
+    new ChangeAttributeTxn(aElement, aAttribute, &aValue);
 
-  nsRefPtr<ChangeAttributeTxn> txn = new ChangeAttributeTxn();
-
-  nsresult rv = txn->Init(this, aElement, aAttribute, aValue, false);
-  if (NS_SUCCEEDED(rv))
-  {
-    txn.forget(aTxn);
-  }
-
-  return rv;
+  return txn.forget();
 }
 
 
-NS_IMETHODIMP 
-nsEditor::CreateTxnForRemoveAttribute(nsIDOMElement *aElement, 
-                                      const nsAString& aAttribute,
-                                      ChangeAttributeTxn ** aTxn)
+already_AddRefed<ChangeAttributeTxn>
+nsEditor::CreateTxnForRemoveAttribute(Element& aElement, nsIAtom& aAttribute)
 {
-  NS_ENSURE_TRUE(aElement, NS_ERROR_NULL_POINTER);
+  nsRefPtr<ChangeAttributeTxn> txn =
+    new ChangeAttributeTxn(aElement, aAttribute, nullptr);
 
-  nsRefPtr<ChangeAttributeTxn> txn = new ChangeAttributeTxn();
-
-  nsresult rv = txn->Init(this, aElement, aAttribute, EmptyString(), true);
-  if (NS_SUCCEEDED(rv))
-  {
-    txn.forget(aTxn);
-  }
-
-  return rv;
+  return txn.forget();
 }
 
 
@@ -4328,25 +4285,16 @@ nsEditor::CreateTxnForDeleteNode(nsINode* aNode, DeleteNodeTxn** aTxn)
   return NS_OK;
 }
 
-NS_IMETHODIMP 
-nsEditor::CreateTxnForIMEText(const nsAString& aStringToInsert,
-                              IMETextTxn ** aTxn)
+already_AddRefed<IMETextTxn>
+nsEditor::CreateTxnForIMEText(const nsAString& aStringToInsert)
 {
-  NS_ASSERTION(aTxn, "illegal value- null ptr- aTxn");
-     
-  nsRefPtr<IMETextTxn> txn = new IMETextTxn();
-
   // During handling IME composition, mComposition must have been initialized.
   // TODO: We can simplify IMETextTxn::Init() with TextComposition class.
-  nsresult rv = txn->Init(mIMETextNode, mIMETextOffset,
-                          mComposition->String().Length(),
-                          mComposition->GetRanges(), aStringToInsert, this);
-  if (NS_SUCCEEDED(rv))
-  {
-    txn.forget(aTxn);
-  }
-
-  return rv;
+  nsRefPtr<IMETextTxn> txn = new IMETextTxn(*mIMETextNode, mIMETextOffset,
+                                            mComposition->String().Length(),
+                                            mComposition->GetRanges(),
+                                            aStringToInsert, *this);
+  return txn.forget();
 }
 
 

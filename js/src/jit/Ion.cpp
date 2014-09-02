@@ -145,6 +145,9 @@ jit::InitializeIon()
     if (!TlsIonContext.initialized() && !TlsIonContext.init())
         return false;
     CheckLogging();
+#if defined(JS_CODEGEN_ARM)
+    InitARMFlags();
+#endif
     CheckPerf();
     return true;
 }
@@ -2978,11 +2981,16 @@ AutoFlushICache::setRange(uintptr_t start, size_t len)
 // AutoFlushICache, so check.  If this assertion is hit then it does not necessarily
 // indicate a progam fault but it might indicate a lost opportunity to merge cache
 // flushing.  It can be corrected by wrapping the call in an AutoFlushICache to context.
+//
+// Note this can be called without TLS PerThreadData defined so this case needs
+// to be guarded against. E.g. when patching instructions from the exception
+// handler on MacOS running the ARM simulator.
 void
 AutoFlushICache::flush(uintptr_t start, size_t len)
 {
 #if defined(JS_CODEGEN_ARM) || defined(JS_CODEGEN_MIPS)
-    AutoFlushICache *afc = TlsPerThreadData.get()->PerThreadData::autoFlushICache();
+    PerThreadData *pt = TlsPerThreadData.get();
+    AutoFlushICache *afc = pt ? pt->PerThreadData::autoFlushICache() : nullptr;
     if (!afc) {
         IonSpewCont(IonSpew_CacheFlush, "#");
         ExecutableAllocator::cacheFlush((void*)start, len);
@@ -3205,4 +3213,10 @@ bool
 jit::JitSupportsFloatingPoint()
 {
     return js::jit::MacroAssembler::SupportsFloatingPoint();
+}
+
+bool
+jit::JitSupportsSimd()
+{
+    return js::jit::MacroAssembler::SupportsSimd();
 }

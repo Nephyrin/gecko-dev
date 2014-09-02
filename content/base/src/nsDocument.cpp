@@ -684,7 +684,7 @@ public:
 
 struct FindContentData
 {
-  FindContentData(nsIDocument *aSubDoc)
+  explicit FindContentData(nsIDocument* aSubDoc)
     : mSubDocument(aSubDoc), mResult(nullptr)
   {
   }
@@ -1398,7 +1398,7 @@ nsExternalResourceMap::ExternalResource::~ExternalResource()
 class nsDOMStyleSheetSetList MOZ_FINAL : public DOMStringList
 {
 public:
-  nsDOMStyleSheetSetList(nsIDocument* aDocument);
+  explicit nsDOMStyleSheetSetList(nsIDocument* aDocument);
 
   void Disconnect()
   {
@@ -1737,7 +1737,7 @@ nsDocument::~nsDocument()
 }
 
 NS_INTERFACE_TABLE_HEAD(nsDocument)
-  NS_WRAPPERCACHE_INTERFACE_MAP_ENTRY
+  NS_WRAPPERCACHE_INTERFACE_TABLE_ENTRY
   NS_INTERFACE_TABLE_BEGIN
     NS_INTERFACE_TABLE_ENTRY_AMBIGUOUS(nsDocument, nsISupports, nsINode)
     NS_INTERFACE_TABLE_ENTRY(nsDocument, nsINode)
@@ -5546,7 +5546,7 @@ class ProcessStackRunner MOZ_FINAL : public nsIRunnable
 {
   ~ProcessStackRunner() {}
 public:
-  ProcessStackRunner(bool aIsBaseQueue = false)
+  explicit ProcessStackRunner(bool aIsBaseQueue = false)
     : mIsBaseQueue(aIsBaseQueue)
   {
   }
@@ -7501,11 +7501,17 @@ nsIDocument::AdoptNode(nsINode& aAdoptedNode, ErrorResult& rv)
 nsViewportInfo
 nsDocument::GetViewportInfo(const ScreenIntSize& aDisplaySize)
 {
+  // Compute the CSS-to-LayoutDevice pixel scale as the product of the
+  // widget scale and the full zoom.
   nsPresContext* context = mPresShell->GetPresContext();
   float fullZoom = context ? context->GetFullZoom() : 1.0;
   fullZoom = (fullZoom == 0.0) ? 1.0 : fullZoom;
-  CSSToScreenScale defaultScale = CSSToLayoutDeviceScale(fullZoom) *
-                                  LayoutDeviceToScreenScale(1.0);
+  nsIWidget *widget = nsContentUtils::WidgetForDocument(this);
+  float widgetScale = widget ? widget->GetDefaultScale().scale : 1.0f;
+  CSSToLayoutDeviceScale layoutDeviceScale(widgetScale * fullZoom);
+
+  CSSToScreenScale defaultScale = layoutDeviceScale
+                                * LayoutDeviceToScreenScale(1.0);
 
   // In cases where the width of the CSS viewport is less than or equal to the width
   // of the display (i.e. width <= device-width) then we disable double-tap-to-zoom
@@ -7689,19 +7695,13 @@ nsDocument::GetViewportInfo(const ScreenIntSize& aDisplaySize)
       }
     }
 
-    // Now convert the scale into device pixels per CSS pixel base on this formula
-    //   CSSPixel x widget scale x full zoom = LayoutDevicePixel
-    nsIWidget *widget = nsContentUtils::WidgetForDocument(this);
-    CSSToLayoutDeviceScale pixelRatio = CSSToLayoutDeviceScale(
-          (widget ? widget->GetDefaultScale().scale : 1.0f) * fullZoom);
-
-    CSSToScreenScale scaleFloat = mScaleFloat * pixelRatio;
-    CSSToScreenScale scaleMinFloat = mScaleMinFloat * pixelRatio;
-    CSSToScreenScale scaleMaxFloat = mScaleMaxFloat * pixelRatio;
+    CSSToScreenScale scaleFloat = mScaleFloat * layoutDeviceScale;
+    CSSToScreenScale scaleMinFloat = mScaleMinFloat * layoutDeviceScale;
+    CSSToScreenScale scaleMaxFloat = mScaleMaxFloat * layoutDeviceScale;
 
     if (mAutoSize) {
       // aDisplaySize is in screen pixels; convert them to CSS pixels for the viewport size.
-      CSSToScreenScale defaultPixelScale = pixelRatio * LayoutDeviceToScreenScale(1.0f);
+      CSSToScreenScale defaultPixelScale = layoutDeviceScale * LayoutDeviceToScreenScale(1.0f);
       size = ScreenSize(aDisplaySize) / defaultPixelScale;
     }
 
@@ -8715,7 +8715,7 @@ nsDocument::UnblockOnload(bool aFireSync)
 
 class nsUnblockOnloadEvent : public nsRunnable {
 public:
-  nsUnblockOnloadEvent(nsDocument *doc) : mDoc(doc) {}
+  explicit nsUnblockOnloadEvent(nsDocument* aDoc) : mDoc(aDoc) {}
   NS_IMETHOD Run() {
     mDoc->DoUnblockOnload();
     return NS_OK;
@@ -8873,7 +8873,7 @@ nsDocument::OnPageShow(bool aPersisted,
                         "chrome-page-shown" :
                         "content-page-shown",
                       nullptr);
-
+  os->AddObserver(this, "app-theme-changed", /* ownsWeak */ false);
 
   DispatchPageTransition(target, NS_LITERAL_STRING("pageshow"), aPersisted);
 }
@@ -8947,6 +8947,8 @@ nsDocument::OnPageHide(bool aPersisted,
                           "chrome-page-hidden" :
                           "content-page-hidden",
                         nullptr);
+
+    os->RemoveObserver(this, "app-theme-changed");
   }
 
   DispatchPageTransition(target, NS_LITERAL_STRING("pagehide"), aPersisted);
@@ -9422,7 +9424,7 @@ nsDocument::LoadChromeSheetSync(nsIURI* uri, bool isAgentSheet,
 class nsDelayedEventDispatcher : public nsRunnable
 {
 public:
-  nsDelayedEventDispatcher(nsTArray<nsCOMPtr<nsIDocument> >& aDocuments)
+  explicit nsDelayedEventDispatcher(nsTArray<nsCOMPtr<nsIDocument>>& aDocuments)
   {
     mDocuments.SwapElements(aDocuments);
   }
@@ -9442,7 +9444,7 @@ namespace {
 
 struct UnsuppressArgs
 {
-  UnsuppressArgs(nsIDocument::SuppressionType aWhat)
+  explicit UnsuppressArgs(nsIDocument::SuppressionType aWhat)
     : mWhat(aWhat)
   {
   }
@@ -10545,7 +10547,7 @@ SetWindowFullScreen(nsIDocument* aDoc, bool aValue)
 
 class nsCallExitFullscreen : public nsRunnable {
 public:
-  nsCallExitFullscreen(nsIDocument* aDoc)
+  explicit nsCallExitFullscreen(nsIDocument* aDoc)
     : mDoc(aDoc) {}
   NS_IMETHOD Run()
   {
@@ -10859,7 +10861,7 @@ nsDocument::IsFullScreenDoc()
 class nsCallRequestFullScreen : public nsRunnable
 {
 public:
-  nsCallRequestFullScreen(Element* aElement)
+  explicit nsCallRequestFullScreen(Element* aElement)
     : mElement(aElement),
       mDoc(aElement->OwnerDoc()),
       mWasCallerChrome(nsContentUtils::IsCallerChrome()),
@@ -11656,8 +11658,55 @@ nsDocument::Observe(nsISupports *aSubject,
         NS_DispatchToMainThread(r);
       }
     }
+  } else if (strcmp("app-theme-changed", aTopic) == 0) {
+    if (!nsContentUtils::IsSystemPrincipal(NodePrincipal()) &&
+        !IsUnstyledDocument()) {
+      // We don't want to style the chrome window, only app ones.
+      OnAppThemeChanged();
+    }
   }
   return NS_OK;
+}
+
+void
+nsDocument::OnAppThemeChanged()
+{
+  // Bail out if there is no theme support set up properly.
+  auto themeOrigin = Preferences::GetString("b2g.theme.origin");
+  if (!themeOrigin || !Preferences::GetBool("dom.mozApps.themable")) {
+    return;
+  }
+
+  for (int32_t i = 0; i < GetNumberOfStyleSheets(); i++) {
+    nsRefPtr<CSSStyleSheet> sheet =  do_QueryObject(GetStyleSheetAt(i));
+    if (!sheet) {
+      continue;
+    }
+
+    nsINode* owningNode = sheet->GetOwnerNode();
+    if (!owningNode) {
+      continue;
+    }
+    // Get a DOM stylesheet link to check the href against the theme origin.
+    nsIURI* sheetURI = sheet->GetOriginalURI();
+    if (!sheetURI) {
+      continue;
+    }
+    nsAutoString sheetOrigin;
+    nsContentUtils::GetUTFOrigin(sheetURI, sheetOrigin);
+    if (!sheetOrigin.Equals(themeOrigin)) {
+      continue;
+    }
+
+    // Finally getting a Stylesheet link.
+    nsCOMPtr<nsIStyleSheetLinkingElement> link = do_QueryInterface(owningNode);
+    if (!link) {
+      continue;
+    }
+    bool willNotify;
+    bool isAlternate;
+    link->UpdateStyleSheet(nullptr, &willNotify, &isAlternate, true);
+  }
 }
 
 void

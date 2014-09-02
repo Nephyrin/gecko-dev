@@ -1048,7 +1048,7 @@ ScrollFrameHelper::WantAsyncScroll() const
 static nsRect
 GetOnePixelRangeAroundPoint(nsPoint aPoint, bool aIsHorizontal)
 {
-  nsRect allowedRange;
+  nsRect allowedRange(aPoint, nsSize());
   nscoord halfPixel = nsPresContext::CSSPixelsToAppUnits(0.5f);
   if (aIsHorizontal) {
     allowedRange.x = aPoint.x - halfPixel;
@@ -1486,7 +1486,7 @@ public:
   typedef mozilla::TimeStamp TimeStamp;
   typedef mozilla::TimeDuration TimeDuration;
 
-  AsyncScroll(nsPoint aStartPos)
+  explicit AsyncScroll(nsPoint aStartPos)
     : mIsFirstIteration(true)
     , mStartPos(aStartPos)
     , mCallee(nullptr)
@@ -2020,7 +2020,8 @@ ScrollFrameHelper::ScrollToWithOrigin(nsPoint aScrollPosition,
     return;
   }
 
-  TimeStamp now = TimeStamp::Now();
+  nsPresContext* presContext = mOuter->PresContext();
+  TimeStamp now = presContext->RefreshDriver()->MostRecentRefresh();
   bool isSmoothScroll = (aMode == nsIScrollableFrame::SMOOTH) &&
                           IsSmoothScrollingEnabled();
 

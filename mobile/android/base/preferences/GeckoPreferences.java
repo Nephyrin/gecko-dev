@@ -115,6 +115,7 @@ OnSharedPreferenceChangeListener
     private static final String PREFS_DEVTOOLS_REMOTE_ENABLED = "devtools.debugger.remote-enabled";
     private static final String PREFS_DISPLAY_REFLOW_ON_ZOOM = "browser.zoom.reflowOnZoom";
     private static final String PREFS_SYNC = NON_PREF_PREFIX + "sync";
+    private static final String PREFS_STUMBLER_ENABLED = AppConstants.ANDROID_PACKAGE_NAME + ".STUMBLER_PREF";
 
     // This isn't a Gecko pref, even if it looks like one.
     private static final String PREFS_BROWSER_LOCALE = "locale";
@@ -338,7 +339,9 @@ OnSharedPreferenceChangeListener
             int res = 0;
             if (intentExtras != null && intentExtras.containsKey(INTENT_EXTRA_RESOURCES)) {
                 // Fetch resource id from intent.
-                String resourceName = intentExtras.getString(INTENT_EXTRA_RESOURCES);
+                final String resourceName = intentExtras.getString(INTENT_EXTRA_RESOURCES);
+                Telemetry.sendUIEvent(TelemetryContract.Event.ACTION, Method.SETTINGS, resourceName);
+
                 if (resourceName != null) {
                     res = getResources().getIdentifier(resourceName, "xml", getPackageName());
                     if (res == 0) {
@@ -350,6 +353,7 @@ OnSharedPreferenceChangeListener
                 // No resource specified, or the resource was invalid; use the default preferences screen.
                 Log.e(LOGTAG, "Displaying default settings.");
                 res = R.xml.preferences;
+                Telemetry.startUISession(TelemetryContract.Session.SETTINGS);
             }
 
             // We don't include a title in the XML, so set it here, in a locale-aware fashion.
@@ -466,6 +470,8 @@ OnSharedPreferenceChangeListener
         if (NO_TRANSITIONS) {
             overridePendingTransition(0, 0);
         }
+
+        Telemetry.sendUIEvent(TelemetryContract.Event.CANCEL, Method.BACK, "settings");
     }
 
     @Override
@@ -475,6 +481,13 @@ OnSharedPreferenceChangeListener
             "Sanitize:Finished");
         if (mPrefsRequestId > 0) {
             PrefsHelper.removeObserver(mPrefsRequestId);
+        }
+
+        // The intent extras will be null if this is the top-level settings
+        // activity. In that case, we want to end the SETTINGS telmetry session.
+        // For HC+ versions of Android this is handled in GeckoPreferenceFragment.
+        if (Versions.preHC && getIntent().getExtras() == null) {
+            Telemetry.stopUISession(TelemetryContract.Session.SETTINGS);
         }
     }
 
@@ -838,6 +851,34 @@ OnSharedPreferenceChangeListener
     }
 
     /**
+     * Broadcast the provided value as the value of the
+     * <code>PREFS_STUMBLER_ENABLED</code> pref.
+     */
+    public static void broadcastStumblerPref(final Context context, final boolean value) {
+       Intent intent = new Intent(PREFS_STUMBLER_ENABLED)
+                .putExtra("pref", PREFS_GEO_REPORTING)
+                .putExtra("branch", GeckoSharedPrefs.APP_PREFS_NAME)
+                .putExtra("enabled", value)
+                .putExtra("moz_mozilla_api_key", AppConstants.MOZ_STUMBLER_API_KEY);
+       if (GeckoAppShell.getGeckoInterface() != null) {
+           intent.putExtra("user_agent", GeckoAppShell.getGeckoInterface().getDefaultUAString());
+       }
+       if (!AppConstants.MOZILLA_OFFICIAL) {
+           intent.putExtra("is_debug", true);
+       }
+       broadcastAction(context, intent);
+    }
+
+    /**
+     * Broadcast the current value of the
+     * <code>PREFS_STUMBLER_ENABLED</code> pref.
+     */
+    public static void broadcastStumblerPref(final Context context) {
+        final boolean value = getBooleanPref(context, PREFS_GEO_REPORTING, true);
+        broadcastStumblerPref(context, value);
+    }
+
+    /**
      * Return the value of the named preference in the default preferences file.
      *
      * This corresponds to the storage that backs preferences.xml.
@@ -969,6 +1010,9 @@ OnSharedPreferenceChangeListener
     public boolean onPreferenceChange(Preference preference, Object newValue) {
         final String prefName = preference.getKey();
         Log.i(LOGTAG, "Changed " + prefName + " = " + newValue);
+
+        Telemetry.sendUIEvent(TelemetryContract.Event.EDIT, Method.SETTINGS, prefName);
+
         if (PREFS_MP_ENABLED.equals(prefName)) {
             showDialog((Boolean) newValue ? DIALOG_CREATE_MASTER_PASSWORD : DIALOG_REMOVE_MASTER_PASSWORD);
 
@@ -994,6 +1038,7 @@ OnSharedPreferenceChangeListener
             // repeated background upload attempts.
             broadcastHealthReportUploadPref(this, ((Boolean) newValue).booleanValue());
         } else if (PREFS_GEO_REPORTING.equals(prefName)) {
+            broadcastStumblerPref(this, ((Boolean) newValue).booleanValue());
             // Translate boolean value to int for geo reporting pref.
             newValue = ((Boolean) newValue) ? 1 : 0;
         } else if (handlers.containsKey(prefName)) {

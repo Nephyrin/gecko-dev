@@ -35,6 +35,7 @@
 #include "mozilla/MouseEvents.h"
 #include "mozilla/TextEvents.h"
 #include "mozilla/TouchEvents.h"
+#include "mozilla/UniquePtr.h"
 #include <algorithm>
 
 #ifdef XP_WIN
@@ -283,7 +284,7 @@ static const char kGrandTotalsStr[] = "Grand Totals";
 // Counting Class
 class ReflowCounter {
 public:
-  ReflowCounter(ReflowCountMgr * aMgr = nullptr);
+  explicit ReflowCounter(ReflowCountMgr * aMgr = nullptr);
   ~ReflowCounter();
 
   void ClearTotals();
@@ -314,7 +315,7 @@ protected:
 // Counting Class
 class IndiReflowCounter {
 public:
-  IndiReflowCounter(ReflowCountMgr * aMgr = nullptr)
+  explicit IndiReflowCounter(ReflowCountMgr * aMgr = nullptr)
     : mFrame(nullptr),
       mCount(0),
       mMgr(aMgr),
@@ -439,7 +440,7 @@ struct nsCallbackEventRequest
 class nsAutoCauseReflowNotifier
 {
 public:
-  nsAutoCauseReflowNotifier(PresShell* aShell)
+  explicit nsAutoCauseReflowNotifier(PresShell* aShell)
     : mShell(aShell)
   {
     mShell->WillCauseReflow();
@@ -462,7 +463,7 @@ public:
 class MOZ_STACK_CLASS nsPresShellEventCB : public EventDispatchingCallback
 {
 public:
-  nsPresShellEventCB(PresShell* aPresShell) : mPresShell(aPresShell) {}
+  explicit nsPresShellEventCB(PresShell* aPresShell) : mPresShell(aPresShell) {}
 
   virtual void HandleEvent(EventChainPostVisitor& aVisitor) MOZ_OVERRIDE
   {
@@ -512,7 +513,7 @@ public:
 class nsBeforeFirstPaintDispatcher : public nsRunnable
 {
 public:
-  nsBeforeFirstPaintDispatcher(nsIDocument* aDocument)
+  explicit nsBeforeFirstPaintDispatcher(nsIDocument* aDocument)
   : mDocument(aDocument) {}
 
   // Fires the "before-first-paint" event so that interested parties (right now, the
@@ -3523,7 +3524,11 @@ static void ScrollToShowRect(nsIFrame*                aFrame,
   // If we don't need to scroll, then don't try since it might cancel
   // a current smooth scroll operation.
   if (needToScroll) {
-    aFrameAsScrollable->ScrollTo(scrollPt, nsIScrollableFrame::INSTANT, &allowedRange);
+    nsIScrollableFrame::ScrollMode scrollMode = nsIScrollableFrame::INSTANT;
+    if (gfxPrefs::ScrollBehaviorEnabled() && aFlags & nsIPresShell::SCROLL_SMOOTH) {
+      scrollMode = nsIScrollableFrame::SMOOTH_MSD;
+    }
+    aFrameAsScrollable->ScrollTo(scrollPt, scrollMode, &allowedRange);
   }
 }
 
@@ -3742,7 +3747,7 @@ PresShell::GetRectVisibility(nsIFrame* aFrame,
 class PaintTimerCallBack MOZ_FINAL : public nsITimerCallback
 {
 public:
-  PaintTimerCallBack(PresShell* aShell) : mShell(aShell) {}
+  explicit PaintTimerCallBack(PresShell* aShell) : mShell(aShell) {}
 
   NS_DECL_ISUPPORTS
 
@@ -6157,9 +6162,10 @@ PresShell::Paint(nsView*        aViewToPaint,
       bool computeInvalidRect = computeInvalidFunc ||
                                 (layerManager->GetBackendType() == LayersBackend::LAYERS_BASIC);
 
-      nsAutoPtr<LayerProperties> props(computeInvalidRect ?
-                                         LayerProperties::CloneFrom(layerManager->GetRoot()) :
-                                         nullptr);
+      UniquePtr<LayerProperties> props;
+      if (computeInvalidRect) {
+        props = Move(LayerProperties::CloneFrom(layerManager->GetRoot()));
+      }
 
       MaybeSetupTransactionIdAllocator(layerManager, aViewToPaint);
 
@@ -6832,24 +6838,29 @@ PresShell::HandleEvent(nsIFrame* aFrame,
                                        retargetEventDoc->GetShell() :
                                        nullptr;
 
-    nsRefPtr<SelectionCarets> selectionCaret = presShell ?
-                                               presShell->GetSelectionCarets() :
-                                               nullptr;
-    if (selectionCaret) {
-      *aEventStatus = selectionCaret->HandleEvent(aEvent);
+    // Bug 1057256: Touch caret should handle the event before selection carets.
+    // Otherwise, a long tap on touch caret will be incorrectly handled by
+    // selection carets which makes moving touch caret failed.
+    nsRefPtr<TouchCaret> touchCaret = presShell ?
+                                      presShell->GetTouchCaret() :
+                                      nullptr;
+    if (touchCaret) {
+      *aEventStatus = touchCaret->HandleEvent(aEvent);
       if (*aEventStatus == nsEventStatus_eConsumeNoDefault) {
-        // If the event is consumed by the touch caret, Cancel APZC panning by
+        // If the event is consumed by the touch caret, cancel APZC panning by
         // setting mMultipleActionsPrevented.
         aEvent->mFlags.mMultipleActionsPrevented = true;
         return NS_OK;
       }
     }
 
-    nsRefPtr<TouchCaret> touchCaret = presShell ? presShell->GetTouchCaret() : nullptr;
-    if (touchCaret) {
-      *aEventStatus = touchCaret->HandleEvent(aEvent);
+    nsRefPtr<SelectionCarets> selectionCaret = presShell ?
+                                               presShell->GetSelectionCarets() :
+                                               nullptr;
+    if (selectionCaret) {
+      *aEventStatus = selectionCaret->HandleEvent(aEvent);
       if (*aEventStatus == nsEventStatus_eConsumeNoDefault) {
-        // If the event is consumed by the touch caret, cancel APZC panning by
+        // If the event is consumed by the selection carets, cancel APZC panning by
         // setting mMultipleActionsPrevented.
         aEvent->mFlags.mMultipleActionsPrevented = true;
         return NS_OK;

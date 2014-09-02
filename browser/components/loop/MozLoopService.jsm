@@ -60,6 +60,8 @@ let gLocalizedStrings =  null;
 let gInitializeTimer = null;
 let gFxAOAuthClientPromise = null;
 let gFxAOAuthClient = null;
+let gFxAOAuthTokenData = null;
+let gErrors = new Map();
 
 /**
  * Internal helper methods and state
@@ -134,6 +136,30 @@ let MozLoopServiceInternal = {
    */
   set doNotDisturb(aFlag) {
     Services.prefs.setBoolPref("loop.do_not_disturb", Boolean(aFlag));
+    this.notifyStatusChanged();
+  },
+
+  notifyStatusChanged: function() {
+    Services.obs.notifyObservers(null, "loop-status-changed", null);
+  },
+
+  /**
+   * @param {String} errorType a key to identify the type of error. Only one
+   *                           error of a type will be saved at a time.
+   * @param {Object} error     an object describing the error in the format from Hawk errors
+   */
+  setError: function(errorType, error) {
+    gErrors.set(errorType, error);
+    this.notifyStatusChanged();
+  },
+
+  clearError: function(errorType) {
+    gErrors.delete(errorType);
+    this.notifyStatusChanged();
+  },
+
+  get errors() {
+    return gErrors;
   },
 
   /**
@@ -195,7 +221,10 @@ let MozLoopServiceInternal = {
                                           2 * 32, true);
     }
 
-    return gHawkClient.request(path, method, credentials, payloadObj);
+    return gHawkClient.request(path, method, credentials, payloadObj).catch(error => {
+      console.error("Loop hawkRequest error:", error);
+      throw error;
+    });
   },
 
   /**
@@ -253,6 +282,7 @@ let MozLoopServiceInternal = {
         if (!this.storeSessionToken(response.headers))
           return;
 
+        this.clearError("registration");
         gRegisteredDeferred.resolve();
         // No need to clear the promise here, everything was good, so we don't need
         // to re-register.
@@ -274,6 +304,7 @@ let MozLoopServiceInternal = {
 
         // XXX Bubble the precise details up to the UI somehow (bug 1013248).
         Cu.reportError("Failed to register with the loop server. error: " + error);
+        this.setError("registration", error);
         gRegisteredDeferred.reject(error.errno);
         gRegisteredDeferred = null;
       }
@@ -291,8 +322,13 @@ let MozLoopServiceInternal = {
       return;
     }
 
+    // We set this here as it is assumed that once the user receives an incoming
+    // call, they'll have had enough time to see the terms of service. See
+    // bug 1046039 for background.
+    Services.prefs.setCharPref("loop.seenToS", "seen");
+
     this.openChatWindow(null,
-                        this.localizedStrings["incoming_call_title"].textContent,
+                        this.localizedStrings["incoming_call_title2"].textContent,
                         "about:loopconversation#incoming/" + version);
   },
 
@@ -492,7 +528,7 @@ let MozLoopServiceInternal = {
       },
       error => {
         gFxAOAuthClientPromise = null;
-        return error;
+        throw error;
       }
     );
 
@@ -500,7 +536,9 @@ let MozLoopServiceInternal = {
   }),
 
   /**
-   * Params => web flow => code
+   * Get the OAuth client and do the authorization web flow to get an OAuth code.
+   *
+   * @return {Promise}
    */
   promiseFxAOAuthAuthorization: function() {
     let deferred = Promise.defer();
@@ -510,11 +548,36 @@ let MozLoopServiceInternal = {
         client.launchWebFlow();
       },
       error => {
-        Cu.reportError(error);
+        console.error(error);
         deferred.reject(error);
       }
     );
     return deferred.promise;
+  },
+
+  /**
+   * Get the OAuth token using the OAuth code and state.
+   *
+   * The caller should approperiately handle 4xx errors (which should lead to a logout)
+   * and 5xx or connectivity issues with messaging to try again later.
+   *
+   * @param {String} code
+   * @param {String} state
+   *
+   * @return {Promise} resolving with OAuth token data.
+   */
+  promiseFxAOAuthToken: function(code, state) {
+    if (!code || !state) {
+      throw new Error("promiseFxAOAuthToken: code and state are required.");
+    }
+
+    let payload = {
+      code: code,
+      state: state,
+    };
+    return this.hawkRequest("/fxa-oauth/token", "POST", payload).then(response => {
+      return JSON.parse(response.body);
+    });
   },
 
   /**
@@ -558,8 +621,14 @@ this.MozLoopService = {
     return MozLoopServiceInternal;
   },
 
+  get gFxAOAuthTokenData() {
+    return gFxAOAuthTokenData;
+  },
+
   resetFxA: function() {
     gFxAOAuthClientPromise = null;
+    gFxAOAuthClient = null;
+    gFxAOAuthTokenData = null;
   },
 #endif
 
@@ -653,6 +722,10 @@ this.MozLoopService = {
     MozLoopServiceInternal.doNotDisturb = aFlag;
   },
 
+  get errors() {
+    return MozLoopServiceInternal.errors;
+  },
+
   /**
    * Returns the current locale
    *
@@ -738,8 +811,19 @@ this.MozLoopService = {
    * @return {Promise} that resolves when the FxA login flow is complete.
    */
   logInToFxA: function() {
+    if (gFxAOAuthTokenData) {
+      return Promise.resolve(gFxAOAuthTokenData);
+    }
+
     return MozLoopServiceInternal.promiseFxAOAuthAuthorization().then(response => {
       return MozLoopServiceInternal.promiseFxAOAuthToken(response.code, response.state);
+    }).then(tokenData => {
+      gFxAOAuthTokenData = tokenData;
+      return tokenData;
+    },
+    error => {
+      gFxAOAuthTokenData = null;
+      throw error;
     });
   },
 

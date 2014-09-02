@@ -850,7 +850,8 @@ DisassembleInstruction(uint32_t pc)
     sprintf(llvmcmd, "bash -c \"echo -n '%p'; echo '%s' | "
             "llvm-mc -disassemble -arch=mipsel -mcpu=mips32r2 | "
             "grep -v pure_instructions | grep -v .text\"", static_cast<void*>(bytes), hexbytes);
-    system(llvmcmd);
+    if (system(llvmcmd))
+        printf("Cannot disassemble instruction.\n");
 }
 
 void
@@ -927,7 +928,7 @@ MipsDebugger::debug()
                         printAllRegsIncludingFPU();
                     } else {
                         Register reg = Register::FromName(arg1);
-                        FloatRegister fReg = FloatRegister::FromName(arg1);
+                        FloatRegister fReg(FloatRegister::FromName(arg1));
                         if (reg != InvalidReg) {
                             value = getRegisterValue(reg.code());
                             printf("%s: 0x%08x %d \n", arg1, value, value);
@@ -1870,7 +1871,7 @@ Simulator::softwareInterrupt(SimInstruction *instr)
 
         intptr_t external = reinterpret_cast<intptr_t>(redirection->nativeFunction());
 
-        bool stack_aligned = (getRegister(sp) & (StackAlignment - 1)) == 0;
+        bool stack_aligned = (getRegister(sp) & (ABIStackAlignment - 1)) == 0;
         if (!stack_aligned) {
             fprintf(stderr, "Runtime call with unaligned stack!\n");
             MOZ_CRASH();
@@ -3404,7 +3405,7 @@ Simulator::call(uint8_t *entry, int argument_count, ...)
     else
         entry_stack = entry_stack - kCArgsSlotsSize;
 
-    entry_stack &= ~StackAlignment;
+    entry_stack &= ~ABIStackAlignment;
 
     intptr_t *stack_argument = reinterpret_cast<intptr_t*>(entry_stack);
 

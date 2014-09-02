@@ -80,7 +80,6 @@
 #include "UnitTransforms.h"
 #include "ClientLayerManager.h"
 #include "LayersLogging.h"
-#include "nsIOService.h"
 
 #include "nsColorPickerProxy.h"
 
@@ -162,7 +161,7 @@ class TabChild::DelayedFireContextMenuEvent MOZ_FINAL : public nsITimerCallback
 public:
   NS_DECL_ISUPPORTS
 
-  DelayedFireContextMenuEvent(TabChild* tabChild)
+  explicit DelayedFireContextMenuEvent(TabChild* tabChild)
     : mTabChild(tabChild)
   {
   }
@@ -664,7 +663,7 @@ public:
     nsCOMPtr<nsICachedFileDescriptorListener> mCallback;
     bool mCanceled;
 
-    CachedFileDescriptorInfo(const nsAString& aPath)
+    explicit CachedFileDescriptorInfo(const nsAString& aPath)
       : mPath(aPath), mCanceled(false)
     { }
 
@@ -701,7 +700,7 @@ class TabChild::CachedFileDescriptorCallbackRunnable : public nsRunnable
     nsAutoPtr<CachedFileDescriptorInfo> mInfo;
 
 public:
-    CachedFileDescriptorCallbackRunnable(CachedFileDescriptorInfo* aInfo)
+    explicit CachedFileDescriptorCallbackRunnable(CachedFileDescriptorInfo* aInfo)
       : mInfo(aInfo)
     {
         MOZ_ASSERT(NS_IsMainThread());
@@ -1533,6 +1532,8 @@ TabChild::DestroyWindow()
             runnable->Dispatch();
         }
     }
+
+    mCachedFileDescriptorInfos.Clear();
 }
 
 void
@@ -2528,18 +2529,6 @@ TabChild::RecvAsyncMessage(const nsString& aMessage,
     CpowIdHolder cpows(Manager()->GetCPOWManager(), aCpows);
     mm->ReceiveMessage(static_cast<EventTarget*>(mTabChildGlobal),
                        aMessage, false, &cloneData, &cpows, aPrincipal, nullptr);
-  }
-  return true;
-}
-
-bool
-TabChild::RecvAppOfflineStatus(const uint32_t& aId, const bool& aOffline)
-{
-  // Instantiate the service to make sure gIOService is initialized
-  nsCOMPtr<nsIIOService> ioService = mozilla::services::GetIOService();
-  if (gIOService && ioService) {
-    gIOService->SetAppOfflineInternal(aId, aOffline ?
-      nsIAppOfflineInfo::OFFLINE : nsIAppOfflineInfo::ONLINE);
   }
   return true;
 }

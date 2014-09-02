@@ -354,7 +354,7 @@ NS_IMPL_ISUPPORTS(DOMEventListenerManagersHashReporter, nsIMemoryReporter)
 class EventListenerManagerMapEntry : public PLDHashEntryHdr
 {
 public:
-  EventListenerManagerMapEntry(const void *aKey)
+  explicit EventListenerManagerMapEntry(const void* aKey)
     : mKey(aKey)
   {
   }
@@ -1292,7 +1292,7 @@ struct NormalizeNewlinesCharTraits {
     typedef typename OutputIterator::value_type value_type;
 
   public:
-    NormalizeNewlinesCharTraits(OutputIterator& aIterator) : mIterator(aIterator) { }
+    explicit NormalizeNewlinesCharTraits(OutputIterator& aIterator) : mIterator(aIterator) { }
     void writechar(typename OutputIterator::value_type aChar) {
       *mIterator++ = aChar;
     }
@@ -1307,7 +1307,7 @@ struct NormalizeNewlinesCharTraits<CharT*> {
     typedef CharT value_type;
 
   public:
-    NormalizeNewlinesCharTraits(CharT* aCharPtr) : mCharPtr(aCharPtr) { }
+    explicit NormalizeNewlinesCharTraits(CharT* aCharPtr) : mCharPtr(aCharPtr) { }
     void writechar(CharT aChar) {
       *mCharPtr++ = aChar;
     }
@@ -1323,8 +1323,8 @@ class CopyNormalizeNewlines
     typedef typename OutputIterator::value_type value_type;
 
   public:
-    CopyNormalizeNewlines(OutputIterator* aDestination,
-                          bool aLastCharCR=false) :
+    explicit CopyNormalizeNewlines(OutputIterator* aDestination,
+                                   bool aLastCharCR = false) :
       mLastCharCR(aLastCharCR),
       mDestination(aDestination),
       mWritten(0)
@@ -1781,7 +1781,7 @@ nsContentUtils::Shutdown()
   sUserDefinedEvents = nullptr;
 
   if (sEventListenerManagersHash.ops) {
-    NS_ASSERTION(sEventListenerManagersHash.entryCount == 0,
+    NS_ASSERTION(sEventListenerManagersHash.EntryCount() == 0,
                  "Event listener manager hash not empty at shutdown!");
 
     // See comment above.
@@ -1793,7 +1793,7 @@ nsContentUtils::Shutdown()
     // it could leave dangling references in DOMClassInfo's preserved
     // wrapper table.
 
-    if (sEventListenerManagersHash.entryCount == 0) {
+    if (sEventListenerManagersHash.EntryCount() == 0) {
       PL_DHashTableFinish(&sEventListenerManagersHash);
       sEventListenerManagersHash.ops = nullptr;
     }
@@ -2082,6 +2082,13 @@ nsContentUtils::ContentIsCrossDocDescendantOf(nsINode* aPossibleDescendant,
   do {
     if (aPossibleDescendant == aPossibleAncestor)
       return true;
+
+    // Step over shadow root to the host node.
+    ShadowRoot* shadowRoot = ShadowRoot::FromNode(aPossibleDescendant);
+    if (shadowRoot) {
+      aPossibleDescendant = shadowRoot->GetHost();
+    }
+
     aPossibleDescendant = GetCrossDocParentNode(aPossibleDescendant);
   } while (aPossibleDescendant);
 
@@ -4539,12 +4546,12 @@ nsContentUtils::IsInSameAnonymousTree(const nsINode* aNode,
 
 class AnonymousContentDestroyer : public nsRunnable {
 public:
-  AnonymousContentDestroyer(nsCOMPtr<nsIContent>* aContent) {
+  explicit AnonymousContentDestroyer(nsCOMPtr<nsIContent>* aContent) {
     mContent.swap(*aContent);
     mParent = mContent->GetParent();
     mDoc = mContent->OwnerDoc();
   }
-  AnonymousContentDestroyer(nsCOMPtr<Element>* aElement) {
+  explicit AnonymousContentDestroyer(nsCOMPtr<Element>* aElement) {
     mContent = aElement->forget();
     mParent = mContent->GetParent();
     mDoc = mContent->OwnerDoc();
@@ -5821,19 +5828,6 @@ nsContentUtils::GetUTFOrigin(nsIURI* aURI, nsString& aOrigin)
   }
   
   return NS_OK;
-}
-
-/* static */
-void
-nsContentUtils::GetUTFNonNullOrigin(nsIURI* aURI, nsString& aOrigin)
-{
-  aOrigin.Truncate();
-
-  nsString origin;
-  nsresult rv = GetUTFOrigin(aURI, origin);
-  if (NS_SUCCEEDED(rv) && !origin.EqualsLiteral("null")) {
-    aOrigin.Assign(origin);
-  }
 }
 
 /* static */

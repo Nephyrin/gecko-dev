@@ -19,6 +19,7 @@
 #include "mozilla/layers/CompositorTypes.h"
 #include "mozilla/layers/LayersTypes.h"  // for LayersBackend, etc
 #include "mozilla/RefPtr.h"
+#include "mozilla/UniquePtr.h"
 #include "nsAString.h"
 #include "nsAutoPtr.h"                  // for nsRefPtr
 #include "nsCOMPtr.h"                   // for already_AddRefed
@@ -238,6 +239,19 @@ public:
 
   TextRenderer* GetTextRenderer() { return mTextRenderer; }
 
+  /**
+   * Add an on frame warning.
+   * @param severity ranges from 0 to 1. It's used to compute the warning color.
+   */
+  void VisualFrameWarning(float severity) {
+    mozilla::TimeStamp now = TimeStamp::Now();
+    if (severity > mWarningLevel ||
+        mWarnTime + TimeDuration::FromMilliseconds(1500) < now) {
+      mWarnTime = now;
+      mWarningLevel = severity;
+    }
+  }
+
 private:
   /** Region we're clipping our current drawing to. */
   nsIntRegion mClippingRegion;
@@ -269,11 +283,17 @@ private:
 
   void WorldTransformRect(nsIntRect& aRect);
 
-  RefPtr<CompositingRenderTarget> PushGroup();
-  void PopGroup(RefPtr<CompositingRenderTarget> aPreviousTarget, nsIntRect aClipRect);
+  RefPtr<CompositingRenderTarget> PushGroupForLayerEffects();
+  void PopGroupForLayerEffects(RefPtr<CompositingRenderTarget> aPreviousTarget,
+                               nsIntRect aClipRect,
+                               bool aGrayscaleEffect,
+                               bool aInvertEffect,
+                               float aContrastEffect);
 
+  float mWarningLevel;
+  mozilla::TimeStamp mWarnTime;
   RefPtr<Compositor> mCompositor;
-  nsAutoPtr<LayerProperties> mClonedLayerTreeProperties;
+  UniquePtr<LayerProperties> mClonedLayerTreeProperties;
 
   /**
    * Context target, nullptr when drawing directly to our swap chain.
@@ -283,7 +303,7 @@ private:
 
   gfx::Matrix mWorldMatrix;
   nsIntRegion mInvalidRegion;
-  nsAutoPtr<FPSState> mFPS;
+  UniquePtr<FPSState> mFPS;
 
   bool mInTransaction;
   bool mIsCompositorReady;

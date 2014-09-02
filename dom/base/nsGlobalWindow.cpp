@@ -213,6 +213,7 @@
 #include "mozilla/dom/Console.h"
 #include "mozilla/dom/FunctionBinding.h"
 #include "mozilla/dom/HashChangeEvent.h"
+#include "mozilla/dom/MozSelfSupportBinding.h"
 #include "mozilla/dom/PopStateEvent.h"
 #include "mozilla/dom/PopupBlockedEvent.h"
 #include "mozilla/dom/WindowBinding.h"
@@ -480,7 +481,7 @@ class nsGlobalWindowObserver MOZ_FINAL : public nsIObserver,
                                          public nsIInterfaceRequestor
 {
 public:
-  nsGlobalWindowObserver(nsGlobalWindow* aWindow) : mWindow(aWindow) {}
+  explicit nsGlobalWindowObserver(nsGlobalWindow* aWindow) : mWindow(aWindow) {}
   NS_DECL_ISUPPORTS
   NS_IMETHOD Observe(nsISupports* aSubject, const char* aTopic, const char16_t* aData)
   {
@@ -598,7 +599,7 @@ NS_IMPL_CYCLE_COLLECTING_RELEASE(DialogValueHolder)
 class nsOuterWindowProxy : public js::Wrapper
 {
 public:
-  nsOuterWindowProxy() : js::Wrapper(0) { }
+  MOZ_CONSTEXPR nsOuterWindowProxy() : js::Wrapper(0) { }
 
   virtual bool finalizeInBackground(JS::Value priv) const MOZ_OVERRIDE {
     return false;
@@ -1025,7 +1026,7 @@ nsOuterWindowProxy::singleton;
 class nsChromeOuterWindowProxy : public nsOuterWindowProxy
 {
 public:
-  nsChromeOuterWindowProxy() : nsOuterWindowProxy() {}
+  MOZ_CONSTEXPR nsChromeOuterWindowProxy() : nsOuterWindowProxy() { }
 
   virtual const char *className(JSContext *cx, JS::Handle<JSObject*> wrapper) const MOZ_OVERRIDE;
 
@@ -1467,6 +1468,8 @@ nsGlobalWindow::CleanUp()
 
   mExternal = nullptr;
 
+  mMozSelfSupport = nullptr;
+
   mPerformance = nullptr;
 
 #ifdef MOZ_WEBSPEECH
@@ -1786,6 +1789,7 @@ NS_IMPL_CYCLE_COLLECTION_TRAVERSE_BEGIN_INTERNAL(nsGlobalWindow)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mCrypto)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mConsole)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mExternal)
+  NS_IMPL_CYCLE_COLLECTION_TRAVERSE(mMozSelfSupport)
   NS_IMPL_CYCLE_COLLECTION_TRAVERSE_SCRIPT_OBJECTS
 NS_IMPL_CYCLE_COLLECTION_TRAVERSE_END
 
@@ -1846,6 +1850,7 @@ NS_IMPL_CYCLE_COLLECTION_UNLINK_BEGIN(nsGlobalWindow)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mCrypto)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mConsole)
   NS_IMPL_CYCLE_COLLECTION_UNLINK(mExternal)
+  NS_IMPL_CYCLE_COLLECTION_UNLINK(mMozSelfSupport)
   NS_IMPL_CYCLE_COLLECTION_UNLINK_PRESERVED_WRAPPER
 NS_IMPL_CYCLE_COLLECTION_UNLINK_END
 
@@ -3792,10 +3797,8 @@ void
 nsPIDOMWindow::RefreshMediaElements()
 {
   nsRefPtr<AudioChannelService> service =
-    AudioChannelService::GetAudioChannelService();
-  if (service) {
-    service->RefreshAgentsVolume(this);
-  }
+    AudioChannelService::GetOrCreateAudioChannelService();
+  service->RefreshAgentsVolume(this);
 }
 
 void
@@ -4063,6 +4066,19 @@ nsGlobalWindow::GetContent(nsIDOMWindow** aContent)
   *aContent = GetContentInternal(rv).take();
 
   return rv.ErrorCode();
+}
+
+MozSelfSupport*
+nsGlobalWindow::GetMozSelfSupport(ErrorResult& aError)
+{
+  if (mMozSelfSupport) {
+    return mMozSelfSupport;
+  }
+
+  AutoSafeJSContext cx;
+  GlobalObject global(cx, FastGetGlobalJSObject());
+  mMozSelfSupport = MozSelfSupport::Constructor(global, cx, aError);
+  return mMozSelfSupport;
 }
 
 NS_IMETHODIMP
@@ -7189,22 +7205,37 @@ nsGlobalWindow::GetTopWindowRoot()
   return window.forget();
 }
 
+void
+nsGlobalWindow::Scroll(int32_t aXScroll, int32_t aYScroll,
+                       const ScrollOptions& aOptions)
+{
+  ScrollTo(CSSIntPoint(aXScroll, aYScroll), aOptions);
+}
+
+void
+nsGlobalWindow::ScrollTo(int32_t aXScroll, int32_t aYScroll,
+                         const ScrollOptions& aOptions)
+{
+  ScrollTo(CSSIntPoint(aXScroll, aYScroll), aOptions);
+}
+
 NS_IMETHODIMP
 nsGlobalWindow::Scroll(int32_t aXScroll, int32_t aYScroll)
 {
-  ScrollTo(CSSIntPoint(aXScroll, aYScroll));
+  ScrollTo(CSSIntPoint(aXScroll, aYScroll), ScrollOptions());
   return NS_OK;
 }
 
 NS_IMETHODIMP
 nsGlobalWindow::ScrollTo(int32_t aXScroll, int32_t aYScroll)
 {
-  ScrollTo(CSSIntPoint(aXScroll, aYScroll));
+  ScrollTo(CSSIntPoint(aXScroll, aYScroll), ScrollOptions());
   return NS_OK;
 }
 
 void
-nsGlobalWindow::ScrollTo(const CSSIntPoint& aScroll)
+nsGlobalWindow::ScrollTo(const CSSIntPoint& aScroll,
+                         const ScrollOptions& aOptions)
 {
   FlushPendingNotifications(Flush_Layout);
   nsIScrollableFrame *sf = GetScrollFrame();
@@ -7225,7 +7256,86 @@ nsGlobalWindow::ScrollTo(const CSSIntPoint& aScroll)
     if (scroll.y > maxpx) {
       scroll.y = maxpx;
     }
-    sf->ScrollToCSSPixels(scroll);
+
+    sf->ScrollToCSSPixels(scroll,
+                          aOptions.mBehavior == ScrollBehavior::Smooth
+                            ? nsIScrollableFrame::SMOOTH_MSD
+                            : nsIScrollableFrame::INSTANT);
+  }
+}
+
+NS_IMETHODIMP
+nsGlobalWindow::ScrollBy(int32_t aXScrollDif, int32_t aYScrollDif)
+{
+  ScrollBy(aXScrollDif, aYScrollDif, ScrollOptions());
+
+  return NS_OK;
+}
+
+void
+nsGlobalWindow::ScrollBy(int32_t aXScrollDif, int32_t aYScrollDif,
+                         const ScrollOptions& aOptions)
+{
+  FlushPendingNotifications(Flush_Layout);
+  nsIScrollableFrame *sf = GetScrollFrame();
+
+  if (sf) {
+    CSSIntPoint scrollPos =
+      sf->GetScrollPositionCSSPixels() + CSSIntPoint(aXScrollDif, aYScrollDif);
+    // It seems like it would make more sense for ScrollBy to use
+    // SMOOTH mode, but tests seem to depend on the synchronous behaviour.
+    // Perhaps Web content does too.
+    ScrollTo(scrollPos, aOptions);
+  }
+}
+
+NS_IMETHODIMP
+nsGlobalWindow::ScrollByLines(int32_t numLines)
+{
+  ScrollByLines(numLines, ScrollOptions());
+
+  return NS_OK;
+}
+
+void
+nsGlobalWindow::ScrollByLines(int32_t numLines,
+                              const ScrollOptions& aOptions)
+{
+  FlushPendingNotifications(Flush_Layout);
+  nsIScrollableFrame *sf = GetScrollFrame();
+  if (sf) {
+    // It seems like it would make more sense for ScrollByLines to use
+    // SMOOTH mode, but tests seem to depend on the synchronous behaviour.
+    // Perhaps Web content does too.
+    sf->ScrollBy(nsIntPoint(0, numLines), nsIScrollableFrame::LINES,
+                 aOptions.mBehavior == ScrollBehavior::Smooth
+                   ? nsIScrollableFrame::SMOOTH_MSD
+                   : nsIScrollableFrame::INSTANT);
+  }
+}
+
+NS_IMETHODIMP
+nsGlobalWindow::ScrollByPages(int32_t numPages)
+{
+  ScrollByPages(numPages, ScrollOptions());
+
+  return NS_OK;
+}
+
+void
+nsGlobalWindow::ScrollByPages(int32_t numPages,
+                              const ScrollOptions& aOptions)
+{
+  FlushPendingNotifications(Flush_Layout);
+  nsIScrollableFrame *sf = GetScrollFrame();
+  if (sf) {
+    // It seems like it would make more sense for ScrollByPages to use
+    // SMOOTH mode, but tests seem to depend on the synchronous behaviour.
+    // Perhaps Web content does too.
+    sf->ScrollBy(nsIntPoint(0, numPages), nsIScrollableFrame::PAGES,
+                 aOptions.mBehavior == ScrollBehavior::Smooth
+                   ? nsIScrollableFrame::SMOOTH_MSD
+                   : nsIScrollableFrame::INSTANT);
   }
 }
 
@@ -7243,56 +7353,6 @@ nsGlobalWindow::MozRequestOverfill(OverfillCallback& aCallback,
   }
 
   aError.Throw(NS_ERROR_NOT_AVAILABLE);
-}
-
-NS_IMETHODIMP
-nsGlobalWindow::ScrollBy(int32_t aXScrollDif, int32_t aYScrollDif)
-{
-  FlushPendingNotifications(Flush_Layout);
-  nsIScrollableFrame *sf = GetScrollFrame();
-
-  if (sf) {
-    CSSIntPoint scrollPos =
-      sf->GetScrollPositionCSSPixels() + CSSIntPoint(aXScrollDif, aYScrollDif);
-    // It seems like it would make more sense for ScrollBy to use
-    // SMOOTH mode, but tests seem to depend on the synchronous behaviour.
-    // Perhaps Web content does too.
-    ScrollTo(scrollPos);
-  }
-
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsGlobalWindow::ScrollByLines(int32_t numLines)
-{
-  FlushPendingNotifications(Flush_Layout);
-  nsIScrollableFrame *sf = GetScrollFrame();
-  if (sf) {
-    // It seems like it would make more sense for ScrollByLines to use
-    // SMOOTH mode, but tests seem to depend on the synchronous behaviour.
-    // Perhaps Web content does too.
-    sf->ScrollBy(nsIntPoint(0, numLines), nsIScrollableFrame::LINES,
-                 nsIScrollableFrame::INSTANT);
-  }
-
-  return NS_OK;
-}
-
-NS_IMETHODIMP
-nsGlobalWindow::ScrollByPages(int32_t numPages)
-{
-  FlushPendingNotifications(Flush_Layout);
-  nsIScrollableFrame *sf = GetScrollFrame();
-  if (sf) {
-    // It seems like it would make more sense for ScrollByPages to use
-    // SMOOTH mode, but tests seem to depend on the synchronous behaviour.
-    // Perhaps Web content does too.
-    sf->ScrollBy(nsIntPoint(0, numPages), nsIScrollableFrame::PAGES,
-                 nsIScrollableFrame::INSTANT);
-  }
-
-  return NS_OK;
 }
 
 void
@@ -8708,7 +8768,7 @@ nsGlobalWindow::RunPendingTimeoutsRecursive(nsGlobalWindow *aTopWindow,
 class nsPendingTimeoutRunner : public nsRunnable
 {
 public:
-  nsPendingTimeoutRunner(nsGlobalWindow *aWindow)
+  explicit nsPendingTimeoutRunner(nsGlobalWindow* aWindow)
     : mWindow(aWindow)
   {
     NS_ASSERTION(mWindow, "mWindow is null.");
@@ -10745,7 +10805,7 @@ nsGlobalWindow::FireOfflineStatusEvent()
   if (!IsCurrentInnerWindow())
     return;
   nsAutoString name;
-  if (NS_IsOffline() || NS_IsAppOffline(GetPrincipal())) {
+  if (NS_IsOffline()) {
     name.AssignLiteral("offline");
   } else {
     name.AssignLiteral("online");
@@ -11301,8 +11361,7 @@ nsresult
 nsGlobalWindow::Observe(nsISupports* aSubject, const char* aTopic,
                         const char16_t* aData)
 {
-  if (!nsCRT::strcmp(aTopic, NS_IOSERVICE_OFFLINE_STATUS_TOPIC) ||
-      !nsCRT::strcmp(aTopic, NS_IOSERVICE_APP_OFFLINE_STATUS_TOPIC)) {
+  if (!nsCRT::strcmp(aTopic, NS_IOSERVICE_OFFLINE_STATUS_TOPIC)) {
     if (IsFrozen()) {
       // if an even number of notifications arrive while we're frozen,
       // we don't need to fire.
@@ -11653,7 +11712,7 @@ class AutoUnblockScriptClosing
 private:
   nsRefPtr<nsGlobalWindow> mWin;
 public:
-  AutoUnblockScriptClosing(nsGlobalWindow* aWin)
+  explicit AutoUnblockScriptClosing(nsGlobalWindow* aWin)
     : mWin(aWin)
   {
     MOZ_ASSERT(mWin);

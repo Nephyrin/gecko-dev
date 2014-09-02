@@ -40,6 +40,7 @@ MediaSourceReader::MediaSourceReader(MediaSourceDecoder* aDecoder)
   , mTimeThreshold(-1)
   , mDropAudioBeforeThreshold(false)
   , mDropVideoBeforeThreshold(false)
+  , mEnded(false)
 {
 }
 
@@ -133,7 +134,7 @@ MediaSourceReader::OnVideoEOS()
   if (SwitchReaders(SWITCH_FORCED)) {
     // Success! Resume decoding with next video decoder.
     RequestVideoData(false, mTimeThreshold);
-  } else {
+  } else if (IsEnded()) {
     // End of stream.
     MSE_DEBUG("MediaSourceReader(%p)::OnVideoEOS reader=%p EOS (readers=%u)",
               this, mVideoReader.get(), mDecoders.Length());
@@ -209,9 +210,13 @@ MediaSourceReader::SwitchVideoReader(MediaDecoderReader* aTargetReader)
 bool
 MediaSourceReader::SwitchReaders(SwitchType aType)
 {
-  ReentrantMonitorAutoEnter mon(mDecoder->GetReentrantMonitor());
-
   InitializePendingDecoders();
+
+  // This monitor must be held after the call to InitializePendingDecoders
+  // as that method also obtains the lock, and then attempts to exit it
+  // to call ReadMetadata on the readers. If we hold it before the call then
+  // it remains held during the ReadMetadata call causing a deadlock.
+  ReentrantMonitorAutoEnter mon(mDecoder->GetReentrantMonitor());
 
   bool didSwitch = false;
   double decodeTarget = double(mTimeThreshold) / USECS_PER_S;
@@ -250,7 +255,7 @@ MediaSourceReader::SwitchReaders(SwitchType aType)
 
 class ReleaseDecodersTask : public nsRunnable {
 public:
-  ReleaseDecodersTask(nsTArray<nsRefPtr<SourceBufferDecoder>>& aDecoders)
+  explicit ReleaseDecodersTask(nsTArray<nsRefPtr<SourceBufferDecoder>>& aDecoders)
   {
     mDecoders.SwapElements(aDecoders);
   }
@@ -334,9 +339,12 @@ CreateReaderForType(const nsACString& aType, AbstractMediaDecoder* aDecoder)
 already_AddRefed<SourceBufferDecoder>
 MediaSourceReader::CreateSubDecoder(const nsACString& aType)
 {
+  if (IsShutdown()) {
+    return nullptr;
+  }
   MOZ_ASSERT(GetTaskQueue());
   nsRefPtr<SourceBufferDecoder> decoder =
-    new SourceBufferDecoder(new SourceBufferResource(nullptr, aType), mDecoder);
+    new SourceBufferDecoder(new SourceBufferResource(aType), mDecoder);
   nsRefPtr<MediaDecoderReader> reader(CreateReaderForType(aType, decoder));
   if (!reader) {
     return nullptr;
@@ -367,7 +375,7 @@ MediaSourceReader::CreateSubDecoder(const nsACString& aType)
 namespace {
 class ChangeToHaveMetadata : public nsRunnable {
 public:
-  ChangeToHaveMetadata(AbstractMediaDecoder* aDecoder) :
+  explicit ChangeToHaveMetadata(AbstractMediaDecoder* aDecoder) :
     mDecoder(aDecoder)
   {
   }
@@ -388,12 +396,18 @@ private:
 bool
 MediaSourceReader::DecodersContainTime(double aTime)
 {
+  bool found = false;
+
   for (uint32_t i = 0; i < mDecoders.Length(); ++i) {
-    if (!mDecoders[i]->IsDiscarded() && mDecoders[i]->ContainsTime(aTime)) {
-      return true;
+    if (!mDecoders[i]->IsDiscarded()) {
+      if (!mDecoders[i]->ContainsTime(aTime)) {
+        // No use to continue searching, one source buffer isn't ready yet
+        return false;
+      }
+      found = true;
     }
   }
-  return false;
+  return found;
 }
 
 nsresult
@@ -412,27 +426,27 @@ MediaSourceReader::Seek(int64_t aTime, int64_t aStartTime, int64_t aEndTime,
   // This is a workaround for our lack of async functionality in the
   // MediaDecoderStateMachine. Bug 979104 implements what we need and
   // we'll remove this for an async approach based on that in bug XXXXXXX.
-  while (!DecodersContainTime(target) && !IsShutdown()) {
+  while (!DecodersContainTime(target) && !IsShutdown() && !IsEnded()) {
     MSE_DEBUG("MediaSourceReader(%p)::Seek waiting for target=%f", this, target);
     static_cast<MediaSourceDecoder*>(mDecoder)->WaitForData();
     SwitchReaders(SWITCH_FORCED);
   }
 
   if (IsShutdown()) {
-    return NS_OK;
+    return NS_ERROR_FAILURE;
   }
 
   ResetDecode();
   if (mAudioReader) {
     nsresult rv = mAudioReader->Seek(aTime, aStartTime, aEndTime, aCurrentTime);
-    MSE_DEBUG("MediaSourceReader(%p)::Seek audio reader=%p rv=%xf", this, mAudioReader.get(), rv);
+    MSE_DEBUG("MediaSourceReader(%p)::Seek audio reader=%p rv=%x", this, mAudioReader.get(), rv);
     if (NS_FAILED(rv)) {
       return rv;
     }
   }
   if (mVideoReader) {
     nsresult rv = mVideoReader->Seek(aTime, aStartTime, aEndTime, aCurrentTime);
-    MSE_DEBUG("MediaSourceReader(%p)::Seek video reader=%p rv=%xf", this, mVideoReader.get(), rv);
+    MSE_DEBUG("MediaSourceReader(%p)::Seek video reader=%p rv=%x", this, mVideoReader.get(), rv);
     if (NS_FAILED(rv)) {
       return rv;
     }
@@ -492,6 +506,20 @@ MediaSourceReader::ReadMetadata(MediaInfo* aInfo, MetadataTags** aTags)
   *aTags = nullptr; // TODO: Handle metadata.
 
   return NS_OK;
+}
+
+void
+MediaSourceReader::Ended()
+{
+  mDecoder->GetReentrantMonitor().AssertCurrentThreadIn();
+  mEnded = true;
+}
+
+bool
+MediaSourceReader::IsEnded()
+{
+  ReentrantMonitorAutoEnter mon(mDecoder->GetReentrantMonitor());
+  return mEnded;
 }
 
 } // namespace mozilla

@@ -100,6 +100,7 @@ protected:
 
     // pipeline parameters
     android::sp<android::MediaSource> mSource;
+    bool mSourceIsStopped;
     android::sp<android::MediaCodecProxy> mCodec;
     android::Vector<android::sp<android::ABuffer> > mInputBuffers;
     android::Vector<android::sp<android::ABuffer> > mOutputBuffers;
@@ -131,6 +132,10 @@ protected:
   // Called on Binder thread.
   virtual void codecReserved(Track& aTrack);
   virtual void codecCanceled(Track& aTrack);
+
+  virtual bool CreateExtractor();
+
+  android::sp<android::MediaExtractor> mExtractor;
 
 private:
   // An intermediary class that can be managed by android::sp<T>.
@@ -223,7 +228,6 @@ private:
   bool CreateLooper();
   void DestroyLooper();
 
-  bool CreateExtractor();
   void DestroyExtractor();
 
   bool CreateMediaSources();
@@ -275,7 +279,6 @@ private:
   android::sp<VideoResourceListener> mVideoListener;
 
   android::sp<android::ALooper> mLooper;
-  android::sp<android::MediaExtractor> mExtractor;
 
   // media tracks
   AudioTrack mAudioTrack;
