@@ -13,9 +13,10 @@ WPT_METADATA = \
 _DEST_DIR = $(DEPTH)/_tests/web-platform
 PKG_STAGE = $(DIST)/test-stage
 
-WEBPLATFORM_FILES =	runtests.py \
-			wptrunner.ini \
-			$(NULL)
+WEBPLATFORM_FILES = \
+  runtests.py \
+  wptrunner.ini \
+  $(NULL)
 WEBPLATFORM_DEST = $(_DEST_DIR)
 INSTALL_TARGETS += WEBPLATFORM
 

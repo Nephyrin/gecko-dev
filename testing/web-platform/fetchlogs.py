@@ -46,7 +46,7 @@ def download(url, prefix, dest, force_suffix=True):
         sep = "" if not prefix else "-"
         name = os.path.join(dest, prefix + sep + str(counter) + ".log")
 
-    with open(name, "w") as f:
+    with open(name, "wb") as f:
         resp = requests.get(url)
         f.write(resp.text.encode(resp.encoding))
 
