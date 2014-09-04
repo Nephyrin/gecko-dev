@@ -667,6 +667,9 @@ class MDefinition : public MNode
     }
     void replaceAllUsesWith(MDefinition *dom);
 
+    // Like replaceAllUsesWith, but doesn't set UseRemoved on |this|'s operands.
+    void justReplaceAllUsesWith(MDefinition *dom);
+
     // Mark this instruction as having replaced all uses of ins, as during GVN,
     // returning false if the replacement should not be performed. For use when
     // GVN eliminates instructions which are not equivalent to one another.
@@ -1587,6 +1590,42 @@ class MSimdBinaryBitwise : public MBinaryInstruction
     }
 };
 
+class MSimdTernaryBitwise : public MTernaryInstruction
+{
+  public:
+    enum Operation {
+        select
+    };
+
+  private:
+    Operation operation_;
+
+    MSimdTernaryBitwise(MDefinition *mask, MDefinition *lhs, MDefinition *rhs, Operation op, MIRType type)
+      : MTernaryInstruction(mask, lhs, rhs), operation_(op)
+    {
+        MOZ_ASSERT(IsSimdType(type));
+        MOZ_ASSERT(mask->type() == MIRType_Int32x4);
+        MOZ_ASSERT(lhs->type() == rhs->type());
+        MOZ_ASSERT(lhs->type() == type);
+        setResultType(type);
+        setMovable();
+    }
+
+  public:
+    INSTRUCTION_HEADER(SimdTernaryBitwise);
+    static MSimdTernaryBitwise *NewAsmJS(TempAllocator &alloc, MDefinition *mask, MDefinition *lhs,
+                                         MDefinition *rhs, Operation op, MIRType t)
+    {
+        return new(alloc) MSimdTernaryBitwise(mask, lhs, rhs, op, t);
+    }
+
+    AliasSet getAliasSet() const {
+        return AliasSet::None();
+    }
+
+    Operation operation() const { return operation_; }
+};
+
 // Deep clone a constant JSObject.
 class MCloneLiteral
   : public MUnaryInstruction,
@@ -1653,6 +1692,28 @@ class MCallee : public MNullaryInstruction
 
     static MCallee *New(TempAllocator &alloc) {
         return new(alloc) MCallee();
+    }
+    AliasSet getAliasSet() const {
+        return AliasSet::None();
+    }
+};
+
+class MIsConstructing : public MNullaryInstruction
+{
+  public:
+    MIsConstructing() {
+        setResultType(MIRType_Boolean);
+        setMovable();
+    }
+
+  public:
+    INSTRUCTION_HEADER(IsConstructing)
+
+    bool congruentTo(const MDefinition *ins) const {
+        return congruentIfOperandsEqual(ins);
+    }
+    static MIsConstructing *New(TempAllocator &alloc) {
+        return new(alloc) MIsConstructing();
     }
     AliasSet getAliasSet() const {
         return AliasSet::None();
@@ -3300,7 +3361,7 @@ class MBox : public MUnaryInstruction
             types::Type ntype = ins->type() == MIRType_Object
                                 ? types::Type::AnyObjectType()
                                 : types::Type::PrimitiveType(ValueTypeFromMIRType(ins->type()));
-            setResultTypeSet(alloc.lifoAlloc()->new_<types::TemporaryTypeSet>(ntype));
+            setResultTypeSet(alloc.lifoAlloc()->new_<types::TemporaryTypeSet>(alloc.lifoAlloc(), ntype));
         }
         setMovable();
     }
@@ -5745,6 +5806,7 @@ class MPhi MOZ_FINAL : public MDefinition, public InlineListNode<MPhi>
 {
     js::Vector<MUse, 2, IonAllocPolicy> inputs_;
 
+    TruncateKind truncateKind_;
     bool hasBackedgeType_;
     bool triedToSpecialize_;
     bool isIterator_;
@@ -5774,6 +5836,7 @@ class MPhi MOZ_FINAL : public MDefinition, public InlineListNode<MPhi>
 
     MPhi(TempAllocator &alloc, MIRType resultType)
       : inputs_(alloc),
+        truncateKind_(NoTruncate),
         hasBackedgeType_(false),
         triedToSpecialize_(false),
         isIterator_(false),
@@ -5893,6 +5956,9 @@ class MPhi MOZ_FINAL : public MDefinition, public InlineListNode<MPhi>
     void setCanConsumeFloat32(bool can) {
         canConsumeFloat32_ = can;
     }
+
+    TruncateKind operandTruncateKind(size_t index) const;
+    bool truncate(TruncateKind kind);
 };
 
 // The goal of a Beta node is to split a def at a conditionally taken
@@ -11698,6 +11764,8 @@ bool PropertyReadIsIdempotent(types::CompilerConstraintList *constraints,
                               MDefinition *obj, PropertyName *name);
 void AddObjectsForPropertyRead(MDefinition *obj, PropertyName *name,
                                types::TemporaryTypeSet *observed);
+bool CanWriteProperty(types::CompilerConstraintList *constraints,
+                      types::HeapTypeSetKey property, MDefinition *value);
 bool PropertyWriteNeedsTypeBarrier(TempAllocator &alloc, types::CompilerConstraintList *constraints,
                                    MBasicBlock *current, MDefinition **pobj,
                                    PropertyName *name, MDefinition **pvalue,
