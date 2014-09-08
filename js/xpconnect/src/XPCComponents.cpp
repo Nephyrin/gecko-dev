@@ -19,6 +19,8 @@
 #include "mozilla/Attributes.h"
 #include "mozilla/Preferences.h"
 #include "nsJSEnvironment.h"
+#include "mozilla/StartupTimeline.h"
+#include "mozilla/TimeStamp.h"
 #include "mozilla/XPTInterfaceInfoManager.h"
 #include "mozilla/dom/DOMException.h"
 #include "mozilla/dom/DOMExceptionBinding.h"
@@ -3071,7 +3073,8 @@ nsXPCComponents_Utils::MakeObjectPropsNormal(HandleValue vobj, JSContext *cx)
         if (!js::IsWrapper(propobj) || !JS_ObjectIsCallable(cx, propobj))
             continue;
 
-        if (!NewFunctionForwarder(cx, id, propobj, &v) ||
+        FunctionForwarderOptions forwarderOptions;
+        if (!NewFunctionForwarder(cx, id, propobj, forwarderOptions, &v) ||
             !JS_SetPropertyById(cx, obj, id, v))
             return NS_ERROR_FAILURE;
     }
@@ -3548,6 +3551,14 @@ nsXPCComponents_Utils::SetAddonInterposition(const nsACString &addonIdStr,
         return NS_ERROR_FAILURE;
     if (!XPCWrappedNativeScope::SetAddonInterposition(addonId, interposition))
         return NS_ERROR_FAILURE;
+    return NS_OK;
+}
+
+NS_IMETHODIMP
+nsXPCComponents_Utils::Now(double *aRetval)
+{
+    TimeStamp start = StartupTimeline::Get(StartupTimeline::PROCESS_CREATION);
+    *aRetval = (TimeStamp::Now() - start).ToMilliseconds();
     return NS_OK;
 }
 

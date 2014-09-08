@@ -578,5 +578,6 @@ stage-web-platform-tests: make-stage-dir
   stage-modules \
   stage-marionette \
   stage-steeplechase \
+  stage-web-platform-tests \
   $(NULL)
 

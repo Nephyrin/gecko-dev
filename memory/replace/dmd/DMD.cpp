@@ -195,7 +195,7 @@ MallocSizeOf(const void* aPtr)
   return gMallocTable->malloc_usable_size(const_cast<void*>(aPtr));
 }
 
-static void
+MOZ_EXPORT void
 StatusMsg(const char* aFmt, ...)
 {
   va_list ap;
@@ -1745,7 +1745,7 @@ PrintSortedRecords(const Writer& aWriter, CodeAddressService* aLocService,
   StatusMsg("  printing %s heap block record array...\n", astr);
   size_t cumulativeUsableSize = 0;
 
-  // Limit the number of records printed, because fix-linux-stack.pl is too
+  // Limit the number of records printed, because fix_linux_stack.py is too
   // damn slow.  Note that we don't break out of this loop because we need to
   // keep adding to |cumulativeUsableSize|.
   uint32_t numRecords = recordArray.length();

@@ -77,4 +77,8 @@ GPATH
 ^browser/components/loop/standalone/node_modules/
 
 # Git clone directory for updating web-platform-tests
+<<<<<<< local
 ^testing/web-platform-tests/sync/
+=======
+^testing/web-platform/sync/
+>>>>>>> other
