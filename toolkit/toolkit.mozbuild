@@ -176,7 +176,6 @@ add_tier_dir('platform', 'tools/quitter')
 
 if CONFIG['ENABLE_TESTS']:
     add_tier_dir('platform', [
-        'testing/web-platform',
         'testing/mochitest',
         'testing/xpcshell',
         'testing/tools/screenshot',
