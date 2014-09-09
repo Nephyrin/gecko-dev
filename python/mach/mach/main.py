@@ -500,10 +500,6 @@ To see more help for a specific command, run:
 
             self._print_exception(sys.stdout, exc_type, exc_value, stack)
 
-            if args.pdb:
-                import pdb
-                pdb.post_mortem()
-
             return 1
 
     def log(self, level, action, params, format_str):
@@ -607,10 +603,6 @@ To see more help for a specific command, run:
         global_group.add_argument('-h', '--help', dest='help',
             action='store_true', default=False,
             help='Show this help message.')
-        global_group.add_argument('--pdb', dest='pdb',
-            action='store_true', default=False,
-            help='Invoke pdb debugger if the mach command throws an uncaught '
-                'exception.')
 
         for args, kwargs in self.global_arguments:
             global_group.add_argument(*args, **kwargs)
