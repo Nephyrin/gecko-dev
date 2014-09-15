@@ -153,9 +153,11 @@ class ExceptionHandler {
     HANDLER_EXCEPTION = 1 << 0,          // SetUnhandledExceptionFilter
     HANDLER_INVALID_PARAMETER = 1 << 1,  // _set_invalid_parameter_handler
     HANDLER_PURECALL = 1 << 2,           // _set_purecall_handler
+    HANDLER_VECTORED_CONTINUE = 1 << 3,  // AddVectoredContinueHandler
     HANDLER_ALL = HANDLER_EXCEPTION |
                   HANDLER_INVALID_PARAMETER |
-                  HANDLER_PURECALL
+                  HANDLER_PURECALL |
+                  HANDLER_VECTORED_CONTINUE
   };
 
   // Creates a new ExceptionHandler instance to handle writing minidumps.
@@ -286,6 +288,11 @@ class ExceptionHandler {
   // Called on the exception thread when an unhandled exception occurs.
   // Signals the exception handler thread to handle the exception.
   static LONG WINAPI HandleException(EXCEPTION_POINTERS* exinfo);
+
+#ifdef _WIN64
+  // Called on the exception thread when an unhandled exception occurs.
+  static LONG WINAPI VectoredContinueHandleException(EXCEPTION_POINTERS* exinfo);
+#endif // _WIN64
 
 #if _MSC_VER >= 1400  // MSVC 2005/8
   // This function will be called by some CRT functions when they detect
