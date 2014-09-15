@@ -253,6 +253,11 @@ void ExceptionHandler::Initialize(const wstring& dump_path,
     }
     handler_stack_->push_back(this);
 
+#ifdef _WIN64
+    if (handler_types & HANDLER_VECTORED_CONTINUE)
+      AddVectoredContinueHandler(0, VectoredContinueHandleException);
+#endif
+
     if (handler_types & HANDLER_EXCEPTION)
       previous_filter_ = SetUnhandledExceptionFilter(HandleException);
 
@@ -279,6 +284,11 @@ ExceptionHandler::~ExceptionHandler() {
 
   if (handler_types_ != HANDLER_NONE) {
     EnterCriticalSection(&handler_stack_critical_section_);
+
+#ifdef _WIN64
+    if (handler_types_ & HANDLER_VECTORED_CONTINUE)
+      RemoveVectoredContinueHandler(VectoredContinueHandleException);
+#endif // _WIN64
 
     if (handler_types_ & HANDLER_EXCEPTION)
       SetUnhandledExceptionFilter(previous_filter_);
@@ -505,6 +515,51 @@ LONG ExceptionHandler::HandleException(EXCEPTION_POINTERS* exinfo) {
 
   return action;
 }
+
+#ifdef _WIN64
+// static
+LONG ExceptionHandler::VectoredContinueHandleException(EXCEPTION_POINTERS* exinfo) {
+  AutoExceptionHandler auto_exception_handler;
+  ExceptionHandler* current_handler = auto_exception_handler.get_handler();
+
+  // Ignore EXCEPTION_BREAKPOINT and EXCEPTION_SINGLE_STEP exceptions.  This
+  // logic will short-circuit before calling WriteMinidumpOnHandlerThread,
+  // allowing something else to handle the breakpoint without incurring the
+  // overhead transitioning to and from the handler thread.  This behavior
+  // can be overridden by calling ExceptionHandler::set_handle_debug_exceptions.
+  DWORD code = exinfo->ExceptionRecord->ExceptionCode;
+  LONG action;
+  bool is_debug_exception = (code == EXCEPTION_BREAKPOINT) ||
+                            (code == EXCEPTION_SINGLE_STEP);
+
+  bool success = false;
+
+  if (!is_debug_exception ||
+      current_handler->get_handle_debug_exceptions()) {
+    // If out-of-proc crash handler client is available, we have to use that
+    // to generate dump and we cannot fall back on in-proc dump generation
+    // because we never prepared for an in-proc dump generation
+
+    // In case of out-of-process dump generation, directly call
+    // WriteMinidumpWithException since there is no separate thread running.
+    if (current_handler->IsOutOfProcess()) {
+      success = current_handler->WriteMinidumpWithException(
+          GetCurrentThreadId(),
+          exinfo,
+          NULL);
+    } else {
+      success = current_handler->WriteMinidumpOnHandlerThread(exinfo, NULL);
+    }
+  }
+
+  // MSDN says there are only two valid return values from a vectored handler:
+  // EXECEPTION_CONTINUE_EXECUTION and EXCEPTION_CONTINUE_SEARCH.  We don't
+  // want to continue executing the program, and there's no real way to
+  // signal to Windows that this handler has done everything that needs to be
+  // done.  So let other handlers execute unconditionally...
+  return EXCEPTION_CONTINUE_SEARCH;
+}
+#endif // _WIN64
 
 #if _MSC_VER >= 1400  // MSVC 2005/8
 // static
