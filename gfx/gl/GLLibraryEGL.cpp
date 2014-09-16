@@ -10,6 +10,7 @@
 #include "nsDirectoryServiceDefs.h"
 #include "nsDirectoryServiceUtils.h"
 #include "nsPrintfCString.h"
+#include "nsThreadUtils.h"
 #ifdef XP_WIN
 #include "nsWindowsHelpers.h"
 #endif
@@ -159,8 +160,12 @@ GLLibraryEGL::EnsureInitialized()
     // the APITrace lib, libEGL.so, and libEGL.so.1 in that order.
 
 #if defined(ANDROID)
-    if (!mEGLLibrary)
+    if (!mEGLLibrary) {
+	// See bug 1019209:
+	MOZ_ASSERT(NS_IsMainThread());
+	gfxPrefs::GetSingleton();
         mEGLLibrary = LoadApitraceLibrary();
+    }
 #endif
 
     if (!mEGLLibrary) {
