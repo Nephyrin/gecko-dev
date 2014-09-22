@@ -75,10 +75,18 @@ var ecmaGlobals =
     "RegExp",
     "Set",
     {name: "SharedArrayBuffer", nightly: true},
+    {name: "SharedInt8Array", nightly: true},
+    {name: "SharedUint8Array", nightly: true},
+    {name: "SharedUint8ClampedArray", nightly: true},
+    {name: "SharedInt16Array", nightly: true},
+    {name: "SharedUint16Array", nightly: true},
+    {name: "SharedInt32Array", nightly: true},
+    {name: "SharedUint32Array", nightly: true},
+    {name: "SharedFloat32Array", nightly: true},
+    {name: "SharedFloat64Array", nightly: true},
     {name: "SIMD", nightly: true},
     "StopIteration",
     "String",
-    "Symbol",
     "SyntaxError",
     {name: "TypedObject", nightly: true},
     "TypeError",
@@ -92,6 +100,12 @@ var ecmaGlobals =
   ];
 // IMPORTANT: Do not change the list above without review from
 //            a JavaScript Engine peer!
+
+// Symbol is conditionally defined.
+// If it's defined, insert "Symbol" before "SyntaxError".
+if (typeof Symbol === "function") {
+  ecmaGlobals.splice(ecmaGlobals.indexOf("SyntaxError"), 0, "Symbol");
+}
 
 // IMPORTANT: Do not change the list below without review from a DOM peer,
 //            except to remove items from it!
@@ -113,6 +127,8 @@ var legacyMozPrefixedInterfaces =
 // IMPORTANT: Do not change the list below without review from a DOM peer!
 var interfaceNamesInGlobalScope =
   [
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "MozAbortablePromise", pref: "dom.abortablepromise.enabled"},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     {name: "AlarmsManager", pref: "dom.mozAlarms.enabled"},
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -591,6 +607,10 @@ var interfaceNamesInGlobalScope =
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "Image",
 // IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "ImageCapture", pref: "dom.imagecapture.enabled"},
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "ImageCaptureErrorEvent", pref: "dom.imagecapture.enabled"},
+// IMPORTANT: Do not change this list without review from a DOM peer!
     "ImageData",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "InputEvent",
@@ -634,8 +654,6 @@ var interfaceNamesInGlobalScope =
     "MimeType",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "MimeTypeArray",
-// IMPORTANT: Do not change this list without review from a DOM peer!
-    "ModalContentWindow",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "MouseEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -700,6 +718,8 @@ var interfaceNamesInGlobalScope =
     {name: "mozRTCSessionDescription", pref: "media.peerconnection.enabled"},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "MozSettingsEvent",
+// IMPORTANT: Do not change this list without review from a DOM peer!
+    {name: "MozSettingsTransactionEvent", permission: "settings-api-read"},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "MozSmsEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!
@@ -1178,8 +1198,6 @@ var interfaceNamesInGlobalScope =
     "URL",
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "URLSearchParams",
-// IMPORTANT: Do not change this list without review from a DOM peer!
-    {name: "UserDataHandler", xbl: true},
 // IMPORTANT: Do not change this list without review from a DOM peer!
     "UserProximityEvent",
 // IMPORTANT: Do not change this list without review from a DOM peer!

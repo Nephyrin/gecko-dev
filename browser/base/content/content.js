@@ -16,6 +16,8 @@ XPCOMUtils.defineLazyModuleGetter(this, "LoginManagerContent",
   "resource://gre/modules/LoginManagerContent.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "InsecurePasswordUtils",
   "resource://gre/modules/InsecurePasswordUtils.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "PluginContent",
+  "resource:///modules/PluginContent.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "PrivateBrowsingUtils",
   "resource://gre/modules/PrivateBrowsingUtils.jsm");
 XPCOMUtils.defineLazyModuleGetter(this, "UITour",
@@ -370,6 +372,9 @@ let ClickEventHandler = {
 
     let originalTarget = event.originalTarget;
     let ownerDoc = originalTarget.ownerDocument;
+    if (!ownerDoc) {
+      return;
+    }
 
     // Handle click events from about pages
     if (ownerDoc.documentURI.startsWith("about:certerror")) {
@@ -489,6 +494,9 @@ let ClickEventHandler = {
 ClickEventHandler.init();
 
 ContentLinkHandler.init(this);
+
+// TODO: Load this lazily so the JSM is run only if a relevant event/message fires.
+let pluginContent = new PluginContent(global);
 
 addEventListener("DOMWebNotificationClicked", function(event) {
   sendAsyncMessage("DOMWebNotificationClicked", {});
@@ -633,3 +641,54 @@ let DOMFullscreenHandler = {
   }
 };
 DOMFullscreenHandler.init();
+
+function gKeywordURIFixup(fixupInfo) {
+  fixupInfo.QueryInterface(Ci.nsIURIFixupInfo);
+
+  // Ignore info from other docshells
+  let parent = fixupInfo.consumer.QueryInterface(Ci.nsIDocShellTreeItem).sameTypeRootTreeItem;
+  if (parent != docShell)
+    return;
+
+  let data = {};
+  for (let f of Object.keys(fixupInfo)) {
+    if (f == "consumer" || typeof fixupInfo[f] == "function")
+      continue;
+
+    if (fixupInfo[f] && fixupInfo[f] instanceof Ci.nsIURI) {
+      data[f] = fixupInfo[f].spec;
+    } else {
+      data[f] = fixupInfo[f];
+    }
+  }
+
+  sendAsyncMessage("Browser:URIFixup", data);
+}
+Services.obs.addObserver(gKeywordURIFixup, "keyword-uri-fixup", false);
+addEventListener("unload", () => {
+  Services.obs.removeObserver(gKeywordURIFixup, "keyword-uri-fixup");
+}, false);
+
+addMessageListener("Browser:AppTab", function(message) {
+  docShell.isAppTab = message.data.isAppTab;
+});
+
+let WebBrowserChrome = {
+  onBeforeLinkTraversal: function(originalTarget, linkURI, linkNode, isAppTab) {
+    return BrowserUtils.onBeforeLinkTraversal(originalTarget, linkURI, linkNode, isAppTab);
+  },
+};
+
+if (Services.appinfo.processType == Services.appinfo.PROCESS_TYPE_CONTENT) {
+  let tabchild = docShell.QueryInterface(Ci.nsIInterfaceRequestor)
+                         .getInterface(Ci.nsITabChild);
+  tabchild.webBrowserChrome = WebBrowserChrome;
+}
+
+addEventListener("pageshow", function(event) {
+  if (event.target == content.document) {
+    sendAsyncMessage("PageVisibility:Show", {
+      persisted: event.persisted,
+    });
+  }
+});

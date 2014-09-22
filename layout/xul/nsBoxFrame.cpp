@@ -1328,6 +1328,8 @@ nsBoxFrame::BuildDisplayList(nsDisplayListBuilder*   aBuilder,
       aBuilder->AddWindowOpaqueRegion(
           nsRect(aBuilder->ToReferenceFrame(this), GetSize()));
     }
+
+    aBuilder->AdjustWindowDraggingRegion(this);
   }
 
   nsDisplayListCollection tempLists;
@@ -2059,7 +2061,7 @@ void nsDisplayXULEventRedirector::HitTest(nsDisplayListBuilder* aBuilder,
 class nsXULEventRedirectorWrapper : public nsDisplayWrapper
 {
 public:
-  nsXULEventRedirectorWrapper(nsIFrame* aTargetFrame)
+  explicit nsXULEventRedirectorWrapper(nsIFrame* aTargetFrame)
       : mTargetFrame(aTargetFrame) {}
   virtual nsDisplayItem* WrapList(nsDisplayListBuilder* aBuilder,
                                   nsIFrame* aFrame,

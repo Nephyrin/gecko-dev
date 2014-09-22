@@ -103,7 +103,9 @@ RotatedBuffer::DrawBufferQuadrant(gfx::DrawTarget* aTarget,
   // (to avoid flickering) but direct2d is ok since it defers rendering.
   // We should try abstract this logic in a helper when we have other use
   // cases.
-  if (aTarget->GetBackendType() == BackendType::DIRECT2D && aOperator == CompositionOp::OP_SOURCE) {
+  if ((aTarget->GetBackendType() == BackendType::DIRECT2D ||
+       aTarget->GetBackendType() == BackendType::DIRECT2D1_1) &&
+      aOperator == CompositionOp::OP_SOURCE) {
     aOperator = CompositionOp::OP_OVER;
     if (snapshot->GetFormat() == SurfaceFormat::B8G8R8A8) {
       aTarget->ClearRect(ToRect(fillRect));
@@ -122,8 +124,8 @@ RotatedBuffer::DrawBufferQuadrant(gfx::DrawTarget* aTarget,
     Matrix oldTransform = aTarget->GetTransform();
 
     // Transform from user -> buffer space.
-    Matrix transform;
-    transform.Translate(quadrantTranslation.x, quadrantTranslation.y);
+    Matrix transform =
+      Matrix::Translation(quadrantTranslation.x, quadrantTranslation.y);
 
     Matrix inverseMask = *aMaskTransform;
     inverseMask.Invert();
@@ -295,9 +297,9 @@ RotatedContentBuffer::BorrowDrawTargetForQuadrantUpdate(const nsIntRect& aBounds
   NS_ASSERTION(quadrantRect.Contains(bounds), "Messed up quadrants");
 
   mLoanedTransform = mLoanedDrawTarget->GetTransform();
-  mLoanedTransform.Translate(-quadrantRect.x, -quadrantRect.y);
-  mLoanedDrawTarget->SetTransform(mLoanedTransform);
-  mLoanedTransform.Translate(quadrantRect.x, quadrantRect.y);
+  mLoanedDrawTarget->SetTransform(Matrix(mLoanedTransform).
+                                    PreTranslate(-quadrantRect.x,
+                                                 -quadrantRect.y));
 
   return mLoanedDrawTarget;
 }
@@ -661,8 +663,7 @@ RotatedContentBuffer::BeginPaint(ThebesLayer* aLayer,
     if (!isClear && (mode != SurfaceMode::SURFACE_COMPONENT_ALPHA || HaveBufferOnWhite())) {
       // Copy the bits
       nsIntPoint offset = -destBufferRect.TopLeft();
-      Matrix mat;
-      mat.Translate(offset.x, offset.y);
+      Matrix mat = Matrix::Translation(offset.x, offset.y);
       destDTBuffer->SetTransform(mat);
       if (!EnsureBuffer()) {
         return result;

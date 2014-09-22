@@ -1630,6 +1630,38 @@ nsRuleNode::PropagateDependentBit(nsStyleStructID aSID, nsRuleNode* aHighestNode
   }
 }
 
+/* static */ void
+nsRuleNode::PropagateGrandancestorBit(nsStyleContext* aContext,
+                                      nsStyleContext* aContextInheritedFrom)
+{
+  MOZ_ASSERT(aContext);
+  MOZ_ASSERT(aContextInheritedFrom &&
+             aContextInheritedFrom != aContext &&
+             aContextInheritedFrom != aContext->GetParent(),
+             "aContextInheritedFrom must be an ancestor of aContext's parent");
+
+  aContext->AddStyleBit(NS_STYLE_USES_GRANDANCESTOR_STYLE);
+
+  nsStyleContext* context = aContext->GetParent();
+  if (!context) {
+    return;
+  }
+
+  for (;;) {
+    nsStyleContext* parent = context->GetParent();
+    if (!parent) {
+      MOZ_ASSERT(false, "aContextInheritedFrom must be an ancestor of "
+                        "aContext's parent");
+      break;
+    }
+    if (parent == aContextInheritedFrom) {
+      break;
+    }
+    context->AddStyleBit(NS_STYLE_USES_GRANDANCESTOR_STYLE);
+    context = parent;
+  }
+}
+
 /*
  * The following "Check" functions are used for determining what type of
  * sharing can be used for the data on this rule node.  MORE HERE...
@@ -2307,6 +2339,9 @@ nsRuleNode::WalkRuleTree(const nsStyleStructID aSID,
       while (parentContext &&
              parentContext->GetPseudo() == nsCSSPseudoElements::firstLine) {
         parentContext = parentContext->GetParent();
+      }
+      if (parentContext && parentContext != aContext->GetParent()) {
+        PropagateGrandancestorBit(aContext, parentContext);
       }
     }
     if (parentContext) {
@@ -3893,6 +3928,13 @@ nsRuleNode::SetGenericFont(nsPresContext* aPresContext,
 
     parentFont = *aFont;
   }
+
+  if (higherContext && contextPath.Length() > 1) {
+    // contextPath is a list of all ancestor style contexts, so it must have
+    // at least two elements for it to result in a dependency on grandancestor
+    // styles.
+    PropagateGrandancestorBit(aContext, higherContext);
+  }
 }
 
 const void*
@@ -4317,7 +4359,7 @@ nsRuleNode::ComputeTextData(void* aStartStruct,
               canStoreInRuleTree,
               SETDSC_ENUMERATED | SETDSC_UNSET_INHERIT,
               parentText->mTextOrientation,
-              NS_STYLE_TEXT_ORIENTATION_AUTO, 0, 0, 0, 0);
+              NS_STYLE_TEXT_ORIENTATION_MIXED, 0, 0, 0, 0);
 
   // text-combine-upright: enum, inherit, initial
   SetDiscrete(*aRuleData->ValueForTextCombineUpright(),
@@ -4585,6 +4627,13 @@ nsRuleNode::ComputeUserInterfaceData(void* aStartStruct,
               SETDSC_ENUMERATED | SETDSC_UNSET_INHERIT,
               parentUI->mUserFocus,
               NS_STYLE_USER_FOCUS_NONE, 0, 0, 0, 0);
+
+  // -moz-window-dragging: enum, inherit, initial
+  SetDiscrete(*aRuleData->ValueForWindowDragging(),
+              ui->mWindowDragging, canStoreInRuleTree,
+              SETDSC_ENUMERATED | SETDSC_UNSET_INHERIT,
+              parentUI->mWindowDragging,
+              NS_STYLE_WINDOW_DRAGGING_NO_DRAG, 0, 0, 0, 0);
 
   COMPUTE_END_INHERITED(UserInterface, ui)
 }
@@ -5895,18 +5944,17 @@ struct BackgroundItemComputer<nsCSSValueList, nsStyleImage>
   }
 };
 
-/* Helper function for
- * BackgroundItemComputer<nsCSSValue, nsStyleBackground::Position>
- * It computes a single PositionCoord from an nsCSSValue object
- * (contained in a list).
+/* Helper function for ComputePositionValue.
+ * This function computes a single PositionCoord from two nsCSSValue objects,
+ * which represent an edge and an offset from that edge.
  */
 typedef nsStyleBackground::Position::PositionCoord PositionCoord;
 static void
-ComputeBackgroundPositionCoord(nsStyleContext* aStyleContext,
-                               const nsCSSValue& aEdge,
-                               const nsCSSValue& aOffset,
-                               PositionCoord* aResult,
-                               bool& aCanStoreInRuleTree)
+ComputePositionCoord(nsStyleContext* aStyleContext,
+                     const nsCSSValue& aEdge,
+                     const nsCSSValue& aOffset,
+                     PositionCoord* aResult,
+                     bool& aCanStoreInRuleTree)
 {
   if (eCSSUnit_Percent == aOffset.GetUnit()) {
     aResult->mLength = 0;
@@ -5950,6 +5998,40 @@ ComputeBackgroundPositionCoord(nsStyleContext* aStyleContext,
   }
 }
 
+/* Helper function to convert a CSS <position> specified value into its
+ * computed-style form. */
+static void
+ComputePositionValue(nsStyleContext* aStyleContext,
+                     const nsCSSValue& aValue,
+                     nsStyleBackground::Position& aComputedValue,
+                     bool& aCanStoreInRuleTree)
+{
+  NS_ASSERTION(aValue.GetUnit() == eCSSUnit_Array,
+               "unexpected unit for CSS <position> value");
+
+  nsRefPtr<nsCSSValue::Array> positionArray = aValue.GetArrayValue();
+  const nsCSSValue &xEdge   = positionArray->Item(0);
+  const nsCSSValue &xOffset = positionArray->Item(1);
+  const nsCSSValue &yEdge   = positionArray->Item(2);
+  const nsCSSValue &yOffset = positionArray->Item(3);
+
+  NS_ASSERTION((eCSSUnit_Enumerated == xEdge.GetUnit()  ||
+                eCSSUnit_Null       == xEdge.GetUnit()) &&
+               (eCSSUnit_Enumerated == yEdge.GetUnit()  ||
+                eCSSUnit_Null       == yEdge.GetUnit()) &&
+               eCSSUnit_Enumerated != xOffset.GetUnit()  &&
+               eCSSUnit_Enumerated != yOffset.GetUnit(),
+               "Invalid background position");
+
+  ComputePositionCoord(aStyleContext, xEdge, xOffset,
+                       &aComputedValue.mXPosition,
+                       aCanStoreInRuleTree);
+
+  ComputePositionCoord(aStyleContext, yEdge, yOffset,
+                       &aComputedValue.mYPosition,
+                       aCanStoreInRuleTree);
+}
+
 template <>
 struct BackgroundItemComputer<nsCSSValueList, nsStyleBackground::Position>
 {
@@ -5958,30 +6040,8 @@ struct BackgroundItemComputer<nsCSSValueList, nsStyleBackground::Position>
                            nsStyleBackground::Position& aComputedValue,
                            bool& aCanStoreInRuleTree)
   {
-    NS_ASSERTION(aSpecifiedValue->mValue.GetUnit() == eCSSUnit_Array, "bg-position not an array");
-
-    nsRefPtr<nsCSSValue::Array> bgPositionArray =
-                                  aSpecifiedValue->mValue.GetArrayValue();
-    const nsCSSValue &xEdge   = bgPositionArray->Item(0);
-    const nsCSSValue &xOffset = bgPositionArray->Item(1);
-    const nsCSSValue &yEdge   = bgPositionArray->Item(2);
-    const nsCSSValue &yOffset = bgPositionArray->Item(3);
-
-    NS_ASSERTION((eCSSUnit_Enumerated == xEdge.GetUnit()  ||
-                  eCSSUnit_Null       == xEdge.GetUnit()) &&
-                 (eCSSUnit_Enumerated == yEdge.GetUnit()  ||
-                  eCSSUnit_Null       == yEdge.GetUnit()) &&
-                  eCSSUnit_Enumerated != xOffset.GetUnit()  &&
-                  eCSSUnit_Enumerated != yOffset.GetUnit(),
-                  "Invalid background position");
-
-    ComputeBackgroundPositionCoord(aStyleContext, xEdge, xOffset,
-                                   &aComputedValue.mXPosition,
-                                   aCanStoreInRuleTree);
-
-    ComputeBackgroundPositionCoord(aStyleContext, yEdge, yOffset,
-                                   &aComputedValue.mYPosition,
-                                   aCanStoreInRuleTree);
+    ComputePositionValue(aStyleContext, aSpecifiedValue->mValue,
+                         aComputedValue, aCanStoreInRuleTree);
   }
 };
 
@@ -6315,7 +6375,7 @@ nsRuleNode::ComputeBackgroundData(void* aStartStruct,
 
   // background-position: enum, length, percent (flags), inherit [pair list]
   nsStyleBackground::Position initialPosition;
-  initialPosition.SetInitialValues();
+  initialPosition.SetInitialPercentValues(0.0f);
   SetBackgroundList(aContext, *aRuleData->ValueForBackgroundPosition(),
                     bg->mLayers,
                     parentBG->mLayers, &nsStyleBackground::Layer::mPosition,
@@ -7535,6 +7595,7 @@ nsRuleNode::ComputePositionData(void* aStartStruct,
           const nsStylePosition* grandparentPos =
             grandparentContext->StylePosition();
           inheritedAlignSelf = grandparentPos->mAlignItems;
+          aContext->AddStyleBit(NS_STYLE_USES_GRANDANCESTOR_STYLE);
         }
       }
     }
@@ -7604,6 +7665,31 @@ nsRuleNode::ComputePositionData(void* aStartStruct,
               SETDSC_ENUMERATED | SETDSC_UNSET_INITIAL,
               parentPos->mJustifyContent,
               NS_STYLE_JUSTIFY_CONTENT_FLEX_START, 0, 0, 0, 0);
+
+  // object-fit: enum, inherit, initial
+  SetDiscrete(*aRuleData->ValueForObjectFit(),
+              pos->mObjectFit, canStoreInRuleTree,
+              SETDSC_ENUMERATED | SETDSC_UNSET_INITIAL,
+              parentPos->mObjectFit,
+              NS_STYLE_OBJECT_FIT_FILL, 0, 0, 0, 0);
+
+  // object-position
+  const nsCSSValue& objectPosition = *aRuleData->ValueForObjectPosition();
+  switch (objectPosition.GetUnit()) {
+    case eCSSUnit_Null:
+      break;
+    case eCSSUnit_Inherit:
+      canStoreInRuleTree = false;
+      pos->mObjectPosition = parentPos->mObjectPosition;
+      break;
+    case eCSSUnit_Initial:
+    case eCSSUnit_Unset:
+      pos->mObjectPosition.SetInitialPercentValues(0.5f);
+      break;
+    default:
+      ComputePositionValue(aContext, objectPosition,
+                           pos->mObjectPosition, canStoreInRuleTree);
+  }
 
   // grid-auto-flow
   const nsCSSValue& gridAutoFlow = *aRuleData->ValueForGridAutoFlow();

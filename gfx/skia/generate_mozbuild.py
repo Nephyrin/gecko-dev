@@ -37,7 +37,7 @@ if not CONFIG['INTEL_ARCHITECTURE'] and CONFIG['CPU_ARCH'] == 'arm' and CONFIG['
             'trunk/src/opts/memset32_neon.S',
         ]
 
-if CONFIG['INTEL_ARCHITECTURE'] and (CONFIG['GNU_CC'] or CONFIG['CLANG_CL']):
+if CONFIG['INTEL_ARCHITECTURE'] and CONFIG['GNU_CC'] and CONFIG['OS_ARCH'] != 'WINNT':
     if CONFIG['CPU_ARCH'] == 'x86_64':
         SOURCES += [
             'trunk/src/opts/SkBlitRow_opts_SSE4_x64_asm.S',
@@ -76,11 +76,6 @@ LOCAL_INCLUDES += [
     'trunk/src/utils/win',
 ]
 
-DEFINES['SK_A32_SHIFT'] = 24
-DEFINES['SK_R32_SHIFT'] = 16
-DEFINES['SK_G32_SHIFT'] = 8
-DEFINES['SK_B32_SHIFT'] = 0
-
 if CONFIG['MOZ_WIDGET_TOOLKIT'] in ('android', 'gtk2', 'gtk3', 'qt', 'gonk', 'cocoa'):
     DEFINES['SK_USE_POSIX_THREADS'] = 1
 
@@ -115,6 +110,8 @@ if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'windows':
     SOURCES['trunk/src/opts/SkMorphology_opts_SSE2.cpp'].flags += ['-DSK_CPU_SSE_LEVEL=20']
     SOURCES['trunk/src/opts/SkUtils_opts_SSE2.cpp'].flags += ['-DSK_CPU_SSE_LEVEL=20']
     SOURCES['trunk/src/opts/SkXfermode_opts_SSE2.cpp'].flags += ['-DSK_CPU_SSE_LEVEL=20']
+    if CONFIG['CLANG_CL']:
+        SOURCES['trunk/src/opts/SkBlurImage_opts_SSE4.cpp'].flags += ['-msse4.1']
 
 if CONFIG['INTEL_ARCHITECTURE'] and CONFIG['GNU_CC']:
     SOURCES['trunk/src/opts/SkBitmapFilter_opts_SSE2.cpp'].flags += CONFIG['SSE2_FLAGS']

@@ -1,4 +1,5 @@
 # This is just a list of tests to skip, one test per line
+jsapi-tests                         # Bug 1068946
 TestPLDHash                         # Bug 1038197
 TestTXMgr                           # Bug 919595
 TestPlainTextSerializer             # Bug 919599
@@ -11,3 +12,4 @@ TestCSPParser                       # Bug 1054246
 TestDeadlockDetector                # Bug 1054249
 test_deadlock_detector              # Bug 1054249
 TestTArray                          # Bug 1054251
+TestAudioBuffers                    # Bug 1062937

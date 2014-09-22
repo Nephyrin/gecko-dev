@@ -2297,7 +2297,19 @@ nsHttpConnectionMgr::OnMsgCancelTransaction(int32_t reason, void *param)
                 nsHttpTransaction *temp = trans;
                 NS_RELEASE(temp); // b/c NS_RELEASE nulls its argument!
             }
+
+            // Abandon all half-open sockets belonging to the given transaction.
+            for (uint32_t index = 0;
+                 index < ent->mHalfOpens.Length();
+                 ++index) {
+                nsHalfOpenSocket *half = ent->mHalfOpens[index];
+                if (trans == half->Transaction()) {
+                    ent->RemoveHalfOpen(half);
+                    half->Abandon();
+                }
+            }
         }
+
         trans->Close(closeCode);
 
         // Cancel is a pretty strong signal that things might be hanging
@@ -3205,7 +3217,7 @@ nsHalfOpenSocket::OnOutputStreamReady(nsIAsyncOutputStream *out)
     index = mEnt->mPendingQ.IndexOf(mTransaction);
     if (index != -1) {
         MOZ_ASSERT(!mSpeculative,
-                   "Speculative Half Open found mTranscation");
+                   "Speculative Half Open found mTransaction");
         nsRefPtr<nsHttpTransaction> temp = dont_AddRef(mEnt->mPendingQ[index]);
         mEnt->mPendingQ.RemoveElementAt(index);
         gHttpHandler->ConnMgr()->AddActiveConn(conn, mEnt);

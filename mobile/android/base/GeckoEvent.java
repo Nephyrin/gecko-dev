@@ -11,10 +11,6 @@ import java.util.concurrent.ArrayBlockingQueue;
 import org.mozilla.gecko.AppConstants.Versions;
 import org.mozilla.gecko.gfx.DisplayPortMetrics;
 import org.mozilla.gecko.gfx.ImmutableViewportMetrics;
-import org.mozilla.gecko.mozglue.JNITarget;
-import org.mozilla.gecko.mozglue.RobocopTarget;
-import org.mozilla.gecko.mozglue.generatorannotations.GeneratorOptions;
-import org.mozilla.gecko.mozglue.generatorannotations.WrapEntireClassForJNI;
 
 import android.graphics.Point;
 import android.graphics.PointF;
@@ -29,6 +25,8 @@ import android.util.Log;
 import android.util.SparseArray;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
+import org.mozilla.gecko.mozglue.JNITarget;
+import org.mozilla.gecko.mozglue.RobocopTarget;
 
 /* We're not allowed to hold on to most events given to us
  * so we save the parts of the events we want to use in GeckoEvent.
@@ -108,7 +106,8 @@ public class GeckoEvent {
         TELEMETRY_UI_SESSION_STOP(43),
         TELEMETRY_UI_EVENT(44),
         GAMEPAD_ADDREMOVE(45),
-        GAMEPAD_DATA(46);
+        GAMEPAD_DATA(46),
+        LONG_PRESS(47);
 
         public final int value;
 
@@ -121,8 +120,7 @@ public class GeckoEvent {
      * The DomKeyLocation enum encapsulates the DOM KeyboardEvent's constants.
      * @see https://developer.mozilla.org/en-US/docs/DOM/KeyboardEvent#Key_location_constants
      */
-    @GeneratorOptions(generatedClassName = "JavaDomKeyLocation")
-    @WrapEntireClassForJNI
+    @JNITarget
     public enum DomKeyLocation {
         DOM_KEY_LOCATION_STANDARD(0),
         DOM_KEY_LOCATION_LEFT(1),
@@ -147,7 +145,8 @@ public class GeckoEvent {
         IME_ADD_COMPOSITION_RANGE(3),
         IME_UPDATE_COMPOSITION(4),
         IME_REMOVE_COMPOSITION(5),
-        IME_ACKNOWLEDGE_FOCUS(6);
+        IME_ACKNOWLEDGE_FOCUS(6),
+        IME_COMPOSE_TEXT(7);
 
         public final int value;
 
@@ -420,6 +419,16 @@ public class GeckoEvent {
         return event;
     }
 
+    /**
+     * Creates a GeckoEvent that contains the data from the LongPressEvent, to be
+     * dispatched in CSS pixels relative to gecko's scroll position.
+     */
+    public static GeckoEvent createLongPressEvent(MotionEvent m) {
+        GeckoEvent event = GeckoEvent.get(NativeGeckoEvent.LONG_PRESS);
+        event.initMotionEvent(m, false);
+        return event;
+    }
+
     private void initMotionEvent(MotionEvent m, boolean keepInViewCoordinates) {
         mAction = m.getActionMasked();
         mTime = (System.currentTimeMillis() - SystemClock.elapsedRealtime()) + m.getEventTime();
@@ -600,10 +609,17 @@ public class GeckoEvent {
         return event;
     }
 
-    public static GeckoEvent createIMEReplaceEvent(int start, int end,
-                                                   String text) {
+    public static GeckoEvent createIMEReplaceEvent(int start, int end, String text) {
+        return createIMETextEvent(false, start, end, text);
+    }
+
+    public static GeckoEvent createIMEComposeEvent(int start, int end, String text) {
+        return createIMETextEvent(true, start, end, text);
+    }
+
+    private static GeckoEvent createIMETextEvent(boolean compose, int start, int end, String text) {
         GeckoEvent event = GeckoEvent.get(NativeGeckoEvent.IME_EVENT);
-        event.mAction = ImeAction.IME_REPLACE_TEXT.value;
+        event.mAction = (compose ? ImeAction.IME_COMPOSE_TEXT : ImeAction.IME_REPLACE_TEXT).value;
         event.mStart = start;
         event.mEnd = end;
         event.mCharacters = text;

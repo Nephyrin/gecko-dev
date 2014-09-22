@@ -166,6 +166,7 @@
     macro(sensitivity, sensitivity, "sensitivity") \
     macro(set, set, "set") \
     macro(shape, shape, "shape") \
+    macro(signMask, signMask, "signMask") \
     macro(source, source, "source") \
     macro(stack, stack, "stack") \
     macro(sticky, sticky, "sticky") \
@@ -185,6 +186,7 @@
     macro(true, true_, "true") \
     macro(unescape, unescape, "unescape") \
     macro(uneval, uneval, "uneval") \
+    macro(uninitialized, uninitialized, "uninitialized") \
     macro(uint8, uint8, "uint8") \
     macro(uint8Clamped, uint8Clamped, "uint8Clamped") \
     macro(uint16, uint16, "uint16") \
@@ -229,6 +231,6 @@
     macro(Symbol_iterator, Symbol_iterator, "Symbol.iterator") \
     macro(Symbol_toPrimitive, Symbol_toPrimitive, "Symbol.toPrimitive") \
     macro(Symbol_toStringTag, Symbol_toStringTag, "Symbol.toStringTag") \
-    macro(Symbol_unscopables, Symbol_unscopables, "Symbol.unscopables")
+    macro(Symbol_unscopables, Symbol_unscopables, "Symbol.unscopables") \
 
 #endif /* vm_CommonPropertyNames_h */

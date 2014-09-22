@@ -1,5 +1,5 @@
 <?xml version="1.0"?>
-<blocklist xmlns="http://www.mozilla.org/2006/addons-blocklist" lastupdate="1408662916000">
+<blocklist xmlns="http://www.mozilla.org/2006/addons-blocklist" lastupdate="1409700581000">
   <emItems>
       <emItem  blockID="i454" id="sqlmoz@facebook.com">
                         <versionRange  minVersion="0" maxVersion="*" severity="3">
@@ -33,10 +33,12 @@
                     <prefs>
               </prefs>
     </emItem>
-      <emItem  blockID="i8" id="{B13721C7-F507-4982-B2E5-502A71474FED}">
-                        <versionRange  minVersion=" " severity="1">
+      <emItem  blockID="i708" id="{849ded12-59e9-4dae-8f86-918b70d213dc}">
+                        <versionRange  minVersion="0" maxVersion="*" severity="1">
                     </versionRange>
                     <prefs>
+                  <pref>browser.startup.homepage</pref>
+                  <pref>browser.search.defaultenginename</pref>
               </prefs>
     </emItem>
       <emItem  blockID="i646" id="{e1aaa9f8-4500-47f1-9a0a-b02bd60e4076}">
@@ -796,6 +798,12 @@
     </emItem>
       <emItem  blockID="i678" id="{C4A4F5A0-4B89-4392-AFAC-D58010E349AF}">
                         <versionRange  minVersion="0" maxVersion="*" severity="1">
+                    </versionRange>
+                    <prefs>
+              </prefs>
+    </emItem>
+      <emItem  blockID="i8" id="{B13721C7-F507-4982-B2E5-502A71474FED}">
+                        <versionRange  minVersion=" " severity="1">
                     </versionRange>
                     <prefs>
               </prefs>
@@ -1924,6 +1932,16 @@
     </emItem>
       <emItem  blockID="i96" id="youtubeee@youtuber3.com">
                         <versionRange  minVersion="0" maxVersion="*">
+                    </versionRange>
+                    <prefs>
+              </prefs>
+    </emItem>
+      <emItem  blockID="i706" id="thefoxonlybetter@quicksaver">
+                        <versionRange  minVersion="1.10" maxVersion="*" severity="3">
+                    </versionRange>
+                                <versionRange  minVersion="0" maxVersion="0.*" severity="3">
+                    </versionRange>
+                                <versionRange  minVersion="1.6.160" maxVersion="1.6.160" severity="3">
                     </versionRange>
                     <prefs>
               </prefs>

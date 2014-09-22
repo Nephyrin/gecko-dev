@@ -57,20 +57,6 @@ const EMERGENCY_CB_MODE_TIMEOUT_MS = 300000;  // 5 mins = 300000 ms.
 
 const ICC_MAX_LINEAR_FIXED_RECORDS = 0xfe;
 
-// MMI match groups
-const MMI_MATCH_GROUP_FULL_MMI = 1;
-const MMI_MATCH_GROUP_PROCEDURE = 2;
-const MMI_MATCH_GROUP_SERVICE_CODE = 3;
-const MMI_MATCH_GROUP_SIA = 4;
-const MMI_MATCH_GROUP_SIB = 5;
-const MMI_MATCH_GROUP_SIC = 6;
-const MMI_MATCH_GROUP_PWD_CONFIRM = 7;
-const MMI_MATCH_GROUP_DIALING_NUMBER = 8;
-
-const MMI_MAX_LENGTH_SHORT_CODE = 2;
-
-const MMI_END_OF_USSD = "#";
-
 const GET_CURRENT_CALLS_RETRY_MAX = 3;
 
 let RILQUIRKS_CALLSTATE_EXTRA_UINT32;
@@ -426,7 +412,7 @@ RilObject.prototype = {
     /**
      * One of the RADIO_STATE_* constants.
      */
-    this.radioState = GECKO_RADIOSTATE_UNAVAILABLE;
+    this.radioState = GECKO_RADIOSTATE_UNKNOWN;
 
     /**
      * True if we are on a CDMA phone.
@@ -443,12 +429,6 @@ RilObject.prototype = {
      * waiting for REQUEST_VOICE_RADIO_TECH
      */
     this._waitingRadioTech = false;
-
-    /**
-     * ICC status. Keeps a reference of the data response to the
-     * getICCStatus request.
-     */
-    this.iccStatus = null;
 
     /**
      * Card state
@@ -1655,7 +1635,7 @@ RilObject.prototype = {
       this.sendChromeMessage(options);
     }).bind(this, options);
 
-    let isRadioOff = (this.radioState === GECKO_RADIOSTATE_OFF);
+    let isRadioOff = (this.radioState === GECKO_RADIOSTATE_DISABLED);
 
     if (options.isEmergency) {
       if (isRadioOff) {
@@ -2389,9 +2369,15 @@ RilObject.prototype = {
       let request = options.attach ? RIL_REQUEST_GPRS_ATTACH :
                                      RIL_REQUEST_GPRS_DETACH;
       this.context.Buf.simpleRequest(request, options);
+      return;
     } else if (RILQUIRKS_SUBSCRIPTION_CONTROL && options.attach) {
       this.context.Buf.simpleRequest(REQUEST_SET_DATA_SUBSCRIPTION, options);
+      return;
     }
+
+    // We don't really send a request to rild, so instantly reply success to
+    // RadioInterfaceLayer.
+    this.sendChromeMessage(options);
   },
 
   /**
@@ -2402,206 +2388,9 @@ RilObject.prototype = {
                                    {callback: callback});
   },
 
-  /**
-   * Parse the dial number to extract its mmi code part.
-   *
-   * @param number
-   *        Phone number to be parsed
-   */
-  parseMMIFromDialNumber: function(options) {
-    // We don't have to parse mmi in cdma.
-    if (!this._isCdma) {
-      options.mmi = this._parseMMI(options.number);
-    }
-    this.sendChromeMessage(options);
-  },
-
-  /**
-   * Helper to parse MMI/USSD string. TS.22.030 Figure 3.5.3.2.
-   */
-  _parseMMI: function(mmiString) {
-    if (!mmiString || !mmiString.length) {
-      return null;
-    }
-
-    let matches = this._getMMIRegExp().exec(mmiString);
-    if (matches) {
-      return {
-        fullMMI: matches[MMI_MATCH_GROUP_FULL_MMI],
-        procedure: matches[MMI_MATCH_GROUP_PROCEDURE],
-        serviceCode: matches[MMI_MATCH_GROUP_SERVICE_CODE],
-        sia: matches[MMI_MATCH_GROUP_SIA],
-        sib: matches[MMI_MATCH_GROUP_SIB],
-        sic: matches[MMI_MATCH_GROUP_SIC],
-        pwd: matches[MMI_MATCH_GROUP_PWD_CONFIRM],
-        dialNumber: matches[MMI_MATCH_GROUP_DIALING_NUMBER]
-      };
-    }
-
-    if (this._isPoundString(mmiString) || this._isMMIShortString(mmiString)) {
-      return {
-        fullMMI: mmiString
-      };
-    }
-
-    return null;
-  },
-
-  /**
-   * Build the regex to parse MMI string.
-   *
-   * The resulting groups after matching will be:
-   *    1 = full MMI string that might be used as a USSD request.
-   *    2 = MMI procedure.
-   *    3 = Service code.
-   *    4 = SIA.
-   *    5 = SIB.
-   *    6 = SIC.
-   *    7 = Password registration.
-   *    8 = Dialing number.
-   *
-   * @see TS.22.030 Figure 3.5.3.2.
-   */
-  _buildMMIRegExp: function() {
-    // The general structure of the codes is as follows:
-    //    - Activation (*SC*SI#).
-    //    - Deactivation (#SC*SI#).
-    //    - Interrogation (*#SC*SI#).
-    //    - Registration (**SC*SI#).
-    //    - Erasure (##SC*SI#).
-    //
-    // where SC = Service Code (2 or 3 digits) and SI = Supplementary Info
-    // (variable length).
-
-    // MMI procedure, which could be *, #, *#, **, ##
-    let procedure = "(\\*[*#]?|##?)";
-
-    // MMI Service code, which is a 2 or 3 digits that uniquely specifies the
-    // Supplementary Service associated with the MMI code.
-    let serviceCode = "(\\d{2,3})";
-
-    // MMI Supplementary Information SIA, SIB and SIC. SIA may comprise e.g. a
-    // PIN code or Directory Number, SIB may be used to specify the tele or
-    // bearer service and SIC to specify the value of the "No Reply Condition
-    // Timer". Where a particular service request does not require any SI,
-    // "*SI" is not entered. The use of SIA, SIB and SIC is optional and shall
-    // be entered in any of the following formats:
-    //    - *SIA*SIB*SIC#
-    //    - *SIA*SIB#
-    //    - *SIA**SIC#
-    //    - *SIA#
-    //    - **SIB*SIC#
-    //    - ***SIC#
-    //
-    // Also catch the additional NEW_PASSWORD for the case of a password
-    // registration procedure. Ex:
-    //    - *  03 * ZZ * OLD_PASSWORD * NEW_PASSWORD * NEW_PASSWORD #
-    //    - ** 03 * ZZ * OLD_PASSWORD * NEW_PASSWORD * NEW_PASSWORD #
-    //    - *  03 **     OLD_PASSWORD * NEW_PASSWORD * NEW_PASSWORD #
-    //    - ** 03 **     OLD_PASSWORD * NEW_PASSWORD * NEW_PASSWORD #
-    let si = "\\*([^*#]*)";
-    let allSi = "";
-    for (let i = 0; i < 4; ++i) {
-      allSi = "(?:" + si + allSi + ")?";
-    }
-
-    let fullmmi = "(" + procedure + serviceCode + allSi + "#)";
-
-    // dial string after the #.
-    let dialString = "([^#]*)";
-
-    return new RegExp(fullmmi + dialString);
-  },
-
-  /**
-   * Provide the regex to parse MMI string.
-   */
-  _getMMIRegExp: function() {
-    if (!this._mmiRegExp) {
-      this._mmiRegExp = this._buildMMIRegExp();
-    }
-
-    return this._mmiRegExp;
-  },
-
-  /**
-   * Helper to parse # string. TS.22.030 Figure 3.5.3.2.
-   */
-  _isPoundString: function(mmiString) {
-    return (mmiString.charAt(mmiString.length - 1) === MMI_END_OF_USSD);
-  },
-
-  /**
-   * Helper to parse short string. TS.22.030 Figure 3.5.3.2.
-   */
-  _isMMIShortString: function(mmiString) {
-    if (mmiString.length > 2) {
-      return false;
-    }
-
-    // TODO: Should take care of checking if the string is an emergency number
-    // in Bug 889737. See Bug 1023141 for more background.
-
-    // In a call case.
-    if (Object.getOwnPropertyNames(this.currentCalls).length > 0) {
-      return true;
-    }
-
-    // Input string is 2 digits starting with a "1"
-    if ((mmiString.length == 2) && (mmiString.charAt(0) === '1')) {
-      return false;
-    }
-
-    return true;
-  },
-
-  _serviceCodeToKeyString: function(serviceCode) {
-    switch (serviceCode) {
-      case MMI_SC_CFU:
-      case MMI_SC_CF_BUSY:
-      case MMI_SC_CF_NO_REPLY:
-      case MMI_SC_CF_NOT_REACHABLE:
-      case MMI_SC_CF_ALL:
-      case MMI_SC_CF_ALL_CONDITIONAL:
-        return MMI_KS_SC_CALL_FORWARDING;
-      case MMI_SC_PIN:
-        return MMI_KS_SC_PIN;
-      case MMI_SC_PIN2:
-        return MMI_KS_SC_PIN2;
-      case MMI_SC_PUK:
-        return MMI_KS_SC_PUK;
-      case MMI_SC_PUK2:
-        return MMI_KS_SC_PUK2;
-      case MMI_SC_IMEI:
-        return MMI_KS_SC_IMEI;
-      case MMI_SC_CLIP:
-        return MMI_KS_SC_CLIP;
-      case MMI_SC_CLIR:
-        return MMI_KS_SC_CLIR;
-      case MMI_SC_BAOC:
-      case MMI_SC_BAOIC:
-      case MMI_SC_BAOICxH:
-      case MMI_SC_BAIC:
-      case MMI_SC_BAICr:
-      case MMI_SC_BA_ALL:
-      case MMI_SC_BA_MO:
-      case MMI_SC_BA_MT:
-        return MMI_KS_SC_CALL_BARRING;
-      case MMI_SC_CALL_WAITING:
-        return MMI_SC_CALL_WAITING;
-      default:
-        return MMI_KS_SC_USSD;
-    }
-  },
-
   sendMMI: function(options) {
     if (DEBUG) {
       this.context.debug("SendMMI " + JSON.stringify(options));
-    }
-
-    let mmi = this._parseMMI(options.mmi);
-    if (DEBUG) {
-      this.context.debug("MMI " + JSON.stringify(mmi));
     }
 
     let _sendMMIError = (function(errorMsg) {
@@ -2611,13 +2400,11 @@ RilObject.prototype = {
     }).bind(this);
 
     // It's neither a valid mmi code nor an ongoing ussd.
+    let mmi = options.mmi;
     if (!mmi && !this._ussdSession) {
       _sendMMIError(MMI_ERROR_KS_ERROR);
       return;
     }
-
-    options.mmiServiceCode = mmi ?
-      this._serviceCodeToKeyString(mmi.serviceCode) : MMI_KS_SC_USSD;
 
     function _isValidPINPUKRequest() {
       // The only allowed MMI procedure for ICC PIN, PIN2, PUK and PUK2 handling
@@ -2648,7 +2435,7 @@ RilObject.prototype = {
     }
 
     let _isRadioAvailable = (function() {
-      if (this.radioState !== GECKO_RADIOSTATE_READY) {
+      if (this.radioState !== GECKO_RADIOSTATE_ENABLED) {
         _sendMMIError(GECKO_ERROR_RADIO_NOT_AVAILABLE);
         return false;
       }
@@ -3091,7 +2878,8 @@ RilObject.prototype = {
         // ("Yes/No") command with command qualifier set to "Yes/No", it shall
         // supply the value '01' when the answer is "positive" and the value
         // '00' when the answer is "negative" in the Text string data object.
-        text = response.isYesNo ? 0x01 : 0x00;
+        text = response.isYesNo ? String.fromCharCode(0x01)
+                                : String.fromCharCode(0x00);
       } else {
         text = response.input;
       }
@@ -3453,30 +3241,9 @@ RilObject.prototype = {
       return;
     }
 
-    this.iccStatus = iccStatus;
-    let newCardState;
-    let index = this._isCdma ? iccStatus.cdmaSubscriptionAppIndex :
-                               iccStatus.gsmUmtsSubscriptionAppIndex;
-
-    if (RILQUIRKS_SUBSCRIPTION_CONTROL && index === -1) {
-      // Should enable uicc scription if index is not valid.
-      if (this.radioState !== GECKO_RADIOSTATE_READY) {
-        // Note: setUiccSubscription works abnormally when RADIO is OFF,
-        // which causes SMS function broken in Flame.
-        // See bug 1008557 for detailed info.
-        return;
-      }
-
-      for (let i = 0; i < iccStatus.apps.length; i++) {
-        this.setUiccSubscription({appIndex: i, enabled: true});
-      }
-      return;
-    }
-
-    // When |iccStatus.cardState| is not CARD_STATE_PRESENT or have incorrect
-    // app information, we can not get iccId. So treat ICC as undetected.
-    let app = iccStatus.apps[index];
-    if (iccStatus.cardState !== CARD_STATE_PRESENT || !app) {
+    // When |iccStatus.cardState| is not CARD_STATE_PRESENT, set cardState to
+    // undetected.
+    if (iccStatus.cardState !== CARD_STATE_PRESENT) {
       if (this.cardState !== GECKO_CARDSTATE_UNDETECTED) {
         this.operator = null;
         // We should send |cardstatechange| before |iccinfochange|, otherwise we
@@ -3491,45 +3258,72 @@ RilObject.prototype = {
       return;
     }
 
+    if (RILQUIRKS_SUBSCRIPTION_CONTROL) {
+      // All appIndex is -1 means the subscription is not activated yet.
+      // Note that we don't support "ims" for now, so we don't take it into
+      // account.
+      let neetToActivate = iccStatus.cdmaSubscriptionAppIndex === -1 &&
+                           iccStatus.gsmUmtsSubscriptionAppIndex === -1;
+      if (neetToActivate &&
+          // Note: setUiccSubscription works abnormally when RADIO is OFF,
+          // which causes SMS function broken in Flame.
+          // See bug 1008557 for detailed info.
+          this.radioState === GECKO_RADIOSTATE_ENABLED) {
+        for (let i = 0; i < iccStatus.apps.length; i++) {
+          this.setUiccSubscription({appIndex: i, enabled: true});
+        }
+      }
+    }
+
+    let newCardState;
+    let index = this._isCdma ? iccStatus.cdmaSubscriptionAppIndex
+                             : iccStatus.gsmUmtsSubscriptionAppIndex;
+    let app = iccStatus.apps[index];
+    if (app) {
+      // fetchICCRecords will need to read aid, so read aid here.
+      this.aid = app.aid;
+      this.appType = app.app_type;
+      this.iccInfo.iccType = GECKO_CARD_TYPE[this.appType];
+
+      switch (app.app_state) {
+        case CARD_APPSTATE_ILLEGAL:
+          newCardState = GECKO_CARDSTATE_ILLEGAL;
+          break;
+        case CARD_APPSTATE_PIN:
+          newCardState = GECKO_CARDSTATE_PIN_REQUIRED;
+          break;
+        case CARD_APPSTATE_PUK:
+          newCardState = GECKO_CARDSTATE_PUK_REQUIRED;
+          break;
+        case CARD_APPSTATE_SUBSCRIPTION_PERSO:
+          newCardState = PERSONSUBSTATE[app.perso_substate];
+          break;
+        case CARD_APPSTATE_READY:
+          newCardState = GECKO_CARDSTATE_READY;
+          break;
+        case CARD_APPSTATE_UNKNOWN:
+        case CARD_APPSTATE_DETECTED:
+          // Fall through.
+        default:
+          newCardState = GECKO_CARDSTATE_UNKNOWN;
+      }
+
+      let pin1State = app.pin1_replaced ? iccStatus.universalPINState :
+                                          app.pin1;
+      if (pin1State === CARD_PINSTATE_ENABLED_PERM_BLOCKED) {
+        newCardState = GECKO_CARDSTATE_PERMANENT_BLOCKED;
+      }
+    } else {
+      // Having incorrect app information, set card state to unknown.
+      newCardState = GECKO_CARDSTATE_UNKNOWN;
+    }
+
     let ICCRecordHelper = this.context.ICCRecordHelper;
-    // fetchICCRecords will need to read aid, so read aid here.
-    this.aid = app.aid;
-    this.appType = app.app_type;
-    this.iccInfo.iccType = GECKO_CARD_TYPE[this.appType];
     // Try to get iccId only when cardState left GECKO_CARDSTATE_UNDETECTED.
     if (iccStatus.cardState === CARD_STATE_PRESENT &&
         (this.cardState === GECKO_CARDSTATE_UNINITIALIZED ||
          this.cardState === GECKO_CARDSTATE_UNDETECTED)) {
       ICCRecordHelper.readICCID();
-    }
-
-    switch (app.app_state) {
-      case CARD_APPSTATE_ILLEGAL:
-        newCardState = GECKO_CARDSTATE_ILLEGAL;
-        break;
-      case CARD_APPSTATE_PIN:
-        newCardState = GECKO_CARDSTATE_PIN_REQUIRED;
-        break;
-      case CARD_APPSTATE_PUK:
-        newCardState = GECKO_CARDSTATE_PUK_REQUIRED;
-        break;
-      case CARD_APPSTATE_SUBSCRIPTION_PERSO:
-        newCardState = PERSONSUBSTATE[app.perso_substate];
-        break;
-      case CARD_APPSTATE_READY:
-        newCardState = GECKO_CARDSTATE_READY;
-        break;
-      case CARD_APPSTATE_UNKNOWN:
-      case CARD_APPSTATE_DETECTED:
-        // Fall through.
-      default:
-        newCardState = GECKO_CARDSTATE_UNKNOWN;
-    }
-
-    let pin1State = app.pin1_replaced ? iccStatus.universalPINState :
-                                        app.pin1;
-    if (pin1State === CARD_PINSTATE_ENABLED_PERM_BLOCKED) {
-      newCardState = GECKO_CARDSTATE_PERMANENT_BLOCKED;
     }
 
     if (this.cardState == newCardState) {
@@ -3569,36 +3363,34 @@ RilObject.prototype = {
       return;
     }
 
-    let mmiServiceCode = options.mmiServiceCode;
+    let serviceCode = options.mmi.serviceCode;
 
     if (options.success) {
-      switch (mmiServiceCode) {
-        case MMI_KS_SC_PIN:
+      switch (serviceCode) {
+        case MMI_SC_PIN:
           options.statusMessage = MMI_SM_KS_PIN_CHANGED;
           break;
-        case MMI_KS_SC_PIN2:
+        case MMI_SC_PIN2:
           options.statusMessage = MMI_SM_KS_PIN2_CHANGED;
           break;
-        case MMI_KS_SC_PUK:
+        case MMI_SC_PUK:
           options.statusMessage = MMI_SM_KS_PIN_UNBLOCKED;
           break;
-        case MMI_KS_SC_PUK2:
+        case MMI_SC_PUK2:
           options.statusMessage = MMI_SM_KS_PIN2_UNBLOCKED;
           break;
       }
     } else {
       if (options.retryCount <= 0) {
-        if (mmiServiceCode === MMI_KS_SC_PUK) {
+        if (serviceCode === MMI_SC_PUK) {
           options.errorMsg = MMI_ERROR_KS_SIM_BLOCKED;
-        } else if (mmiServiceCode === MMI_KS_SC_PIN) {
+        } else if (serviceCode === MMI_SC_PIN) {
           options.errorMsg = MMI_ERROR_KS_NEEDS_PUK;
         }
       } else {
-        if (mmiServiceCode === MMI_KS_SC_PIN ||
-            mmiServiceCode === MMI_KS_SC_PIN2) {
+        if (serviceCode === MMI_SC_PIN || serviceCode === MMI_SC_PIN2) {
           options.errorMsg = MMI_ERROR_KS_BAD_PIN;
-        } else if (mmiServiceCode === MMI_KS_SC_PUK ||
-                   mmiServiceCode === MMI_KS_SC_PUK2) {
+        } else if (serviceCode === MMI_SC_PUK || serviceCode === MMI_SC_PUK2) {
           options.errorMsg = MMI_ERROR_KS_BAD_PUK;
         }
         if (options.retryCount !== undefined) {
@@ -5848,7 +5640,11 @@ RilObject.prototype[REQUEST_SIM_IO] = function REQUEST_SIM_IO(length, options) {
   let Buf = this.context.Buf;
   options.sw1 = Buf.readInt32();
   options.sw2 = Buf.readInt32();
-  if (options.sw1 != ICC_STATUS_NORMAL_ENDING) {
+  // See 3GPP TS 11.11, clause 9.4.1 for opetation success results.
+  if (options.sw1 !== ICC_STATUS_NORMAL_ENDING &&
+      options.sw1 !== ICC_STATUS_NORMAL_ENDING_WITH_EXTRA &&
+      options.sw1 !== ICC_STATUS_WITH_SIM_DATA &&
+      options.sw1 !== ICC_STATUS_WITH_RESPONSE_DATA) {
     ICCIOHelper.processICCIOError(options);
     return;
   }
@@ -6019,7 +5815,7 @@ RilObject.prototype[REQUEST_QUERY_CALL_FORWARD_STATUS] =
   this.sendChromeMessage(options);
 };
 RilObject.prototype[REQUEST_SET_CALL_FORWARD] =
-  function REQUEST_SET_CALL_FORWARD(length, options) {
+    function REQUEST_SET_CALL_FORWARD(length, options) {
   options.success = (options.rilRequestError === 0);
   if (!options.success) {
     options.errorMsg = RIL_ERROR_TO_GECKO_ERROR[options.rilRequestError];
@@ -6802,11 +6598,11 @@ RilObject.prototype[UNSOLICITED_RESPONSE_RADIO_STATE_CHANGED] = function UNSOLIC
   let radioState = this.context.Buf.readInt32();
   let newState;
   if (radioState == RADIO_STATE_UNAVAILABLE) {
-    newState = GECKO_RADIOSTATE_UNAVAILABLE;
+    newState = GECKO_RADIOSTATE_UNKNOWN;
   } else if (radioState == RADIO_STATE_OFF) {
-    newState = GECKO_RADIOSTATE_OFF;
+    newState = GECKO_RADIOSTATE_DISABLED;
   } else {
-    newState = GECKO_RADIOSTATE_READY;
+    newState = GECKO_RADIOSTATE_ENABLED;
   }
 
   if (DEBUG) {
@@ -6841,9 +6637,9 @@ RilObject.prototype[UNSOLICITED_RESPONSE_RADIO_STATE_CHANGED] = function UNSOLIC
     break;
   }
 
-  if ((this.radioState == GECKO_RADIOSTATE_UNAVAILABLE ||
-       this.radioState == GECKO_RADIOSTATE_OFF) &&
-       newState == GECKO_RADIOSTATE_READY) {
+  if ((this.radioState == GECKO_RADIOSTATE_UNKNOWN ||
+       this.radioState == GECKO_RADIOSTATE_DISABLED) &&
+       newState == GECKO_RADIOSTATE_ENABLED) {
     // The radio became available, let's get its info.
     if (!this._waitingRadioTech) {
       if (this._isCdma) {
@@ -7088,7 +6884,11 @@ RilObject.prototype[UNSOLICITED_CDMA_CALL_WAITING] = function UNSOLICITED_CDMA_C
                           waitingCall: call});
 };
 RilObject.prototype[UNSOLICITED_CDMA_OTA_PROVISION_STATUS] = function UNSOLICITED_CDMA_OTA_PROVISION_STATUS() {
-  let status = this.context.Buf.readInt32List()[0];
+  let status =
+    CDMA_OTA_PROVISION_STATUS_TO_GECKO[this.context.Buf.readInt32List()[0]];
+  if (!status) {
+    return;
+  }
   this.sendChromeMessage({rilMessageType: "otastatuschange",
                           status: status});
 };
@@ -12539,17 +12339,12 @@ ICCFileHelperObject.prototype = {
    * @return The pathId or null in case of an error or invalid input.
    */
   getEFPath: function(fileId) {
-    let appType = this.context.RIL.appType;
-    if (appType == null) {
-      return null;
-    }
-
     let path = this.getCommonEFPath(fileId);
     if (path) {
       return path;
     }
 
-    switch (appType) {
+    switch (this.context.RIL.appType) {
       case CARD_APPTYPE_SIM:
         return this.getSimEFPath(fileId);
       case CARD_APPTYPE_USIM:
@@ -12668,6 +12463,7 @@ ICCIOHelperObject.prototype = {
     options.callback = function callback(options) {
       options.callback = cb;
       options.command = ICC_COMMAND_READ_BINARY;
+      options.p2 = 0x00;
       options.p3 = options.fileSize;
       this.context.RIL.iccIO(options);
     }.bind(this);
@@ -12688,8 +12484,22 @@ ICCIOHelperObject.prototype = {
       throw new Error("Unknown pathId for " + options.fileId.toString(16));
     }
     options.p1 = 0; // For GET_RESPONSE, p1 = 0
-    options.p2 = 0; // For GET_RESPONSE, p2 = 0
-    options.p3 = GET_RESPONSE_EF_SIZE_BYTES;
+    switch (this.context.RIL.appType) {
+      case CARD_APPTYPE_USIM:
+        options.p2 = GET_RESPONSE_FCP_TEMPLATE;
+        options.p3 = 0x00;
+        break;
+      // For RUIM, CSIM and ISIM, cf bug 955946: keep the old behavior
+      case CARD_APPTYPE_RUIM:
+      case CARD_APPTYPE_CSIM:
+      case CARD_APPTYPE_ISIM:
+      // For SIM, this is what we want
+      case CARD_APPTYPE_SIM:
+      default:
+        options.p2 = 0x00;
+        options.p3 = GET_RESPONSE_EF_SIZE_BYTES;
+        break;
+    }
     this.context.RIL.iccIO(options);
   },
 
@@ -13586,10 +13396,12 @@ SimRecordHelperObject.prototype = {
 
       let numInstances = GsmPDUHelper.readHexOctet();
 
-      // Correct data length should be 9n+1 or 9n+2. See TS 31.102, sub-clause
-      // 4.6.1.1.
-      if (octetLen != (9 * numInstances + 1) ||
-          octetLen != (9 * numInstances + 2)) {
+      // Data length is defined as 9n+1 or 9n+2. See TS 31.102, sub-clause
+      // 4.6.1.1. However, it's likely to have padding appended so we have a
+      // rather loose check.
+      if (octetLen < (9 * numInstances + 1)) {
+        Buf.seekIncoming((octetLen - 1) * Buf.PDU_HEX_OCTET_SIZE);
+        Buf.readStringDelimiter(strLen);
         if (onerror) {
           onerror();
         }
@@ -13610,6 +13422,7 @@ SimRecordHelperObject.prototype = {
                    GsmPDUHelper.readHexOctet()
         };
       }
+      Buf.seekIncoming((octetLen - 9 * numInstances - 1) * Buf.PDU_HEX_OCTET_SIZE);
       Buf.readStringDelimiter(strLen);
 
       let instances = [];
@@ -13669,6 +13482,8 @@ SimRecordHelperObject.prototype = {
       if (octetLen < offset + dataLen) {
         // Data length is not enough. See TS 31.102, clause 4.6.1.1, the
         // paragraph "Bytes 8 and 9: Length of Image Instance Data."
+        Buf.seekIncoming(octetLen * Buf.PDU_HEX_OCTET_SIZE);
+        Buf.readStringDelimiter(strLen);
         if (onerror) {
           onerror();
         }
@@ -14699,7 +14514,7 @@ ICCUtilsHelperObject.prototype = {
       return null;
     }
 
-    if (!iccInfoPriv.OPL) {
+    if (!this.isICCServiceAvailable("OPL")) {
       // When OPL is not present:
       // According to 3GPP TS 31.102 Sec. 4.2.58 and 3GPP TS 51.011 Sec. 10.3.41,
       // If EF_OPL is not present, the first record in this EF is used for the

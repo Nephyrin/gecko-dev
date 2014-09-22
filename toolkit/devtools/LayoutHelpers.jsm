@@ -15,11 +15,13 @@ XPCOMUtils.defineLazyModuleGetter(this, "Services",
 
 this.EXPORTED_SYMBOLS = ["LayoutHelpers"];
 
-this.LayoutHelpers = LayoutHelpers = function(aTopLevelWindow) {
+let LayoutHelpers = function(aTopLevelWindow) {
   this._topDocShell = aTopLevelWindow.QueryInterface(Ci.nsIInterfaceRequestor)
                                      .getInterface(Ci.nsIWebNavigation)
                                      .QueryInterface(Ci.nsIDocShell);
 };
+
+this.LayoutHelpers = LayoutHelpers;
 
 LayoutHelpers.prototype = {
 
@@ -465,7 +467,7 @@ LayoutHelpers.prototype = {
     }
 
     // Also take scrolled containers into account
-    let el = node;
+    el = node;
     while (el && el.parentNode) {
       if (el.scrollTop) {
         offsetTop -= el.scrollTop;

@@ -1259,6 +1259,7 @@ void MediaPipelineTransmit::PipelineListener::ProcessVideoChunk(
         MOZ_ASSERT(PR_FALSE);
     }
     conduit->SendVideoFrame(yuv, buffer_size, size.width, size.height, mozilla::kVideoI420, 0);
+    free(yuv);
   } else {
     MOZ_MTLOG(ML_ERROR, "Unsupported video format");
     MOZ_ASSERT(PR_FALSE);
@@ -1323,7 +1324,7 @@ static void AddTrackAndListener(MediaStream* source,
       // to the "start" time for the track
       segment_->AppendNullData(current_ticks);
       mStream->AsSourceStream()->AddTrack(track_id_, track_rate_,
-                                          current_ticks, segment_);
+                                          current_ticks, segment_.forget());
       // AdvanceKnownTracksTicksTime(HEAT_DEATH_OF_UNIVERSE) means that in
       // theory per the API, we can't add more tracks before that
       // time. However, the impl actually allows it, and it avoids a whole
@@ -1338,7 +1339,7 @@ static void AddTrackAndListener(MediaStream* source,
    private:
     TrackID track_id_;
     TrackRate track_rate_;
-    MediaSegment* segment_;
+    nsAutoPtr<MediaSegment> segment_;
     nsRefPtr<MediaStreamListener> listener_;
     const RefPtr<TrackAddedCallback> completed_;
   };

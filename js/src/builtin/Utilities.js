@@ -35,8 +35,6 @@ Object.defineProperty = null; // See bug 988416.
 // Object) below. Setting `var std_Array = Array;`, for instance, would cause
 // the entire Array constructor, including its prototype and methods, to be
 // cloned into content compartments.
-var std_isFinite = isFinite;
-var std_isNaN = isNaN;
 var std_Array_indexOf = ArrayIndexOf;
 var std_Array_iterator = Array.prototype.iterator;
 var std_Array_join = Array.prototype.join;
@@ -156,6 +154,11 @@ function ToLength(v) {
 
     // Math.pow(2, 53) - 1 = 0x1fffffffffffff
     return v < 0x1fffffffffffff ? v : 0x1fffffffffffff;
+}
+
+/* Spec: ECMAScript Draft, 6 edition Aug 24, 2014, 7.2.4 */
+function SameValueZero(x, y) {
+    return x !== x && y !== y || x === y
 }
 
 /********** Testing code **********/

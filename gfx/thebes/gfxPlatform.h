@@ -31,7 +31,6 @@ class gfxFontGroup;
 struct gfxFontStyle;
 class gfxUserFontSet;
 class gfxFontEntry;
-class gfxProxyFontEntry;
 class gfxPlatformFontList;
 class gfxTextRun;
 class nsIURI;
@@ -237,6 +236,16 @@ public:
                               int32_t aStride, mozilla::gfx::SurfaceFormat aFormat);
 
     /**
+     * Returns true if rendering to data surfaces produces the same results as
+     * rendering to offscreen surfaces on this platform, making it safe to
+     * render content to data surfaces. This is generally false on platforms
+     * which use different backends for each type of DrawTarget.
+     */
+    virtual bool CanRenderContentToDataSurface() const {
+      return false;
+    }
+
+    /**
      * Returns true if we should use Azure to render content with aTarget. For
      * example, it is possible that we are using Direct2D for rendering and thus
      * using Azure. But we want to render to a CairoDrawTarget, in which case
@@ -251,6 +260,8 @@ public:
 
     virtual bool UseAcceleratedSkiaCanvas();
     virtual void InitializeSkiaCacheLimits();
+
+    virtual bool UseTiling() { return gfxPrefs::LayersTilesEnabled(); }
 
     void GetAzureBackendInfo(mozilla::widget::InfoObject &aObj) {
       aObj.DefineProperty("AzureCanvasBackend", GetBackendName(mPreferredCanvasBackend));
@@ -318,8 +329,10 @@ public:
      * Ownership of the returned gfxFontEntry is passed to the caller,
      * who must either AddRef() or delete.
      */
-    virtual gfxFontEntry* LookupLocalFont(const gfxProxyFontEntry *aProxyEntry,
-                                          const nsAString& aFontName)
+    virtual gfxFontEntry* LookupLocalFont(const nsAString& aFontName,
+                                          uint16_t aWeight,
+                                          int16_t aStretch,
+                                          bool aItalic)
     { return nullptr; }
 
     /**
@@ -330,8 +343,11 @@ public:
      * Ownership of the returned gfxFontEntry is passed to the caller,
      * who must either AddRef() or delete.
      */
-    virtual gfxFontEntry* MakePlatformFont(const gfxProxyFontEntry *aProxyEntry,
-                                           const uint8_t *aFontData,
+    virtual gfxFontEntry* MakePlatformFont(const nsAString& aFontName,
+                                           uint16_t aWeight,
+                                           int16_t aStretch,
+                                           bool aItalic,
+                                           const uint8_t* aFontData,
                                            uint32_t aLength);
 
     /**
@@ -541,6 +557,7 @@ public:
 
     static bool UsesOffMainThreadCompositing();
 
+    bool HasEnoughTotalSystemMemoryForSkiaGL();
 protected:
     gfxPlatform();
     virtual ~gfxPlatform();
@@ -609,6 +626,8 @@ protected:
 
     // max number of entries in word cache
     int32_t mWordCacheMaxEntries;
+
+    uint32_t mTotalSystemMemory;
 
 private:
     /**

@@ -23,64 +23,28 @@ __all__ = [
   "dumpLeakLog",
   "isURL",
   "processLeakLog",
-  "getDebuggerInfo",
-  "DEBUGGER_INFO",
   "replaceBackSlashes",
   'KeyValueParseError',
   'parseKeyValue',
   'systemMemory',
   'environment',
   'dumpScreen',
-  "ShutdownLeaks"
+  "ShutdownLeaks",
+  "setAutomationLog",
   ]
 
-# Map of debugging programs to information about them, like default arguments
-# and whether or not they are interactive.
-DEBUGGER_INFO = {
-  # gdb requires that you supply the '--args' flag in order to pass arguments
-  # after the executable name to the executable.
-  "gdb": {
-    "interactive": True,
-    "args": "-q --args"
-  },
+log = logging.getLogger()
+def resetGlobalLog():
+  while log.handlers:
+    log.removeHandler(log.handlers[0])
+  handler = logging.StreamHandler(sys.stdout)
+  log.setLevel(logging.INFO)
+  log.addHandler(handler)
+resetGlobalLog()
 
-  "cgdb": {
-    "interactive": True,
-    "args": "-q --args"
-  },
-
-  "lldb": {
-    "interactive": True,
-    "args": "--",
-    "requiresEscapedArgs": True
-  },
-
-  # Visual Studio Debugger Support
-  "devenv.exe": {
-    "interactive": True,
-    "args": "-debugexe"
-  },
-
-  # Visual C++ Express Debugger Support
-  "wdexpress.exe": {
-    "interactive": True,
-    "args": "-debugexe"
-  },
-
-  # valgrind doesn't explain much about leaks unless you set the
-  # '--leak-check=full' flag. But there are a lot of objects that are
-  # semi-deliberately leaked, so we set '--show-possibly-lost=no' to avoid
-  # uninteresting output from those objects. We set '--smc-check==all-non-file'
-  # and '--vex-iropt-register-updates=allregs-at-mem-access' so that valgrind
-  # deals properly with JIT'd JavaScript code.
-  "valgrind": {
-    "interactive": False,
-    "args": " ".join(["--leak-check=full",
-                      "--show-possibly-lost=no",
-                      "--smc-check=all-non-file",
-                      "--vex-iropt-register-updates=allregs-at-mem-access"])
-  }
-}
+def setAutomationLog(alt_logger):
+  global log
+  log = alt_logger
 
 class ZipFileReader(object):
   """
@@ -143,8 +107,6 @@ class ZipFileReader(object):
 
     for name in self._zipfile.namelist():
       self._extractname(name, path)
-
-log = logging.getLogger()
 
 def isURL(thing):
   """Return True if |thing| looks like a URL."""
@@ -212,58 +174,6 @@ def addCommonOptions(parser, defaults={}):
                     help = "prevents the test harness from redirecting "
                         "stdout and stderr for interactive debuggers")
 
-def getFullPath(directory, path):
-  "Get an absolute path relative to 'directory'."
-  return os.path.normpath(os.path.join(directory, os.path.expanduser(path)))
-
-def searchPath(directory, path):
-  "Go one step beyond getFullPath and try the various folders in PATH"
-  # Try looking in the current working directory first.
-  newpath = getFullPath(directory, path)
-  if os.path.isfile(newpath):
-    return newpath
-
-  # At this point we have to fail if a directory was given (to prevent cases
-  # like './gdb' from matching '/usr/bin/./gdb').
-  if not os.path.dirname(path):
-    for dir in os.environ['PATH'].split(os.pathsep):
-      newpath = os.path.join(dir, path)
-      if os.path.isfile(newpath):
-        return newpath
-  return None
-
-def getDebuggerInfo(directory, debugger, debuggerArgs, debuggerInteractive = False):
-
-  debuggerInfo = None
-
-  if debugger:
-    debuggerPath = searchPath(directory, debugger)
-    if not debuggerPath:
-      print "Error: Path %s doesn't exist." % debugger
-      sys.exit(1)
-
-    debuggerName = os.path.basename(debuggerPath).lower()
-
-    def getDebuggerInfo(type, default):
-      if debuggerName in DEBUGGER_INFO and type in DEBUGGER_INFO[debuggerName]:
-        return DEBUGGER_INFO[debuggerName][type]
-      return default
-
-    debuggerInfo = {
-      "path": debuggerPath,
-      "interactive" : getDebuggerInfo("interactive", False),
-      "args": getDebuggerInfo("args", "").split(),
-      "requiresEscapedArgs": getDebuggerInfo("requiresEscapedArgs", False)
-    }
-
-    if debuggerArgs:
-      debuggerInfo["args"] = debuggerArgs.split()
-    if debuggerInteractive:
-      debuggerInfo["interactive"] = debuggerInteractive
-
-  return debuggerInfo
-
-
 def dumpLeakLog(leakLogFile, filter = False):
   """Process the leak log, without parsing it.
 
@@ -297,13 +207,10 @@ def processSingleLeakFile(leakLogFileName, processType, leakThreshold):
                       r"(?P<size>-?\d+)\s+(?P<bytesLeaked>-?\d+)\s+"
                       r"-?\d+\s+(?P<numLeaked>-?\d+)")
 
-  processString = ""
-  if processType:
-    # eg 'plugin'
-    processString = " %s process:" % processType
-
+  processString = " %s process:" % processType
   crashedOnPurpose = False
   totalBytesLeaked = None
+  logAsWarning = False
   leakAnalysis = []
   leakedObjectNames = []
   with open(leakLogFileName, "r") as leaks:
@@ -329,12 +236,18 @@ def processSingleLeakFile(leakLogFileName, processType, leakThreshold):
       if size < 0 or bytesLeaked < 0 or numLeaked < 0:
         leakAnalysis.append("TEST-UNEXPECTED-FAIL | leakcheck |%s negative leaks caught!"
                             % processString)
+        logAsWarning = True
         continue
       if name != "TOTAL" and numLeaked != 0:
         leakedObjectNames.append(name)
         leakAnalysis.append("TEST-INFO | leakcheck |%s leaked %d %s (%s bytes)"
                             % (processString, numLeaked, name, bytesLeaked))
-  log.info('\n'.join(leakAnalysis))
+  if logAsWarning:
+    log.warning('\n'.join(leakAnalysis))
+  else:
+    log.info('\n'.join(leakAnalysis))
+
+  logAsWarning = False
 
   if totalBytesLeaked is None:
     # We didn't see a line with name 'TOTAL'
@@ -354,11 +267,12 @@ def processSingleLeakFile(leakLogFileName, processType, leakThreshold):
 
   # totalBytesLeaked was seen and is non-zero.
   if totalBytesLeaked > leakThreshold:
-    if processType and processType == "tab":
+    if processType == "tab":
       # For now, ignore tab process leaks. See bug 1051230.
       log.info("WARNING | leakcheck | ignoring leaks in tab process")
       prefix = "WARNING"
     else:
+      logAsWarning = True
       # Fail the run if we're over the threshold (which defaults to 0)
       prefix = "TEST-UNEXPECTED-FAIL"
   else:
@@ -370,8 +284,13 @@ def processSingleLeakFile(leakLogFileName, processType, leakThreshold):
   leakedObjectSummary = ', '.join(leakedObjectNames[:maxSummaryObjects])
   if len(leakedObjectNames) > maxSummaryObjects:
     leakedObjectSummary += ', ...'
-  log.info("%s | leakcheck |%s %d bytes leaked (%s)"
-           % (prefix, processString, totalBytesLeaked, leakedObjectSummary))
+
+  if logAsWarning:
+    log.warning("%s | leakcheck |%s %d bytes leaked (%s)"
+                % (prefix, processString, totalBytesLeaked, leakedObjectSummary))
+  else:
+    log.info("%s | leakcheck |%s %d bytes leaked (%s)"
+             % (prefix, processString, totalBytesLeaked, leakedObjectSummary))
 
 def processLeakLog(leakLogFile, leakThreshold = 0):
   """Process the leak log, including separate leak logs created
@@ -379,6 +298,15 @@ def processLeakLog(leakLogFile, leakThreshold = 0):
 
   Use this function if you want an additional PASS/FAIL summary.
   It must be used with the |XPCOM_MEM_BLOAT_LOG| environment variable.
+
+  The base of leakLogFile for a non-default process needs to end with
+    _proctype_pid12345.log
+  "proctype" is a string denoting the type of the process, which should
+  be the result of calling XRE_ChildProcessTypeToString(). 12345 is
+  a series of digits that is the pid for the process. The .log is
+  optional.
+
+  All other file names are treated as being for default processes.
   """
 
   if not os.path.exists(leakLogFile):
@@ -389,18 +317,20 @@ def processLeakLog(leakLogFile, leakThreshold = 0):
     log.info("TEST-INFO | leakcheck | threshold set at %d bytes" % leakThreshold)
 
   (leakLogFileDir, leakFileBase) = os.path.split(leakLogFile)
-  fileNameRegExp = re.compile(r".*?_([a-z]*)_pid\d*$")
   if leakFileBase[-4:] == ".log":
     leakFileBase = leakFileBase[:-4]
-    fileNameRegExp = re.compile(r".*?_([a-z]*)_pid\d*.log$")
+    fileNameRegExp = re.compile(r"_([a-z]*)_pid\d*.log$")
+  else:
+    fileNameRegExp = re.compile(r"_([a-z]*)_pid\d*$")
 
   for fileName in os.listdir(leakLogFileDir):
     if fileName.find(leakFileBase) != -1:
       thisFile = os.path.join(leakLogFileDir, fileName)
-      processType = None
       m = fileNameRegExp.search(fileName)
       if m:
         processType = m.group(1)
+      else:
+        processType = "default"
       processSingleLeakFile(thisFile, processType, leakThreshold)
 
 def replaceBackSlashes(input):
@@ -500,9 +430,9 @@ def environment(xrePath, env=None, crashreporter=True, debugger=False, dmdPath=N
       llvmsym = os.path.join(xrePath, "llvm-symbolizer")
       if os.path.isfile(llvmsym):
         env["ASAN_SYMBOLIZER_PATH"] = llvmsym
-        log.info("INFO | runtests.py | ASan using symbolizer at %s", llvmsym)
+        log.info("INFO | runtests.py | ASan using symbolizer at %s" % llvmsym)
       else:
-        log.info("TEST-UNEXPECTED-FAIL | runtests.py | Failed to find ASan symbolizer at %s", llvmsym)
+        log.info("TEST-UNEXPECTED-FAIL | runtests.py | Failed to find ASan symbolizer at %s" % llvmsym)
 
       totalMemory = systemMemory()
 
@@ -535,7 +465,7 @@ def environment(xrePath, env=None, crashreporter=True, debugger=False, dmdPath=N
         env['ASAN_OPTIONS'] = ':'.join(asanOptions)
 
     except OSError,err:
-      log.info("Failed determine available memory, disabling ASan low-memory configuration: %s", err.strerror)
+      log.info("Failed determine available memory, disabling ASan low-memory configuration: %s" % err.strerror)
     except:
       log.info("Failed determine available memory, disabling ASan low-memory configuration")
     else:
@@ -571,7 +501,7 @@ def dumpScreen(utilityPath):
     returncode = subprocess.call(utility + [imgfilename])
     printstatus(returncode, utilityname)
   except OSError, err:
-    log.info("Failed to start %s for screenshot: %s",
+    log.info("Failed to start %s for screenshot: %s" %
              utility[0], err.strerror)
     return
 
@@ -610,14 +540,14 @@ class ShutdownLeaks(object):
 
   def process(self):
     if not self.seenShutdown:
-      self.logger("TEST-UNEXPECTED-FAIL | ShutdownLeaks | process() called before end of test suite")
+      self.logger.warning("TEST-UNEXPECTED-FAIL | ShutdownLeaks | process() called before end of test suite")
 
     for test in self._parseLeakingTests():
       for url, count in self._zipLeakedWindows(test["leakedWindows"]):
-        self.logger("TEST-UNEXPECTED-FAIL | %s | leaked %d window(s) until shutdown [url = %s]" % (test["fileName"], count, url))
+        self.logger.warning("TEST-UNEXPECTED-FAIL | %s | leaked %d window(s) until shutdown [url = %s]" % (test["fileName"], count, url))
 
       if test["leakedDocShells"]:
-        self.logger("TEST-UNEXPECTED-FAIL | %s | leaked %d docShell(s) until shutdown" % (test["fileName"], len(test["leakedDocShells"])))
+        self.logger.warning("TEST-UNEXPECTED-FAIL | %s | leaked %d docShell(s) until shutdown" % (test["fileName"], len(test["leakedDocShells"])))
 
   def _logWindow(self, line):
     created = line[:2] == "++"
@@ -626,7 +556,7 @@ class ShutdownLeaks(object):
 
     # log line has invalid format
     if not pid or not serial:
-      self.logger("TEST-UNEXPECTED-FAIL | ShutdownLeaks | failed to parse line <%s>" % line)
+      self.logger.warning("TEST-UNEXPECTED-FAIL | ShutdownLeaks | failed to parse line <%s>" % line)
       return
 
     key = pid + "." + serial
@@ -647,7 +577,7 @@ class ShutdownLeaks(object):
 
     # log line has invalid format
     if not pid or not id:
-      self.logger("TEST-UNEXPECTED-FAIL | ShutdownLeaks | failed to parse line <%s>" % line)
+      self.logger.warning("TEST-UNEXPECTED-FAIL | ShutdownLeaks | failed to parse line <%s>" % line)
       return
 
     key = pid + "." + id
@@ -769,7 +699,7 @@ class LSANLeaks(object):
 
   def process(self):
     for f in self.foundFrames:
-      self.logger("TEST-UNEXPECTED-FAIL | LeakSanitizer | leak at " + f)
+      self.logger.warning("TEST-UNEXPECTED-FAIL | LeakSanitizer | leak at " + f)
 
   def _finishStack(self):
     if self.recordMoreFrames and len(self.currStack) == 0:

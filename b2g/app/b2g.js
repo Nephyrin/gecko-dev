@@ -246,6 +246,15 @@ pref("security.alternate_certificate_error_page", "certerror");
 
 pref("security.warn_viewing_mixed", false); // Warning is disabled.  See Bug 616712.
 
+// 2 = strict certificate pinning checks.
+// This default preference is more strict than Firefox because B2G
+// currently does not have a way to install local root certificates.
+// Strict checking is effectively equivalent to non-strict checking as
+// long as that is true.  If an ability to add local certificates is
+// added, there may be a need to change this pref.
+pref("security.cert_pinning.enforcement_level", 2);
+
+
 // Override some named colors to avoid inverse OS themes
 pref("ui.-moz-dialog", "#efebe7");
 pref("ui.-moz-dialogtext", "#101010");
@@ -366,6 +375,9 @@ pref("urlclassifier.alternate_error_page", "blocked");
 // The number of random entries to send with a gethash request.
 pref("urlclassifier.gethashnoise", 4);
 
+// Gethash timeout for Safebrowsing.
+pref("urlclassifier.gethash.timeout_ms", 5000);
+
 // If an urlclassifier table has not been updated in this number of seconds,
 // a gethash request will be forced to check that the result is still in
 // the database.
@@ -392,10 +404,11 @@ pref("content.ime.strict_policy", true);
 // $ adb shell start
 pref("browser.dom.window.dump.enabled", false);
 
-// Default Content Security Policy to apply to privileged and certified apps
-pref("security.apps.privileged.CSP.default", "default-src *; script-src 'self'; object-src 'none'; style-src 'self' 'unsafe-inline'");
+// Default Content Security Policy to apply to certified apps.
 // If you change this CSP, make sure to update the fast path in nsCSPService.cpp
-pref("security.apps.certified.CSP.default", "default-src *; script-src 'self'; object-src 'none'; style-src 'self' 'unsafe-inline'");
+pref("security.apps.certified.CSP.default", "default-src *; script-src 'self'; object-src 'none'; style-src 'self' 'unsafe-inline' app://theme.gaiamobile.org");
+// Default Content Security Policy to apply to trusted apps.
+pref("security.apps.trusted.CSP.default", "default-src *; object-src 'none'; frame-src 'none'");
 
 // Temporarily force-enable GL compositing.  This is default-disabled
 // deep within the bowels of the widgetry system.  Remove me when GL
@@ -928,6 +941,11 @@ pref("gfx.gralloc.fence-with-readpixels", true);
 // The url of the page used to display network error details.
 pref("b2g.neterror.url", "app://system.gaiamobile.org/net_error.html");
 
+// The origin used for the shared themes uri space.
+pref("b2g.theme.origin", "app://theme.gaiamobile.org");
+pref("dom.mozApps.themable", true);
+pref("dom.mozApps.selected_theme", "default_theme.gaiamobile.org");
+
 // Enable Web Speech synthesis API
 pref("media.webspeech.synth.enabled", true);
 
@@ -966,18 +984,17 @@ pref("apz.x_stationary_size_multiplier", "1.5");
 pref("apz.y_stationary_size_multiplier", "1.8");
 pref("apz.enlarge_displayport_when_clipped", true);
 // Use "sticky" axis locking
-pref("apz.axis_lock_mode", 2);
+pref("apz.axis_lock.mode", 2);
 pref("apz.subframe.enabled", true);
 
 // Overscroll-related settings
 pref("apz.overscroll.enabled", true);
-pref("apz.overscroll.fling_friction", "0.02");
+pref("apz.overscroll.fling_friction", "0.05");
 pref("apz.overscroll.fling_stopped_threshold", "0.4");
-pref("apz.overscroll.clamping", "0.5");
-pref("apz.overscroll.z_effect", "0.5");
-pref("apz.overscroll.snap_back.spring_stiffness", "0.6");
+pref("apz.overscroll.stretch_factor", "0.5");
+pref("apz.overscroll.snap_back.spring_stiffness", "0.05");
 pref("apz.overscroll.snap_back.spring_friction", "0.1");
-pref("apz.overscroll.snap_back.mass", "1200");
+pref("apz.overscroll.snap_back.mass", "100");
 
 // This preference allows FirefoxOS apps (and content, I think) to force
 // the use of software (instead of hardware accelerated) 2D canvases by

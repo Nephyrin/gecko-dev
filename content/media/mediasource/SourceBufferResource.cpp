@@ -6,11 +6,10 @@
 
 #include "SourceBufferResource.h"
 
-#include <string.h>
 #include <algorithm>
 
 #include "nsISeekableStream.h"
-#include "nsISupportsImpl.h"
+#include "nsISupports.h"
 #include "prlog.h"
 
 #ifdef PR_LOGGING
@@ -31,12 +30,6 @@ PRLogModuleInfo* GetSourceBufferResourceLog()
 #endif
 
 namespace mozilla {
-
-namespace dom {
-
-class SourceBuffer;
-
-}  // namespace dom
 
 nsresult
 SourceBufferResource::Close()
@@ -147,7 +140,7 @@ SourceBufferResource::ReadFromCache(char* aBuffer, int64_t aOffset, uint32_t aCo
   return rv;
 }
 
-bool
+uint32_t
 SourceBufferResource::EvictData(uint32_t aThreshold)
 {
   SBR_DEBUG("SourceBufferResource(%p)::EvictData(aThreshold=%u)", this, aThreshold);
@@ -190,17 +183,15 @@ SourceBufferResource::~SourceBufferResource()
   MOZ_COUNT_DTOR(SourceBufferResource);
 }
 
-SourceBufferResource::SourceBufferResource(nsIPrincipal* aPrincipal,
-                                           const nsACString& aType)
-  : mPrincipal(aPrincipal)
-  , mType(aType)
+SourceBufferResource::SourceBufferResource(const nsACString& aType)
+  : mType(aType)
   , mMonitor("mozilla::SourceBufferResource::mMonitor")
   , mOffset(0)
   , mClosed(false)
   , mEnded(false)
 {
-  SBR_DEBUG("SourceBufferResource(%p)::SourceBufferResource(aPrincipal=%p, aType=%s)",
-            this, aPrincipal, nsCString(aType).get());
+  SBR_DEBUG("SourceBufferResource(%p)::SourceBufferResource(aType=%s)",
+            this, nsCString(aType).get());
   MOZ_COUNT_CTOR(SourceBufferResource);
 }
 

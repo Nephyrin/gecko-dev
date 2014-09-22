@@ -291,6 +291,55 @@ CodeGeneratorARM::visitMinMaxD(LMinMaxD *ins)
 }
 
 bool
+CodeGeneratorARM::visitMinMaxF(LMinMaxF *ins)
+{
+    FloatRegister first = ToFloatRegister(ins->first());
+    FloatRegister second = ToFloatRegister(ins->second());
+    FloatRegister output = ToFloatRegister(ins->output());
+
+    JS_ASSERT(first == output);
+
+    Assembler::Condition cond = ins->mir()->isMax()
+        ? Assembler::VFP_LessThanOrEqual
+        : Assembler::VFP_GreaterThanOrEqual;
+    Label nan, equal, returnSecond, done;
+
+    masm.compareFloat(first, second);
+    // First or second is NaN, result is NaN.
+    masm.ma_b(&nan, Assembler::VFP_Unordered);
+    // Make sure we handle -0 and 0 right.
+    masm.ma_b(&equal, Assembler::VFP_Equal);
+    masm.ma_b(&returnSecond, cond);
+    masm.ma_b(&done);
+
+    // Check for zero.
+    masm.bind(&equal);
+    masm.compareFloat(first, NoVFPRegister);
+    // First wasn't 0 or -0, so just return it.
+    masm.ma_b(&done, Assembler::VFP_NotEqualOrUnordered);
+    // So now both operands are either -0 or 0.
+    if (ins->mir()->isMax()) {
+        // -0 + -0 = -0 and -0 + 0 = 0.
+        masm.ma_vadd_f32(second, first, first);
+    } else {
+        masm.ma_vneg_f32(first, first);
+        masm.ma_vsub_f32(first, second, first);
+        masm.ma_vneg_f32(first, first);
+    }
+    masm.ma_b(&done);
+
+    masm.bind(&nan);
+    masm.loadConstantFloat32(GenericNaN(), output);
+    masm.ma_b(&done);
+
+    masm.bind(&returnSecond);
+    masm.ma_vmov_f32(second, output);
+
+    masm.bind(&done);
+    return true;
+}
+
+bool
 CodeGeneratorARM::visitAbsD(LAbsD *ins)
 {
     FloatRegister input = ToFloatRegister(ins->input());
@@ -875,7 +924,7 @@ CodeGeneratorARM::visitBitOpI(LBitOpI *ins)
             masm.ma_and(ToRegister(rhs), ToRegister(lhs), ToRegister(dest));
         break;
       default:
-        MOZ_ASSUME_UNREACHABLE("unexpected binary opcode");
+        MOZ_CRASH("unexpected binary opcode");
     }
 
     return true;
@@ -917,7 +966,7 @@ CodeGeneratorARM::visitShiftI(LShiftI *ins)
             }
             break;
           default:
-            MOZ_ASSUME_UNREACHABLE("Unexpected shift op");
+            MOZ_CRASH("Unexpected shift op");
         }
     } else {
         // The shift amounts should be AND'ed into the 0-31 range since arm
@@ -942,7 +991,7 @@ CodeGeneratorARM::visitShiftI(LShiftI *ins)
             }
             break;
           default:
-            MOZ_ASSUME_UNREACHABLE("Unexpected shift op");
+            MOZ_CRASH("Unexpected shift op");
         }
     }
 
@@ -1148,7 +1197,7 @@ CodeGeneratorARM::visitMathD(LMathD *math)
         masm.ma_vdiv(ToFloatRegister(src1), ToFloatRegister(src2), ToFloatRegister(output));
         break;
       default:
-        MOZ_ASSUME_UNREACHABLE("unexpected opcode");
+        MOZ_CRASH("unexpected opcode");
     }
     return true;
 }
@@ -1174,7 +1223,7 @@ CodeGeneratorARM::visitMathF(LMathF *math)
         masm.ma_vdiv_f32(ToFloatRegister(src1), ToFloatRegister(src2), ToFloatRegister(output));
         break;
       default:
-        MOZ_ASSUME_UNREACHABLE("unexpected opcode");
+        MOZ_CRASH("unexpected opcode");
     }
     return true;
 }
@@ -1766,13 +1815,59 @@ DispatchIonCache::initializeAddCacheState(LInstruction *ins, AddCacheState *addS
 bool
 CodeGeneratorARM::visitLoadTypedArrayElementStatic(LLoadTypedArrayElementStatic *ins)
 {
-    MOZ_ASSUME_UNREACHABLE("NYI");
+    MOZ_CRASH("NYI");
 }
 
 bool
 CodeGeneratorARM::visitStoreTypedArrayElementStatic(LStoreTypedArrayElementStatic *ins)
 {
-    MOZ_ASSUME_UNREACHABLE("NYI");
+    MOZ_CRASH("NYI");
+}
+
+bool
+CodeGeneratorARM::visitAsmJSCall(LAsmJSCall *ins)
+{
+    MAsmJSCall *mir = ins->mir();
+
+    if (UseHardFpABI() || mir->callee().which() != MAsmJSCall::Callee::Builtin) {
+        emitAsmJSCall(ins);
+        return true;
+    }
+
+    // The soft ABI passes floating point arguments in GPRs. Since basically
+    // nothing is set up to handle this, the values are placed in the
+    // corresponding VFP registers, then transferred to GPRs immediately
+    // before the call. The mapping is sN <-> rN, where double registers
+    // can be treated as their two component single registers.
+
+    for (unsigned i = 0, e = ins->numOperands(); i < e; i++) {
+        LAllocation *a = ins->getOperand(i);
+        if (a->isFloatReg()) {
+            FloatRegister fr = ToFloatRegister(a);
+            if (fr.isDouble()) {
+                uint32_t srcId = fr.singleOverlay().id();
+                masm.ma_vxfer(fr, Register::FromCode(srcId), Register::FromCode(srcId + 1));
+            } else {
+                uint32_t srcId = fr.id();
+                masm.ma_vxfer(fr, Register::FromCode(srcId));
+            }
+        }
+    }
+
+    emitAsmJSCall(ins);
+
+    switch (mir->type()) {
+      case MIRType_Double:
+        masm.ma_vxfer(r0, r1, d0);
+        break;
+      case MIRType_Float32:
+        masm.as_vxfer(r0, InvalidReg, VFPRegister(d0).singleOverlay(), Assembler::CoreToFloat);
+        break;
+      default:
+        break;
+    }
+
+    return true;
 }
 
 bool
@@ -1791,7 +1886,7 @@ CodeGeneratorARM::visitAsmJSLoadHeap(LAsmJSLoadHeap *ins)
       case Scalar::Uint32:  isSigned = true;  size = 32; break;
       case Scalar::Float64: isFloat = true;   size = 64; break;
       case Scalar::Float32: isFloat = true;   size = 32; break;
-      default: MOZ_ASSUME_UNREACHABLE("unexpected array type");
+      default: MOZ_CRASH("unexpected array type");
     }
 
     const LAllocation *ptr = ins->ptr();
@@ -1867,7 +1962,7 @@ CodeGeneratorARM::visitAsmJSStoreHeap(LAsmJSStoreHeap *ins)
       case Scalar::Uint32:  isSigned = true;  size = 32; break;
       case Scalar::Float64: isFloat  = true;  size = 64; break;
       case Scalar::Float32: isFloat = true;   size = 32; break;
-      default: MOZ_ASSUME_UNREACHABLE("unexpected array type");
+      default: MOZ_CRASH("unexpected array type");
     }
     const LAllocation *ptr = ins->ptr();
     if (ptr->isConstant()) {
@@ -2144,11 +2239,11 @@ CodeGeneratorARM::visitNegF(LNegF *ins)
 bool
 CodeGeneratorARM::visitForkJoinGetSlice(LForkJoinGetSlice *ins)
 {
-    MOZ_ASSUME_UNREACHABLE("NYI");
+    MOZ_CRASH("NYI");
 }
 
 JitCode *
 JitRuntime::generateForkJoinGetSliceStub(JSContext *cx)
 {
-    MOZ_ASSUME_UNREACHABLE("NYI");
+    MOZ_CRASH("NYI");
 }

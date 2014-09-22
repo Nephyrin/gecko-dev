@@ -4,6 +4,7 @@
 
 from __future__ import unicode_literals
 
+import itertools
 import json
 import logging
 import os
@@ -11,7 +12,7 @@ import traceback
 import sys
 import time
 
-from collections import OrderedDict
+from collections import defaultdict, OrderedDict
 from mach.mixin.logging import LoggingMixin
 from mozbuild.util import (
     memoize,
@@ -56,6 +57,7 @@ from .data import (
     SharedLibrary,
     SimpleProgram,
     StaticLibrary,
+    TestHarnessFiles,
     TestWebIDLFile,
     TestManifest,
     VariablePassthru,
@@ -204,28 +206,19 @@ class TreeMetadataEmitter(LoggingMixin):
                     '\n    '.join(shared_libs), lib.basename),
                     contexts[lib.objdir])
 
-        def recurse_libs(lib):
-            for obj in lib.linked_libraries:
-                if not isinstance(obj, StaticLibrary) or not obj.link_into:
-                    continue
-                yield obj.objdir
-                for q in recurse_libs(obj):
-                    yield q
+        # Propagate LIBRARY_DEFINES to all child libraries recursively.
+        def propagate_defines(outerlib, defines):
+            outerlib.defines.update(defines)
+            for lib in outerlib.linked_libraries:
+                # Propagate defines only along FINAL_LIBRARY paths, not USE_LIBS
+                # paths.
+                if (isinstance(lib, StaticLibrary) and
+                        lib.link_into == outerlib.basename):
+                    propagate_defines(lib, defines)
 
-        sent_passthru = set()
         for lib in (l for libs in self._libs.values() for l in libs):
-            # For all root libraries (i.e. libraries that don't have a
-            # FINAL_LIBRARY), record, for each static library it links
-            # (recursively), that its FINAL_LIBRARY is that root library.
             if isinstance(lib, Library):
-                if isinstance(lib, SharedLibrary) or not lib.link_into:
-                    for p in recurse_libs(lib):
-                        if p in sent_passthru:
-                            continue
-                        sent_passthru.add(p)
-                        passthru = VariablePassthru(contexts[p])
-                        passthru.variables['FINAL_LIBRARY'] = lib.basename
-                        yield passthru
+                propagate_defines(lib, lib.defines)
             yield lib
 
         for obj in self._binaries.values():
@@ -240,17 +233,7 @@ class TreeMetadataEmitter(LoggingMixin):
         """Add linkage declarations to a given object."""
         assert isinstance(obj, Linkable)
 
-        extra = []
-        # Add stdc++compat library when wanted and needed
-        compat_varname = 'MOZ_LIBSTDCXX_%s_VERSION' % obj.KIND.upper()
-        if context.config.substs.get(compat_varname) \
-                and not isinstance(obj, (StaticLibrary, HostLibrary)):
-            extra.append({
-                'target': 'stdc++compat',
-                'host': 'host_stdc++compat',
-            }[obj.KIND])
-
-        for path in context.get(variable, []) + extra:
+        for path in context.get(variable, []):
             force_static = path.startswith('static:') and obj.KIND == 'target'
             if force_static:
                 path = path[7:]
@@ -505,6 +488,36 @@ class TreeMetadataEmitter(LoggingMixin):
             yield Exports(context, exports,
                 dist_install=not context.get('NO_DIST_INSTALL', False))
 
+        test_harness_files = context.get('TEST_HARNESS_FILES')
+        if test_harness_files:
+            srcdir_files = defaultdict(list)
+            srcdir_pattern_files = defaultdict(list)
+            objdir_files = defaultdict(list)
+
+            for path, strings in test_harness_files.walk():
+                if not path and strings:
+                    raise SandboxValidationError(
+                        'Cannot install files to the root of TEST_HARNESS_FILES', context)
+
+                for s in strings:
+                    if context.is_objdir_path(s):
+                        if s.startswith('!/'):
+                            raise SandboxValidationError(
+                                'Topobjdir-relative file not allowed in TEST_HARNESS_FILES: %s' % s, context)
+                        objdir_files[path].append(s[1:])
+                    else:
+                        resolved = context.resolve_path(s)
+                        if '*' in s:
+                            srcdir_pattern_files[path].append(s);
+                        elif not os.path.exists(resolved):
+                            raise SandboxValidationError(
+                                'File listed in TEST_HARNESS_FILES does not exist: %s' % s, context)
+                        else:
+                            srcdir_files[path].append(resolved)
+
+            yield TestHarnessFiles(context, srcdir_files,
+                                   srcdir_pattern_files, objdir_files)
+
         defines = context.get('DEFINES')
         if defines:
             yield Defines(context, defines)
@@ -613,6 +626,8 @@ class TreeMetadataEmitter(LoggingMixin):
 
         soname = context.get('SONAME')
 
+        lib_defines = context.get('LIBRARY_DEFINES')
+
         shared_args = {}
         static_args = {}
 
@@ -638,14 +653,6 @@ class TreeMetadataEmitter(LoggingMixin):
 
         if libname:
             if is_component:
-                if shared_lib:
-                    raise SandboxValidationError(
-                        'IS_COMPONENT implies FORCE_SHARED_LIB. '
-                        'Please remove the latter.', context)
-                if is_framework:
-                    raise SandboxValidationError(
-                        'IS_COMPONENT conflicts with IS_FRAMEWORK. '
-                        'Please remove one.', context)
                 if static_lib:
                     raise SandboxValidationError(
                         'IS_COMPONENT conflicts with FORCE_STATIC_LIB. '
@@ -654,10 +661,6 @@ class TreeMetadataEmitter(LoggingMixin):
                 shared_args['variant'] = SharedLibrary.COMPONENT
 
             if is_framework:
-                if shared_lib:
-                    raise SandboxValidationError(
-                        'IS_FRAMEWORK implies FORCE_SHARED_LIB. '
-                        'Please remove the latter.', context)
                 if soname:
                     raise SandboxValidationError(
                         'IS_FRAMEWORK conflicts with SONAME. '
@@ -732,6 +735,12 @@ class TreeMetadataEmitter(LoggingMixin):
                 lib = StaticLibrary(context, libname, **static_args)
                 self._libs[libname].append(lib)
                 self._linkage.append((context, lib, 'USE_LIBS'))
+
+            if lib_defines:
+                if not libname:
+                    raise SandboxValidationError('LIBRARY_DEFINES needs a '
+                        'LIBRARY_NAME to take effect', context)
+                lib.defines.update(lib_defines)
 
         # While there are multiple test manifests, the behavior is very similar
         # across them. We enforce this by having common handling of all
@@ -841,11 +850,11 @@ class TreeMetadataEmitter(LoggingMixin):
                 filtered = m.active_tests(exists=False, disabled=True,
                     **self.info)
 
-                missing = [t['name'] for t in filtered if not os.path.exists(t['path'])]
-                if missing:
-                    raise SandboxValidationError('Test manifest (%s) lists '
-                        'test that does not exist: %s' % (
-                        path, ', '.join(missing)), context)
+            missing = [t['name'] for t in filtered if not os.path.exists(t['path'])]
+            if missing:
+                raise SandboxValidationError('Test manifest (%s) lists '
+                    'test that does not exist: %s' % (
+                    path, ', '.join(missing)), context)
 
             out_dir = mozpath.join(install_prefix, manifest_reldir)
             if 'install-to-subdir' in defaults:

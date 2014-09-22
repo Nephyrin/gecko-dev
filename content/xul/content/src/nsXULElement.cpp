@@ -132,7 +132,7 @@ public:
   NS_DECL_CYCLE_COLLECTION_CLASS_AMBIGUOUS(nsXULElementTearoff,
                                            nsIDOMElementCSSInlineStyle)
 
-  nsXULElementTearoff(nsXULElement *aElement)
+  explicit nsXULElementTearoff(nsXULElement* aElement)
     : mElement(aElement)
   {
   }
@@ -808,7 +808,7 @@ IsInFeedSubscribeLine(nsXULElement* aElement)
 class XULInContentErrorReporter : public nsRunnable
 {
 public:
-  XULInContentErrorReporter(nsIDocument* aDocument) : mDocument(aDocument) {}
+  explicit XULInContentErrorReporter(nsIDocument* aDocument) : mDocument(aDocument) {}
 
   NS_IMETHOD Run()
   {
@@ -828,6 +828,7 @@ nsXULElement::BindToTree(nsIDocument* aDocument,
 {
   if (!aBindingParent &&
       aDocument &&
+      !aDocument->IsLoadedAsInteractiveData() &&
       !aDocument->AllowXULXBL() &&
       !aDocument->HasWarnedAbout(nsIDocument::eImportXULIntoContent)) {
     nsContentUtils::AddScriptRunner(new XULInContentErrorReporter(aDocument));
@@ -838,9 +839,10 @@ nsXULElement::BindToTree(nsIDocument* aDocument,
                                             aCompileEventHandlers);
   NS_ENSURE_SUCCESS(rv, rv);
 
-  if (aDocument &&
-      !aDocument->LoadsFullXULStyleSheetUpFront() &&
-      !aDocument->IsUnstyledDocument()) {
+  nsIDocument* doc = GetComposedDoc();
+  if (doc &&
+      !doc->LoadsFullXULStyleSheetUpFront() &&
+      !doc->IsUnstyledDocument()) {
 
     // To save CPU cycles and memory, non-XUL documents only load the user
     // agent style sheet rules for a minimal set of XUL elements such as
@@ -853,7 +855,7 @@ nsXULElement::BindToTree(nsIDocument* aDocument,
     // can be moved from the document that creates them to another document.
 
     if (!XULElementsRulesInMinimalXULSheet(Tag())) {
-      aDocument->EnsureOnDemandBuiltInUASheet(nsLayoutStylesheetCache::XULSheet());
+      doc->EnsureOnDemandBuiltInUASheet(nsLayoutStylesheetCache::XULSheet());
       // To keep memory usage down it is important that we try and avoid
       // pulling xul.css into non-XUL documents. That should be very rare, and
       // for HTML we currently should only pull it in if the document contains
@@ -1983,7 +1985,7 @@ nsXULElement::SetDrawsTitle(bool aState)
 class MarginSetter : public nsRunnable
 {
 public:
-    MarginSetter(nsIWidget* aWidget) :
+    explicit MarginSetter(nsIWidget* aWidget) :
         mWidget(aWidget), mMargin(-1, -1, -1, -1)
     {}
     MarginSetter(nsIWidget *aWidget, const nsIntMargin& aMargin) :

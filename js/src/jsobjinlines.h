@@ -17,6 +17,7 @@
 #include "vm/Probes.h"
 #include "vm/ScopeObject.h"
 #include "vm/StringObject.h"
+#include "vm/TypedArrayCommon.h"
 
 #include "jsatominlines.h"
 #include "jscompartmentinlines.h"
@@ -83,7 +84,7 @@ JSObject::finalize(js::FreeOp *fop)
 
 #ifdef DEBUG
     JS_ASSERT(isTenured());
-    if (!IsBackgroundFinalized(tenuredGetAllocKind())) {
+    if (!IsBackgroundFinalized(asTenured()->getAllocKind())) {
         /* Assert we're on the main thread. */
         JS_ASSERT(CurrentThreadCanAccessRuntime(fop->runtime()));
     }
@@ -93,18 +94,6 @@ JSObject::finalize(js::FreeOp *fop)
         clasp->finalize(fop, this);
 
     finish(fop);
-}
-
-inline void
-JSObject::setLastPropertyInfallible(js::Shape *shape)
-{
-    JS_ASSERT(!shape->inDictionary());
-    JS_ASSERT(shape->compartment() == compartment());
-    JS_ASSERT(!inDictionaryMode());
-    JS_ASSERT(slotSpan() == shape->slotSpan());
-    JS_ASSERT(numFixedSlots() == shape->numFixedSlots());
-
-    shape_ = shape;
 }
 
 inline void
@@ -354,6 +343,8 @@ JSObject::getDenseOrTypedArrayElement(uint32_t idx)
 {
     if (is<js::TypedArrayObject>())
         return as<js::TypedArrayObject>().getElement(idx);
+    if (is<js::SharedTypedArrayObject>())
+        return as<js::SharedTypedArrayObject>().getElement(idx);
     return getDenseElement(idx);
 }
 
@@ -501,7 +492,8 @@ JSObject::setProto(JSContext *cx, JS::HandleObject obj, JS::HandleObject proto, 
     }
 
     JS::Rooted<js::TaggedProto> taggedProto(cx, js::TaggedProto(proto));
-    return SetClassAndProto(cx, obj, obj->getClass(), taggedProto, succeeded);
+    *succeeded = SetClassAndProto(cx, obj, obj->getClass(), taggedProto, false);
+    return *succeeded;
 }
 
 inline bool
@@ -582,6 +574,18 @@ JSObject::createArrayInternal(js::ExclusiveContext *cx, js::gc::AllocKind kind, 
 }
 
 /* static */ inline js::ArrayObject *
+JSObject::finishCreateArray(JSObject *obj, js::HandleShape shape)
+{
+    size_t span = shape->slotSpan();
+    if (span)
+        obj->initializeSlotRange(0, span);
+
+    js::gc::TraceCreateObject(obj);
+
+    return &obj->as<js::ArrayObject>();
+}
+
+/* static */ inline js::ArrayObject *
 JSObject::createArray(js::ExclusiveContext *cx, js::gc::AllocKind kind, js::gc::InitialHeap heap,
                       js::HandleShape shape, js::HandleTypeObject type,
                       uint32_t length)
@@ -595,13 +599,7 @@ JSObject::createArray(js::ExclusiveContext *cx, js::gc::AllocKind kind, js::gc::
     obj->setFixedElements();
     new (obj->getElementsHeader()) js::ObjectElements(capacity, length);
 
-    size_t span = shape->slotSpan();
-    if (span)
-        obj->initializeSlotRange(0, span);
-
-    js::gc::TraceCreateObject(obj);
-
-    return &obj->as<js::ArrayObject>();
+    return finishCreateArray(obj, shape);
 }
 
 /* static */ inline js::ArrayObject *
@@ -610,8 +608,8 @@ JSObject::createArray(js::ExclusiveContext *cx, js::gc::InitialHeap heap,
                       js::HeapSlot *elements)
 {
     // Use the smallest allocation kind for the array, as it can't have any
-    // fixed slots (see assert in the above function) and will not be using its
-    // fixed elements.
+    // fixed slots (see the assert in createArrayInternal) and will not be using
+    // its fixed elements.
     js::gc::AllocKind kind = js::gc::FINALIZE_OBJECT0_BACKGROUND;
 
     JSObject *obj = createArrayInternal(cx, kind, heap, shape, type);
@@ -620,13 +618,30 @@ JSObject::createArray(js::ExclusiveContext *cx, js::gc::InitialHeap heap,
 
     obj->elements = elements;
 
-    size_t span = shape->slotSpan();
-    if (span)
-        obj->initializeSlotRange(0, span);
+    return finishCreateArray(obj, shape);
+}
 
-    js::gc::TraceCreateObject(obj);
+/* static */ inline js::ArrayObject *
+JSObject::createCopyOnWriteArray(js::ExclusiveContext *cx, js::gc::InitialHeap heap,
+                                 js::HandleShape shape,
+                                 js::HandleObject sharedElementsOwner)
+{
+    MOZ_ASSERT(sharedElementsOwner->getElementsHeader()->isCopyOnWrite());
+    MOZ_ASSERT(sharedElementsOwner->getElementsHeader()->ownerObject() == sharedElementsOwner);
 
-    return &obj->as<js::ArrayObject>();
+    // Use the smallest allocation kind for the array, as it can't have any
+    // fixed slots (see the assert in createArrayInternal) and will not be using
+    // its fixed elements.
+    js::gc::AllocKind kind = js::gc::FINALIZE_OBJECT0_BACKGROUND;
+
+    js::RootedTypeObject type(cx, sharedElementsOwner->type());
+    JSObject *obj = createArrayInternal(cx, kind, heap, shape, type);
+    if (!obj)
+        return nullptr;
+
+    obj->elements = sharedElementsOwner->getDenseElementsAllowCopyOnWrite();
+
+    return finishCreateArray(obj, shape);
 }
 
 inline void
@@ -648,6 +663,12 @@ JSObject::finish(js::FreeOp *fop)
             fop->free_(elements);
         }
     }
+
+    // It's possible that unreachable shapes may be marked whose listp points
+    // into this object. In case this happens, null out the shape's pointer here
+    // so that a moving GC will not try to access the dead object.
+    if (shape_->listp == &shape_)
+        shape_->listp = nullptr;
 }
 
 /* static */ inline bool
@@ -1045,7 +1066,7 @@ CopyInitializerObject(JSContext *cx, HandleObject baseobj, NewObjectKind newKind
 
     gc::AllocKind allocKind = gc::GetGCObjectFixedSlotsKind(baseobj->numFixedSlots());
     allocKind = gc::GetBackgroundAllocKind(allocKind);
-    JS_ASSERT_IF(baseobj->isTenured(), allocKind == baseobj->tenuredGetAllocKind());
+    JS_ASSERT_IF(baseobj->isTenured(), allocKind == baseobj->asTenured()->getAllocKind());
     RootedObject obj(cx);
     obj = NewBuiltinClassInstance(cx, &JSObject::class_, allocKind, newKind);
     if (!obj)
@@ -1112,8 +1133,8 @@ ObjectClassIs(HandleObject obj, ESClassValue classValue, JSContext *cx)
       case ESClass_String: return obj->is<StringObject>();
       case ESClass_Boolean: return obj->is<BooleanObject>();
       case ESClass_RegExp: return obj->is<RegExpObject>();
-      case ESClass_ArrayBuffer:
-        return obj->is<ArrayBufferObject>() || obj->is<SharedArrayBufferObject>();
+      case ESClass_ArrayBuffer: return obj->is<ArrayBufferObject>();
+      case ESClass_SharedArrayBuffer: return obj->is<SharedArrayBufferObject>();
       case ESClass_Date: return obj->is<DateObject>();
       case ESClass_Set: return obj->is<SetObject>();
       case ESClass_Map: return obj->is<MapObject>();

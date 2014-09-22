@@ -29,7 +29,7 @@ class Runnable MOZ_FINAL
 public:
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(Runnable)
 
-  Runnable(GMPTask* aTask)
+  explicit Runnable(GMPTask* aTask)
   : mTask(aTask)
   {
     MOZ_ASSERT(mTask);
@@ -257,7 +257,7 @@ GMPThreadImpl::Join()
 }
 
 GMPMutexImpl::GMPMutexImpl()
-: mMutex("gmp-mutex")
+: mMonitor("gmp-mutex")
 {
   MOZ_COUNT_CTOR(GMPMutexImpl);
 }
@@ -276,13 +276,13 @@ GMPMutexImpl::Destroy()
 void
 GMPMutexImpl::Acquire()
 {
-  mMutex.Lock();
+  mMonitor.Enter();
 }
 
 void
 GMPMutexImpl::Release()
 {
-  mMutex.Unlock();
+  mMonitor.Exit();
 }
 
 } // namespace gmp

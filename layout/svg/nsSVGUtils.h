@@ -58,6 +58,7 @@ class SVGAnimatedPreserveAspectRatio;
 class SVGPreserveAspectRatio;
 namespace dom {
 class Element;
+class UserSpaceMetrics;
 } // namespace dom
 namespace gfx {
 class SourceSurface;
@@ -274,12 +275,8 @@ public:
      Input: length - length to be converted
   */
   static float UserSpace(nsSVGElement *aSVGElement, const nsSVGLength2 *aLength);
-
-  /* Computes the input length in terms of user space coordinates.
-     Input: aFrame - object to be used for determining user space
-            length - length to be converted
-  */
   static float UserSpace(nsIFrame *aFrame, const nsSVGLength2 *aLength);
+  static float UserSpace(const mozilla::dom::UserSpaceMetrics& aMetrics, const nsSVGLength2 *aLength);
 
   /* Find the outermost SVG frame of the passed frame */
   static nsSVGOuterSVGFrame *
@@ -296,10 +293,10 @@ public:
   /* Paint SVG frame with SVG effects - aDirtyRect is the area being
    * redrawn, in device pixel coordinates relative to the outer svg */
   static void
-  PaintFrameWithEffects(nsRenderingContext *aContext,
-                        const nsIntRect *aDirtyRect,
-                        nsIFrame *aFrame,
-                        nsIFrame* aTransformRoot = nullptr);
+  PaintFrameWithEffects(nsIFrame *aFrame,
+                        nsRenderingContext *aContext,
+                        const gfxMatrix& aTransform,
+                        const nsIntRect *aDirtyRect = nullptr);
 
   /* Hit testing - check if point hits the clipPath of indicated
    * frame.  Returns true if no clipPath set. */
@@ -319,8 +316,7 @@ public:
    * child SVG frame, container SVG frame, or a regular frame.
    * For regular frames, we just return an identity matrix.
    */
-  static gfxMatrix GetCanvasTM(nsIFrame* aFrame, uint32_t aFor,
-                               nsIFrame* aTransformRoot = nullptr);
+  static gfxMatrix GetCanvasTM(nsIFrame* aFrame);
 
   /**
    * Returns the transform from aFrame's user space to canvas space. Only call
@@ -331,7 +327,7 @@ public:
    * space. Specifically, it does not include any other transforms introduced
    * by the frame such as x/y offsets and viewBox attributes.
    */
-  static gfxMatrix GetUserToCanvasTM(nsIFrame* aFrame, uint32_t aFor);
+  static gfxMatrix GetUserToCanvasTM(nsIFrame* aFrame);
 
   /**
    * Notify the descendants of aFrame of a change to one of their ancestors
@@ -455,7 +451,12 @@ public:
    */
   static gfxRect
   GetRelativeRect(uint16_t aUnits, const nsSVGLength2 *aXYWH,
-                  const gfxRect &aBBox, nsIFrame *aFrame);
+                  const gfxRect& aBBox, nsIFrame *aFrame);
+
+  static gfxRect
+  GetRelativeRect(uint16_t aUnits, const nsSVGLength2 *aXYWH,
+                  const gfxRect& aBBox,
+                  const mozilla::dom::UserSpaceMetrics& aMetrics);
 
   /**
    * Find the first frame, starting with aStartFrame and going up its

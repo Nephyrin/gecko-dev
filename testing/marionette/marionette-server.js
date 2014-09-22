@@ -966,7 +966,6 @@ MarionetteServerConnection.prototype = {
 
     let curWindow = this.getCurrentWindow();
     let original_onerror = curWindow.onerror;
-    let that = this;
     that.timeout = timeout;
     let marionette = new Marionette(this, curWindow, "chrome",
                                     this.marionetteLog,
@@ -1127,12 +1126,21 @@ MarionetteServerConnection.prototype = {
    * of the current resource.
    */
   getCurrentUrl: function MDA_getCurrentUrl() {
+    let isB2G = appName == "B2G";
     this.command_id = this.getCommandId();
-    if (this.context == "chrome") {
+    if (this.context === "chrome") {
       this.sendResponse(this.getCurrentWindow().location.href, this.command_id);
     }
     else {
-      this.sendAsync("getCurrentUrl", {}, this.command_id);
+      if (isB2G) {
+        this.sendAsync("getCurrentUrl", {}, this.command_id);
+      }
+      else {
+        this.sendResponse(this.curBrowser
+                              .tab
+                              .linkedBrowser
+                              .contentWindow.location.href, this.command_id);
+      }
     }
   },
 
@@ -1245,6 +1253,45 @@ MarionetteServerConnection.prototype = {
       res.push(winId);
     }
     this.sendResponse(res, this.command_id);
+  },
+
+  /**
+   * Get the current window position.
+   */
+  getWindowPosition: function MDA_getWindowPosition() {
+    this.command_id = this.getCommandId();
+    let curWindow = this.getCurrentWindow();
+    this.sendResponse({ x: curWindow.screenX, y: curWindow.screenY}, this.command_id);
+  },
+
+  /**
+  * Set the window position of the browser on the OS Window Manager
+  *
+  * @param object aRequest
+  *        'x': the x co-ordinate of the top/left of the window that
+  *             it will be moved to
+  *        'y': the y co-ordinate of the top/left of the window that
+  *             it will be moved to
+  */
+  setWindowPosition: function MDA_setWindowPosition(aRequest) {
+    let command_id = this.command_id = this.getCommandId();
+    if (appName !== "Firefox") {
+      this.sendError("Unable to set the window position on mobile", 61, null,
+                      command_id);
+
+    }
+    else {
+      let x = parseInt(aRequest.parameters.x);;
+      let y  = parseInt(aRequest.parameters.y);
+
+      if (isNaN(x) || isNaN(y)) {
+        this.sendError("x and y arguments should be integers", 13, null, command_id);
+        return;
+      }
+      let curWindow = this.getCurrentWindow();
+      curWindow.moveTo(x, y);
+      this.sendOk(command_id);
+    }
   },
 
   /**
@@ -2345,6 +2392,78 @@ MarionetteServerConnection.prototype = {
   },
 
   /**
+   * Get the size of the browser window currently in focus.
+   *
+   * Will return the current browser window size in pixels. Refers to
+   * window outerWidth and outerHeight values, which include scroll bars,
+   * title bars, etc.
+   *
+   */
+  getWindowSize: function MDA_getWindowSize(aRequest) {
+    this.command_id = this.getCommandId();
+    let curWindow = this.getCurrentWindow();
+    let curWidth = curWindow.outerWidth;
+    let curHeight = curWindow.outerHeight;
+    this.sendResponse({width: curWidth, height: curHeight}, this.command_id);
+  },
+
+  /**
+   * Set the size of the browser window currently in focus.
+   *
+   * Not supported on B2G. The supplied width and height values refer to
+   * the window outerWidth and outerHeight values, which include scroll
+   * bars, title bars, etc.
+   *
+   * An error will be returned if the requested window size would result
+   * in the window being in the maximized state.
+   */
+  setWindowSize: function MDA_setWindowSize(aRequest) {
+    this.command_id = this.getCommandId();
+
+    if (appName !== "Firefox") {
+      this.sendError("Not supported on mobile", 405, null, this.command_id);
+      return;
+    }
+
+    try {
+      var width = parseInt(aRequest.parameters.width);
+      var height = parseInt(aRequest.parameters.height);
+    }
+    catch(e) {
+      this.sendError(e.message, e.code, e.stack, this.command_id);
+      return;
+    }
+
+    let curWindow = this.getCurrentWindow();
+    if (width >= curWindow.screen.availWidth && height >= curWindow.screen.availHeight) {
+      this.sendError("Invalid requested size, cannot maximize", 405, null, this.command_id);
+      return;
+    }
+
+    curWindow.resizeTo(width, height);
+    this.sendOk(this.command_id);
+  },
+
+  /**
+   * Maximizes the Browser Window as if the user pressed the maximise button
+   *
+   * Not Supported on B2G or Fennec
+   */
+  maximizeWindow: function MDA_maximizeWindow (aRequest) {
+    this.command_id = this.getCommandId();
+
+    if (appName !== "Firefox") {
+      this.sendError("Not supported for mobile", 405, null, this.command_id);
+      return;
+    }
+
+    let curWindow = this.getCurrentWindow();
+    curWindow.moveTo(0,0);
+    curWindow.resizeTo(curWindow.screen.availWidth, curWindow.screen.availHeight);
+    this.sendOk(this.command_id);
+  },
+
+  /**
    * Helper function to convert an outerWindowID into a UID that Marionette
    * tracks.
    */
@@ -2528,6 +2647,8 @@ MarionetteServerConnection.prototype.requestTypes = {
   "getWindowHandles": MarionetteServerConnection.prototype.getWindowHandles,
   "getCurrentWindowHandles": MarionetteServerConnection.prototype.getWindowHandles,  // Selenium 2 compat
   "getWindows":  MarionetteServerConnection.prototype.getWindowHandles,  // deprecated
+  "getWindowPosition": MarionetteServerConnection.prototype.getWindowPosition,
+  "setWindowPosition": MarionetteServerConnection.prototype.setWindowPosition,
   "getActiveFrame": MarionetteServerConnection.prototype.getActiveFrame,
   "switchToFrame": MarionetteServerConnection.prototype.switchToFrame,
   "switchToWindow": MarionetteServerConnection.prototype.switchToWindow,
@@ -2549,7 +2670,10 @@ MarionetteServerConnection.prototype.requestTypes = {
   "deleteCookie": MarionetteServerConnection.prototype.deleteCookie,
   "getActiveElement": MarionetteServerConnection.prototype.getActiveElement,
   "getScreenOrientation": MarionetteServerConnection.prototype.getScreenOrientation,
-  "setScreenOrientation": MarionetteServerConnection.prototype.setScreenOrientation
+  "setScreenOrientation": MarionetteServerConnection.prototype.setScreenOrientation,
+  "getWindowSize": MarionetteServerConnection.prototype.getWindowSize,
+  "setWindowSize": MarionetteServerConnection.prototype.setWindowSize,
+  "maximizeWindow": MarionetteServerConnection.prototype.maximizeWindow
 };
 
 /**

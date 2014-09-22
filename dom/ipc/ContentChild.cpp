@@ -43,6 +43,7 @@
 #if defined(XP_WIN)
 #define TARGET_SANDBOX_EXPORTS
 #include "mozilla/sandboxTarget.h"
+#include "nsDirectoryServiceDefs.h"
 #elif defined(XP_LINUX)
 #include "mozilla/Sandbox.h"
 #endif
@@ -126,6 +127,7 @@
 #endif
 
 #include "mozilla/dom/indexedDB/PIndexedDBChild.h"
+#include "mozilla/dom/mobileconnection/MobileConnectionChild.h"
 #include "mozilla/dom/mobilemessage/SmsChild.h"
 #include "mozilla/dom/devicestorage/DeviceStorageRequestChild.h"
 #include "mozilla/dom/PFileSystemRequestChild.h"
@@ -160,6 +162,7 @@ using namespace mozilla::docshell;
 using namespace mozilla::dom::bluetooth;
 using namespace mozilla::dom::devicestorage;
 using namespace mozilla::dom::ipc;
+using namespace mozilla::dom::mobileconnection;
 using namespace mozilla::dom::mobilemessage;
 using namespace mozilla::dom::indexedDB;
 using namespace mozilla::dom::telephony;
@@ -196,7 +199,7 @@ public:
     NS_DECL_ISUPPORTS
 
     MemoryReportRequestChild(uint32_t aGeneration, bool aAnonymize,
-                             const FileDescriptor& aDMDFile);
+                             const MaybeFileDesc& aDMDFile);
     NS_IMETHOD Run();
 private:
     virtual ~MemoryReportRequestChild();
@@ -209,11 +212,13 @@ private:
 NS_IMPL_ISUPPORTS(MemoryReportRequestChild, nsIRunnable)
 
 MemoryReportRequestChild::MemoryReportRequestChild(
-    uint32_t aGeneration, bool aAnonymize, const FileDescriptor& aDMDFile)
-  : mGeneration(aGeneration), mAnonymize(aAnonymize),
-    mDMDFile(aDMDFile)
+    uint32_t aGeneration, bool aAnonymize, const MaybeFileDesc& aDMDFile)
+  : mGeneration(aGeneration), mAnonymize(aAnonymize)
 {
     MOZ_COUNT_CTOR(MemoryReportRequestChild);
+    if (aDMDFile.type() == MaybeFileDesc::TFileDescriptor) {
+        mDMDFile = aDMDFile.get_FileDescriptor();
+    }
 }
 
 MemoryReportRequestChild::~MemoryReportRequestChild()
@@ -361,7 +366,7 @@ private:
 class ConsoleListener MOZ_FINAL : public nsIConsoleListener
 {
 public:
-    ConsoleListener(ContentChild* aChild)
+    explicit ConsoleListener(ContentChild* aChild)
     : mChild(aChild) {}
 
     NS_DECL_ISUPPORTS
@@ -492,17 +497,15 @@ ContentChild* ContentChild::sSingleton;
 // Performs initialization that is not fork-safe, i.e. that must be done after
 // forking from the Nuwa process.
 static void
-InitOnContentProcessCreated(bool aAfterNuwaFork)
+InitOnContentProcessCreated()
 {
 #ifdef MOZ_NUWA_PROCESS
     // Wait until we are forked from Nuwa
-    if (!aAfterNuwaFork &&
-        Preferences::GetBool("dom.ipc.processPrelaunch.enabled", false)) {
+    if (IsNuwaProcess()) {
         return;
     }
-#else
-    unused << aAfterNuwaFork;
 #endif
+
     // This will register cross-process observer.
     mozilla::dom::time::InitializeDateCacheCleaner();
 }
@@ -696,14 +699,14 @@ ContentChild::InitXPCOM()
         new SystemMessageHandledObserver();
     sysMsgObserver->Init();
 
-    InitOnContentProcessCreated(/* aAfterNuwaFork = */false);
+    InitOnContentProcessCreated();
 }
 
 PMemoryReportRequestChild*
 ContentChild::AllocPMemoryReportRequestChild(const uint32_t& aGeneration,
                                              const bool &aAnonymize,
                                              const bool &aMinimizeMemoryUsage,
-                                             const FileDescriptor& aDMDFile)
+                                             const MaybeFileDesc& aDMDFile)
 {
     MemoryReportRequestChild *actor =
         new MemoryReportRequestChild(aGeneration, aAnonymize, aDMDFile);
@@ -717,7 +720,7 @@ class MemoryReportsWrapper MOZ_FINAL : public nsISupports {
     ~MemoryReportsWrapper() {}
 public:
     NS_DECL_ISUPPORTS
-    MemoryReportsWrapper(InfallibleTArray<MemoryReport> *r) : mReports(r) { }
+    explicit MemoryReportsWrapper(InfallibleTArray<MemoryReport>* r) : mReports(r) { }
     InfallibleTArray<MemoryReport> *mReports;
 };
 NS_IMPL_ISUPPORTS0(MemoryReportsWrapper)
@@ -727,7 +730,7 @@ class MemoryReportCallback MOZ_FINAL : public nsIMemoryReporterCallback
 public:
     NS_DECL_ISUPPORTS
 
-    MemoryReportCallback(const nsACString &aProcess)
+    explicit MemoryReportCallback(const nsACString& aProcess)
     : mProcess(aProcess)
     {
     }
@@ -761,7 +764,7 @@ ContentChild::RecvPMemoryReportRequestConstructor(
     const uint32_t& aGeneration,
     const bool& aAnonymize,
     const bool& aMinimizeMemoryUsage,
-    const FileDescriptor& aDMDFile)
+    const MaybeFileDesc& aDMDFile)
 {
     MemoryReportRequestChild *actor =
         static_cast<MemoryReportRequestChild*>(aChild);
@@ -918,6 +921,69 @@ ContentChild::AllocPBackgroundChild(Transport* aTransport,
     return BackgroundChild::Alloc(aTransport, aOtherProcess);
 }
 
+#if defined(XP_WIN) && defined(MOZ_CONTENT_SANDBOX)
+static void
+SetUpSandboxEnvironment()
+{
+    // Set up a low integrity temp directory. This only makes sense if the
+    // delayed integrity level for the content process is INTEGRITY_LEVEL_LOW.
+    nsresult rv;
+    nsCOMPtr<nsIProperties> directoryService =
+        do_GetService(NS_DIRECTORY_SERVICE_CONTRACTID, &rv);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+        return;
+    }
+
+    nsCOMPtr<nsIFile> lowIntegrityTemp;
+    rv = directoryService->Get(NS_WIN_LOW_INTEGRITY_TEMP, NS_GET_IID(nsIFile),
+                               getter_AddRefs(lowIntegrityTemp));
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+        return;
+    }
+
+    // Undefine returns a failure if the property is not already set.
+    unused << directoryService->Undefine(NS_OS_TEMP_DIR);
+    rv = directoryService->Set(NS_OS_TEMP_DIR, lowIntegrityTemp);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+        return;
+    }
+
+    // Set TEMP and TMP environment variables.
+    nsAutoString lowIntegrityTempPath;
+    rv = lowIntegrityTemp->GetPath(lowIntegrityTempPath);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+        return;
+    }
+
+    bool setOK = SetEnvironmentVariableW(L"TEMP", lowIntegrityTempPath.get());
+    NS_WARN_IF_FALSE(setOK, "Failed to set TEMP to low integrity temp path");
+    setOK = SetEnvironmentVariableW(L"TMP", lowIntegrityTempPath.get());
+    NS_WARN_IF_FALSE(setOK, "Failed to set TMP to low integrity temp path");
+}
+
+void
+ContentChild::CleanUpSandboxEnvironment()
+{
+    nsresult rv;
+    nsCOMPtr<nsIProperties> directoryService =
+        do_GetService(NS_DIRECTORY_SERVICE_CONTRACTID, &rv);
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+        return;
+    }
+
+    nsCOMPtr<nsIFile> lowIntegrityTemp;
+    rv = directoryService->Get(NS_WIN_LOW_INTEGRITY_TEMP, NS_GET_IID(nsIFile),
+                               getter_AddRefs(lowIntegrityTemp));
+    if (NS_WARN_IF(NS_FAILED(rv))) {
+        return;
+    }
+
+    // Don't check the return value as the directory will only have been created
+    // if it has been used.
+    unused << lowIntegrityTemp->Remove(/* aRecursive */ true);
+}
+#endif
+
 bool
 ContentChild::RecvSetProcessSandbox()
 {
@@ -937,7 +1003,13 @@ ContentChild::RecvSetProcessSandbox()
 #endif
     SetContentProcessSandbox();
 #elif defined(XP_WIN)
-    mozilla::SandboxTarget::Instance()->StartSandbox();
+    nsAdoptingString contentSandboxPref =
+        Preferences::GetString("browser.tabs.remote.sandbox");
+    if (contentSandboxPref.EqualsLiteral("on")
+        || contentSandboxPref.EqualsLiteral("warn")) {
+        mozilla::SandboxTarget::Instance()->StartSandbox();
+        SetUpSandboxEnvironment();
+    }
 #endif
 #endif
     return true;
@@ -1220,6 +1292,43 @@ ContentChild::DeallocPFileSystemRequestChild(PFileSystemRequestChild* aFileSyste
     // FileSystemTaskBase.cpp. We should decrease it after IPC.
     NS_RELEASE(child);
     return true;
+}
+
+PMobileConnectionChild*
+ContentChild::SendPMobileConnectionConstructor(PMobileConnectionChild* aActor,
+                                               const uint32_t& aClientId)
+{
+#ifdef MOZ_B2G_RIL
+    // Add an extra ref for IPDL. Will be released in
+    // ContentChild::DeallocPMobileConnectionChild().
+    static_cast<MobileConnectionChild*>(aActor)->AddRef();
+    return PContentChild::SendPMobileConnectionConstructor(aActor, aClientId);
+#else
+    MOZ_CRASH("No support for mobileconnection on this platform!");;
+#endif
+}
+
+PMobileConnectionChild*
+ContentChild::AllocPMobileConnectionChild(const uint32_t& aClientId)
+{
+#ifdef MOZ_B2G_RIL
+    NS_NOTREACHED("No one should be allocating PMobileConnectionChild actors");
+    return nullptr;
+#else
+    MOZ_CRASH("No support for mobileconnection on this platform!");;
+#endif
+}
+
+bool
+ContentChild::DeallocPMobileConnectionChild(PMobileConnectionChild* aActor)
+{
+#ifdef MOZ_B2G_RIL
+    // MobileConnectionChild is refcounted, must not be freed manually.
+    static_cast<MobileConnectionChild*>(aActor)->Release();
+    return true;
+#else
+    MOZ_CRASH("No support for mobileconnection on this platform!");
+#endif
 }
 
 PNeckoChild*
@@ -1618,12 +1727,16 @@ ContentChild::RecvAddPermission(const IPC::Permission& permission)
                                                 getter_AddRefs(principal));
     NS_ENSURE_SUCCESS(rv, true);
 
+    // child processes don't care about modification time.
+    int64_t modificationTime = 0;
+
     permissionManager->AddInternal(principal,
                                    nsCString(permission.type),
                                    permission.capability,
                                    0,
                                    permission.expireType,
                                    permission.expireTime,
+                                   modificationTime,
                                    nsPermissionManager::eNotify,
                                    nsPermissionManager::eNoDBOperation);
 #endif
@@ -1780,12 +1893,14 @@ ContentChild::RecvFileSystemUpdate(const nsString& aFsName,
                                    const bool& aIsMediaPresent,
                                    const bool& aIsSharing,
                                    const bool& aIsFormatting,
-                                   const bool& aIsFake)
+                                   const bool& aIsFake,
+                                   const bool& aIsUnmounting)
 {
 #ifdef MOZ_WIDGET_GONK
     nsRefPtr<nsVolume> volume = new nsVolume(aFsName, aVolumeName, aState,
                                              aMountGeneration, aIsMediaPresent,
-                                             aIsSharing, aIsFormatting, aIsFake);
+                                             aIsSharing, aIsFormatting, aIsFake,
+                                             aIsUnmounting);
 
     nsRefPtr<nsVolumeService> vs = nsVolumeService::GetSingleton();
     if (vs) {
@@ -1801,6 +1916,7 @@ ContentChild::RecvFileSystemUpdate(const nsString& aFsName,
     unused << aIsSharing;
     unused << aIsFormatting;
     unused << aIsFake;
+    unused << aIsUnmounting;
 #endif
     return true;
 }
@@ -1942,7 +2058,7 @@ public:
         }
 
         // Perform other after-fork initializations.
-        InitOnContentProcessCreated(/* aAfterNuwaFork = */true);
+        InitOnContentProcessCreated();
 
         return NS_OK;
     }
@@ -2009,6 +2125,16 @@ ContentChild::RecvNuwaFork()
 #else
     return false; // Makes the underlying IPC channel abort.
 #endif
+}
+
+bool
+ContentChild::RecvOnAppThemeChanged()
+{
+    nsCOMPtr<nsIObserverService> os = services::GetObserverService();
+    if (os) {
+        os->NotifyObservers(nullptr, "app-theme-changed", nullptr);
+    }
+    return true;
 }
 
 } // namespace dom

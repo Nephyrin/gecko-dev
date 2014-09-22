@@ -784,12 +784,7 @@ nsBaseWidget::ComputeShouldAccelerate(bool aDefault)
   // those versions of the OS.
   // This will still let full-screen video be accelerated on OpenGL, because
   // that XUL widget opts in to acceleration, but that's probably OK.
-  SInt32 major = nsCocoaFeatures::OSXVersionMajor();
-  SInt32 minor = nsCocoaFeatures::OSXVersionMinor();
-  SInt32 bugfix = nsCocoaFeatures::OSXVersionBugFix();
-  if (major == 10 && minor == 6 && bugfix <= 2) {
-    accelerateByDefault = false;
-  }
+  accelerateByDefault = nsCocoaFeatures::AccelerateByDefault();
 #endif
 
   // we should use AddBoolPrefVarCache
@@ -872,20 +867,6 @@ nsBaseWidget::GetPreferredCompositorBackends(nsTArray<LayersBackend>& aHints)
   aHints.AppendElement(LayersBackend::LAYERS_BASIC);
 }
 
-static void
-CheckForBasicBackends(nsTArray<LayersBackend>& aHints)
-{
-#ifndef XP_WIN
-  for (size_t i = 0; i < aHints.Length(); ++i) {
-    if (aHints[i] == LayersBackend::LAYERS_BASIC &&
-        !Preferences::GetBool("layers.offmainthreadcomposition.force-basic", false)) {
-      // basic compositor is not stable enough for regular use
-      aHints[i] = LayersBackend::LAYERS_NONE;
-    }
-  }
-#endif
-}
-
 void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
 {
   MOZ_ASSERT(gfxPlatform::UsesOffMainThreadCompositing(),
@@ -915,9 +896,16 @@ void nsBaseWidget::CreateCompositor(int aWidth, int aHeight)
   nsTArray<LayersBackend> backendHints;
   GetPreferredCompositorBackends(backendHints);
 
-  if (!mRequireOffMainThreadCompositing) {
-    CheckForBasicBackends(backendHints);
+#if !defined(MOZ_X11) && !defined(XP_WIN)
+  if (!mRequireOffMainThreadCompositing &&
+      !Preferences::GetBool("layers.offmainthreadcomposition.force-basic", false)) {
+    for (size_t i = 0; i < backendHints.Length(); ++i) {
+      if (backendHints[i] == LayersBackend::LAYERS_BASIC) {
+        backendHints[i] = LayersBackend::LAYERS_NONE;
+      }
+    }
   }
+#endif
 
   bool success = false;
   if (!backendHints.IsEmpty()) {
@@ -1805,8 +1793,8 @@ nsBaseWidget::debug_DumpEvent(FILE *                aFileOut,
           (void *) aWidget,
           aWidgetName.get(),
           aWindowID,
-          aGuiEvent->refPoint.x.value,
-          aGuiEvent->refPoint.y.value);
+          aGuiEvent->refPoint.x,
+          aGuiEvent->refPoint.y);
 }
 //////////////////////////////////////////////////////////////
 /* static */ void

@@ -18,6 +18,7 @@
 
 #include "gfxPlatform.h"
 #include "gfxPrefs.h"
+#include "gfxTextRun.h"
 
 #ifdef XP_WIN
 #include <process.h>
@@ -60,6 +61,9 @@
 #include "nsILocaleService.h"
 #include "nsIObserverService.h"
 #include "MainThreadUtils.h"
+#ifdef MOZ_CRASHREPORTER
+#include "nsExceptionHandler.h"
+#endif
 
 #include "nsWeakReference.h"
 
@@ -70,6 +74,7 @@
 #include "nsCRT.h"
 #include "GLContext.h"
 #include "GLContextProvider.h"
+#include "mozilla/gfx/Logging.h"
 
 #ifdef MOZ_WIDGET_ANDROID
 #include "TexturePoolOGL.h"
@@ -140,6 +145,22 @@ class SRGBOverrideObserver MOZ_FINAL : public nsIObserver,
 public:
     NS_DECL_ISUPPORTS
     NS_DECL_NSIOBSERVER
+};
+
+class CrashStatsLogForwarder: public mozilla::gfx::LogForwarder
+{
+public:
+    virtual void Log(const std::string& aString) MOZ_OVERRIDE {
+        if (!NS_IsMainThread()) {
+            return;
+        }
+#ifdef MOZ_CRASHREPORTER
+        nsCString reportString(aString.c_str());
+        CrashReporter::AppendAppNotesToCrashReport(reportString);
+#else
+        printf("GFX ERROR: %s", aString.c_str());
+#endif
+    }
 };
 
 NS_IMPL_ISUPPORTS(SRGBOverrideObserver, nsIObserver, nsISupportsWeakReference)
@@ -220,6 +241,7 @@ MemoryPressureObserver::Observe(nsISupports *aSubject,
 {
     NS_ASSERTION(strcmp(aTopic, "memory-pressure") == 0, "unexpected event topic");
     Factory::PurgeAllCaches();
+    gfxGradientCache::PurgeAllCaches();
 
     gfxPlatform::GetPlatform()->PurgeSkiaCache();
     return NS_OK;
@@ -277,6 +299,7 @@ gfxPlatform::gfxPlatform()
     uint32_t contentMask = BackendTypeBit(BackendType::CAIRO);
     InitBackendPrefs(canvasMask, BackendType::CAIRO,
                      contentMask, BackendType::CAIRO);
+    mTotalSystemMemory = mozilla::hal::GetTotalSystemMemory();
 }
 
 gfxPlatform*
@@ -327,6 +350,8 @@ gfxPlatform::Init()
         NS_RUNTIMEABORT("Already started???");
     }
     gEverInitialized = true;
+
+    mozilla::gfx::Factory::SetLogForwarder(new CrashStatsLogForwarder);
 
     // Initialize the preferences by creating the singleton.
     gfxPrefs::GetSingleton();
@@ -487,6 +512,9 @@ gfxPlatform::Shutdown()
     // WebGL on Optimus.
     mozilla::gl::GLContextProviderEGL::Shutdown();
 #endif
+
+    delete mozilla::gfx::Factory::GetLogForwarder();
+    mozilla::gfx::Factory::SetLogForwarder(nullptr);
 
     delete gGfxPlatformPrefsLock;
 
@@ -851,14 +879,12 @@ gfxPlatform::InitializeSkiaCacheLimits()
     cacheSizeLimit *= 1024*1024;
 
     if (usingDynamicCache) {
-      uint32_t totalMemory = mozilla::hal::GetTotalSystemMemory();
-
-      if (totalMemory < 512*1024*1024) {
+      if (mTotalSystemMemory < 512*1024*1024) {
         // We need a very minimal cache on anything smaller than 512mb.
         // Note the large jump as we cross 512mb (from 2mb to 32mb).
         cacheSizeLimit = 2*1024*1024;
-      } else if (totalMemory > 0) {
-        cacheSizeLimit = totalMemory / 16;
+      } else if (mTotalSystemMemory > 0) {
+        cacheSizeLimit = mTotalSystemMemory / 16;
       }
     }
 
@@ -905,7 +931,21 @@ gfxPlatform::PurgeSkiaCache()
       return;
 
   mSkiaGlue->GetGrContext()->freeGpuResources();
+  // GrContext::flush() doesn't call glFlush. Call it here.
+  mSkiaGlue->GetGLContext()->MakeCurrent();
+  mSkiaGlue->GetGLContext()->fFlush();
 #endif
+}
+
+bool
+gfxPlatform::HasEnoughTotalSystemMemoryForSkiaGL()
+{
+#ifdef MOZ_WIDGET_GONK
+  if (mTotalSystemMemory < 250*1024*1024) {
+    return false;
+  }
+#endif
+  return true;
 }
 
 TemporaryRef<DrawTarget>
@@ -979,6 +1019,8 @@ gfxPlatform::BackendTypeForName(const nsCString& aName)
     return BackendType::SKIA;
   if (aName.EqualsLiteral("direct2d"))
     return BackendType::DIRECT2D;
+  if (aName.EqualsLiteral("direct2d1.1"))
+    return BackendType::DIRECT2D1_1;
   if (aName.EqualsLiteral("cg"))
     return BackendType::COREGRAPHICS;
   return BackendType::NONE;
@@ -1071,8 +1113,11 @@ gfxPlatform::UseGraphiteShaping()
 }
 
 gfxFontEntry*
-gfxPlatform::MakePlatformFont(const gfxProxyFontEntry *aProxyEntry,
-                              const uint8_t *aFontData,
+gfxPlatform::MakePlatformFont(const nsAString& aFontName,
+                              uint16_t aWeight,
+                              int16_t aStretch,
+                              bool aItalic,
+                              const uint8_t* aFontData,
                               uint32_t aLength)
 {
     // Default implementation does not handle activating downloaded fonts;
@@ -1446,8 +1491,18 @@ gfxPlatform::InitBackendPrefs(uint32_t aCanvasBitmask, BackendType aCanvasDefaul
     if (mPreferredCanvasBackend == BackendType::NONE) {
         mPreferredCanvasBackend = aCanvasDefault;
     }
-    mFallbackCanvasBackend =
-        GetCanvasBackendPref(aCanvasBitmask & ~BackendTypeBit(mPreferredCanvasBackend));
+
+    if (mPreferredCanvasBackend == BackendType::DIRECT2D1_1) {
+      // Falling back to D2D 1.0 won't help us here. When D2D 1.1 DT creation
+      // fails it means the surface was too big or there's something wrong with
+      // the device. D2D 1.0 will encounter a similar situation.
+      mFallbackCanvasBackend =
+          GetCanvasBackendPref(aCanvasBitmask &
+                               ~(BackendTypeBit(mPreferredCanvasBackend) | BackendTypeBit(BackendType::DIRECT2D)));
+    } else {
+      mFallbackCanvasBackend =
+          GetCanvasBackendPref(aCanvasBitmask & ~BackendTypeBit(mPreferredCanvasBackend));
+    }
 
     mContentBackendBitmask = aContentBitmask;
     mContentBackend = GetContentBackendPref(mContentBackendBitmask);
@@ -1937,7 +1992,7 @@ InitLayersAccelerationPrefs()
     MOZ_ASSERT(NS_IsMainThread(), "can only initialize prefs on the main thread");
 
     gfxPrefs::GetSingleton();
-    sPrefBrowserTabsRemoteAutostart = Preferences::GetBool("browser.tabs.remote.autostart", false);
+    sPrefBrowserTabsRemoteAutostart = BrowserTabsRemoteAutostart();
 
 #ifdef XP_WIN
     if (gfxPrefs::LayersAccelerationForceEnabled()) {

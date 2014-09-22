@@ -24,6 +24,7 @@
 #include "vm/ForkJoin.h"
 #include "vm/Interpreter.h"
 #include "vm/String.h"
+#include "vm/TypedArrayCommon.h"
 
 #include "jsfuninlines.h"
 #include "jsscriptinlines.h"
@@ -409,7 +410,7 @@ js::intrinsic_NewDenseArray(JSContext *cx, unsigned argc, Value *vp)
     uint32_t length = args[0].toInt32();
 
     // Make a new buffer and initialize it up to length.
-    RootedObject buffer(cx, NewDenseAllocatedArray(cx, length));
+    RootedObject buffer(cx, NewDenseFullyAllocatedArray(cx, length));
     if (!buffer)
         return false;
 
@@ -469,9 +470,9 @@ js::intrinsic_UnsafePutElements(JSContext *cx, unsigned argc, Value *vp)
         RootedObject arrobj(cx, &args[arri].toObject());
         uint32_t idx = args[idxi].toInt32();
 
-        if (arrobj->is<TypedArrayObject>() || arrobj->is<TypedObject>()) {
-            JS_ASSERT(!arrobj->is<TypedArrayObject>() || idx < arrobj->as<TypedArrayObject>().length());
-            JS_ASSERT(!arrobj->is<TypedObject>() || idx < uint32_t(arrobj->as<TypedObject>().length()));
+        if (IsAnyTypedArray(arrobj.get()) || arrobj->is<TypedObject>()) {
+            JS_ASSERT_IF(IsAnyTypedArray(arrobj.get()), idx < AnyTypedArrayLength(arrobj.get()));
+            JS_ASSERT_IF(arrobj->is<TypedObject>(), idx < uint32_t(arrobj->as<TypedObject>().length()));
             RootedValue tmp(cx, args[elemi]);
             // XXX: Always non-strict.
             if (!JSObject::setElement(cx, arrobj, arrobj, idx, &tmp, false))
@@ -790,6 +791,18 @@ intrinsic_RuntimeDefaultLocale(JSContext *cx, unsigned argc, Value *vp)
     return true;
 }
 
+bool
+js::intrinsic_IsConstructing(JSContext *cx, unsigned argc, Value *vp)
+{
+    CallArgs args = CallArgsFromVp(argc, vp);
+    MOZ_ASSERT(args.length() == 0);
+
+    ScriptFrameIter iter(cx);
+    bool isConstructing = iter.isConstructing();
+    args.rval().setBoolean(isConstructing);
+    return true;
+}
+
 static const JSFunctionSpec intrinsic_functions[] = {
     JS_FN("ToObject",                intrinsic_ToObject,                1,0),
     JS_FN("IsObject",                intrinsic_IsObject,                1,0),
@@ -802,6 +815,7 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_FN("AssertionFailed",         intrinsic_AssertionFailed,         1,0),
     JS_FN("SetScriptHints",          intrinsic_SetScriptHints,          2,0),
     JS_FN("MakeConstructible",       intrinsic_MakeConstructible,       1,0),
+    JS_FN("_IsConstructing",         intrinsic_IsConstructing,          0,0),
     JS_FN("DecompileArg",            intrinsic_DecompileArg,            2,0),
     JS_FN("RuntimeDefaultLocale",    intrinsic_RuntimeDefaultLocale,    0,0),
 
@@ -883,9 +897,6 @@ static const JSFunctionSpec intrinsic_functions[] = {
     JS_FNINFO("ClampToUint8",
               JSNativeThreadSafeWrapper<js::ClampToUint8>,
               &js::ClampToUint8JitInfo, 1, 0),
-    JS_FNINFO("Memcpy",
-              JSNativeThreadSafeWrapper<js::Memcpy>,
-              &js::MemcpyJitInfo, 5, 0),
     JS_FN("GetTypedObjectModule", js::GetTypedObjectModule, 0, 0),
     JS_FN("GetFloat32x4TypeDescr", js::GetFloat32x4TypeDescr, 0, 0),
     JS_FN("GetInt32x4TypeDescr", js::GetInt32x4TypeDescr, 0, 0),
@@ -1017,7 +1028,7 @@ JSRuntime::initSelfHosting(JSContext *cx)
      * early in the startup process for any other reporter to be registered
      * and we don't want errors in self-hosted code to be silently swallowed.
      */
-    JSErrorReporter oldReporter = JS_SetErrorReporter(cx, selfHosting_ErrorReporter);
+    JSErrorReporter oldReporter = JS_SetErrorReporter(cx->runtime(), selfHosting_ErrorReporter);
     RootedValue rv(cx);
     bool ok = false;
 
@@ -1031,7 +1042,7 @@ JSRuntime::initSelfHosting(JSContext *cx)
 
         const unsigned char *compressed = compressedSources;
         uint32_t compressedLen = GetCompressedSize();
-        ScopedJSFreePtr<char> src(selfHostingGlobal_->pod_malloc<char>(srcLen));
+        ScopedJSFreePtr<char> src(selfHostingGlobal_->zone()->pod_malloc<char>(srcLen));
         if (!src || !DecompressString(compressed, compressedLen,
                                       reinterpret_cast<unsigned char *>(src.get()), srcLen))
         {
@@ -1040,7 +1051,7 @@ JSRuntime::initSelfHosting(JSContext *cx)
 
         ok = Evaluate(cx, shg, options, src, srcLen, &rv);
     }
-    JS_SetErrorReporter(cx, oldReporter);
+    JS_SetErrorReporter(cx->runtime(), oldReporter);
     return ok;
 }
 
@@ -1212,7 +1223,7 @@ CloneObject(JSContext *cx, HandleObject selfHostedObject)
     } else {
         JS_ASSERT(selfHostedObject->isNative());
         clone = NewObjectWithGivenProto(cx, selfHostedObject->getClass(), TaggedProto(nullptr), cx->global(),
-                                        selfHostedObject->tenuredGetAllocKind(),
+                                        selfHostedObject->asTenured()->getAllocKind(),
                                         SingletonObject);
     }
     if (!clone)

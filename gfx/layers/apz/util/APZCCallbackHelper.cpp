@@ -86,8 +86,10 @@ ScrollFrameTo(nsIScrollableFrame* aFrame, const CSSPoint& aPoint, bool& aSuccess
   // Also if the scrollable frame got a scroll request from something other than us
   // since the last layers update, then we don't want to push our scroll request
   // because we'll clobber that one, which is bad.
-  if (!aFrame->IsProcessingAsyncScroll() &&
-     (!aFrame->OriginOfLastScroll() || aFrame->OriginOfLastScroll() == nsGkAtoms::apz)) {
+  bool scrollInProgress = aFrame->IsProcessingAsyncScroll()
+      || (aFrame->LastScrollOrigin() && aFrame->LastScrollOrigin() != nsGkAtoms::apz)
+      || aFrame->LastSmoothScrollOrigin();
+  if (!scrollInProgress) {
     aFrame->ScrollToCSSPixelsApproximate(targetScrollPosition, nsGkAtoms::apz);
     geckoScrollPosition = CSSPoint::FromAppUnits(aFrame->GetScrollPosition());
     aSuccessOut = true;
@@ -287,7 +289,16 @@ public:
 
         nsIScrollableFrame* sf = nsLayoutUtils::FindScrollableFrameFor(mScrollId);
         if (sf) {
-            sf->ResetOriginIfScrollAtGeneration(mScrollGeneration);
+            sf->ResetScrollInfoIfGeneration(mScrollGeneration);
+        }
+
+        // Since the APZ and content are in sync, we need to clear any callback transform
+        // that might have been set on the last repaint request (which might have failed
+        // due to the inflight scroll update that this message is acknowledging).
+        nsCOMPtr<nsIContent> content = nsLayoutUtils::FindContentFor(mScrollId);
+        if (content) {
+            content->SetProperty(nsGkAtoms::apzCallbackTransform, new CSSPoint(),
+                                 nsINode::DeleteProperty<CSSPoint>);
         }
 
         return NS_OK;

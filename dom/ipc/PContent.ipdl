@@ -22,6 +22,7 @@ include protocol PHal;
 include protocol PImageBridge;
 include protocol PIndexedDB;
 include protocol PMemoryReportRequest;
+include protocol PMobileConnection;
 include protocol PNecko;
 include protocol PScreenManager;
 include protocol PSharedBufferManager;
@@ -289,6 +290,25 @@ struct DataStoreSetting {
   bool enabled;
 };
 
+// Note: Any changes to this structure should also be changed in
+// FileSystemUpdate below.
+struct VolumeInfo {
+  nsString name;
+  nsString mountPoint;
+  int32_t volState;
+  int32_t mountGeneration;
+  bool isMediaPresent;
+  bool isSharing;
+  bool isFormatting;
+  bool isFake;
+  bool isUnmounting;
+};
+
+union MaybeFileDesc {
+    FileDescriptor;
+    void_t;
+};
+
 intr protocol PContent
 {
     parent opens PCompositor;
@@ -310,6 +330,7 @@ intr protocol PContent
     manages PHal;
     manages PIndexedDB;
     manages PMemoryReportRequest;
+    manages PMobileConnection;
     manages PNecko;
     manages PScreenManager;
     manages PSms;
@@ -362,7 +383,7 @@ child:
     async SetProcessSandbox();
 
     PMemoryReportRequest(uint32_t generation, bool anonymize,
-                         bool minimizeMemoryUsage, FileDescriptor DMDFile);
+                         bool minimizeMemoryUsage, MaybeFileDesc DMDFile);
 
     /**
      * Notify the AudioChannelService in the child processes.
@@ -425,9 +446,11 @@ child:
     FilePathUpdate(nsString storageType, nsString storageName, nsString filepath,
                    nsCString reasons);
 
+    // Note: Any changes to this structure should also be changed in
+    // VolumeInfo above.
     FileSystemUpdate(nsString fsName, nsString mountPoint, int32_t fsState,
                      int32_t mountGeneration, bool isMediaPresent,
-                     bool isSharing, bool isFormatting, bool isFake);
+                     bool isSharing, bool isFormatting, bool isFake, bool isUnmounting);
 
     // Ask the Nuwa process to create a new child process.
     NuwaFork();
@@ -447,6 +470,12 @@ child:
      * Notify idle observers in the child
      */
     NotifyIdleObserver(uint64_t observerId, nsCString topic, nsString str);
+
+    /**
+     * Notify windows in the child to apply a new app style.
+     */
+    OnAppThemeChanged();
+
 parent:
     /**
      * Tell the content process some attributes of itself.  This is
@@ -491,6 +520,8 @@ parent:
     PHal();
 
     PIndexedDB();
+
+    PMobileConnection(uint32_t clientId);
 
     PNecko();
 
@@ -611,8 +642,8 @@ parent:
                                nsString aStorageName,
                                nsString aFilepath,
                                nsCString aReason);
-    // get nsIVolumeService to broadcast volume information
-    async BroadcastVolume(nsString volumeName);
+
+    sync GetVolumes() returns (VolumeInfo[] volumes);
 
     // Notify the parent that the child has finished handling a system message.
     async SystemMessageHandled();

@@ -348,6 +348,8 @@ class CodeGeneratorShared : public LInstructionVisitor
     bool emitTruncateDouble(FloatRegister src, Register dest, MInstruction *mir);
     bool emitTruncateFloat32(FloatRegister src, Register dest, MInstruction *mir);
 
+    void emitAsmJSCall(LAsmJSCall *ins);
+
     void emitPreBarrier(Register base, const LAllocation *index);
     void emitPreBarrier(Address address);
 
@@ -495,8 +497,6 @@ class CodeGeneratorShared : public LInstructionVisitor
 
   private:
     void generateInvalidateEpilogue();
-
-    void setupSimdAlignment(unsigned fixup);
 
   public:
     CodeGeneratorShared(MIRGenerator *gen, LIRGraph *graph, MacroAssembler *masm);

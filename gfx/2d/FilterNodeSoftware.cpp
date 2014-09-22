@@ -492,14 +492,11 @@ GetDataSurfaceInRect(SourceSurface *aSurface,
   IntRect intersectInDestSpace = intersect - aDestRect.TopLeft();
   SurfaceFormat format = aSurface ? aSurface->GetFormat() : SurfaceFormat(SurfaceFormat::B8G8R8A8);
 
+  bool clear = aEdgeMode == EDGE_MODE_NONE && !aSurfaceRect.Contains(aDestRect);
   RefPtr<DataSourceSurface> target =
-    Factory::CreateDataSourceSurface(aDestRect.Size(), format);
+    Factory::CreateDataSourceSurface(aDestRect.Size(), format, clear);
   if (MOZ2D_WARN_IF(!target)) {
     return nullptr;
-  }
-
-  if (aEdgeMode == EDGE_MODE_NONE && !aSurfaceRect.Contains(aDestRect)) {
-    ClearDataSourceSurface(target);
   }
 
   if (!aSurface) {
@@ -997,6 +994,46 @@ FilterNodeBlendSoftware::SetAttribute(uint32_t aIndex, uint32_t aBlendMode)
   Invalidate();
 }
 
+static CompositionOp ToBlendOp(BlendMode aOp)
+{
+  switch (aOp) {
+  case BLEND_MODE_MULTIPLY:
+    return CompositionOp::OP_MULTIPLY;
+  case BLEND_MODE_SCREEN:
+    return CompositionOp::OP_SCREEN;
+  case BLEND_MODE_OVERLAY:
+    return CompositionOp::OP_OVERLAY;
+  case BLEND_MODE_DARKEN:
+    return CompositionOp::OP_DARKEN;
+  case BLEND_MODE_LIGHTEN:
+    return CompositionOp::OP_LIGHTEN;
+  case BLEND_MODE_COLOR_DODGE:
+    return CompositionOp::OP_COLOR_DODGE;
+  case BLEND_MODE_COLOR_BURN:
+    return CompositionOp::OP_COLOR_BURN;
+  case BLEND_MODE_HARD_LIGHT:
+    return CompositionOp::OP_HARD_LIGHT;
+  case BLEND_MODE_SOFT_LIGHT:
+    return CompositionOp::OP_SOFT_LIGHT;
+  case BLEND_MODE_DIFFERENCE:
+    return CompositionOp::OP_DIFFERENCE;
+  case BLEND_MODE_EXCLUSION:
+    return CompositionOp::OP_EXCLUSION;
+  case BLEND_MODE_HUE:
+    return CompositionOp::OP_HUE;
+  case BLEND_MODE_SATURATION:
+    return CompositionOp::OP_SATURATION;
+  case BLEND_MODE_COLOR:
+    return CompositionOp::OP_COLOR;
+  case BLEND_MODE_LUMINOSITY:
+    return CompositionOp::OP_LUMINOSITY;
+  default:
+    return CompositionOp::OP_OVER;
+  }
+
+  return CompositionOp::OP_OVER;
+}
+
 TemporaryRef<DataSourceSurface>
 FilterNodeBlendSoftware::Render(const IntRect& aRect)
 {
@@ -1013,14 +1050,38 @@ FilterNodeBlendSoftware::Render(const IntRect& aRect)
     return nullptr;
   }
 
-  // Second case: both are non-transparent.
-  if (input1 && input2) {
-    // Apply normal filtering.
-    return FilterProcessing::ApplyBlending(input1, input2, mBlendMode);
+  // Second case: one of them is transparent. Return the non-transparent one.
+  if (!input1 || !input2) {
+    return input1 ? input1.forget() : input2.forget();
   }
 
-  // Third case: one of them is transparent. Return the non-transparent one.
-  return input1 ? input1.forget() : input2.forget();
+  // Third case: both are non-transparent.
+  // Apply normal filtering.
+  RefPtr<DataSourceSurface> target = FilterProcessing::ApplyBlending(input1, input2, mBlendMode);
+  if (target != nullptr) {
+    return target.forget();
+  }
+
+  IntSize size = input1->GetSize();
+  target =
+    Factory::CreateDataSourceSurface(size, SurfaceFormat::B8G8R8A8);
+  if (MOZ2D_WARN_IF(!target)) {
+    return nullptr;
+  }
+
+  CopyRect(input1, target, IntRect(IntPoint(), size), IntPoint());
+
+  RefPtr<DrawTarget> dt =
+	    Factory::CreateDrawTargetForData(BackendType::CAIRO,
+	                                     target->GetData(),
+	                                     target->GetSize(),
+	                                     target->Stride(),
+	                                     target->GetFormat());
+
+  Rect r(0, 0, size.width, size.height);
+  dt->DrawSurface(input2, r, r, DrawSurfaceOptions(), DrawOptions(1.0f, ToBlendOp(mBlendMode)));
+  dt->Flush();
+  return target.forget();
 }
 
 void
@@ -2164,7 +2225,7 @@ static uint8_t* sColorSamplingAccessControlEnd = nullptr;
 
 struct DebugOnlyAutoColorSamplingAccessControl
 {
-  DebugOnlyAutoColorSamplingAccessControl(DataSourceSurface* aSurface)
+  explicit DebugOnlyAutoColorSamplingAccessControl(DataSourceSurface* aSurface)
   {
     sColorSamplingAccessControlStart = aSurface->GetData();
     sColorSamplingAccessControlEnd = sColorSamplingAccessControlStart +
@@ -2371,11 +2432,10 @@ FilterNodeConvolveMatrixSoftware::DoRender(const IntRect& aRect,
   DebugOnlyAutoColorSamplingAccessControl accessControl(input);
 
   RefPtr<DataSourceSurface> target =
-    Factory::CreateDataSourceSurface(aRect.Size(), SurfaceFormat::B8G8R8A8);
+    Factory::CreateDataSourceSurface(aRect.Size(), SurfaceFormat::B8G8R8A8, true);
   if (MOZ2D_WARN_IF(!target)) {
     return nullptr;
   }
-  ClearDataSourceSurface(target);
 
   IntPoint offset = aRect.TopLeft() - srcRect.TopLeft();
 
@@ -2776,15 +2836,13 @@ FilterNodeCompositeSoftware::Render(const IntRect& aRect)
   RefPtr<DataSourceSurface> start =
     GetInputDataSourceSurface(IN_COMPOSITE_IN_START, aRect, NEED_COLOR_CHANNELS);
   RefPtr<DataSourceSurface> dest =
-    Factory::CreateDataSourceSurface(aRect.Size(), SurfaceFormat::B8G8R8A8);
+    Factory::CreateDataSourceSurface(aRect.Size(), SurfaceFormat::B8G8R8A8, !start);
   if (MOZ2D_WARN_IF(!dest)) {
     return nullptr;
   }
 
   if (start) {
     CopyRect(start, dest, aRect - aRect.TopLeft(), IntPoint());
-  } else {
-    ClearDataSourceSurface(dest);
   }
 
   for (size_t inputIndex = 1; inputIndex < NumberOfSetInputs(); inputIndex++) {
@@ -2921,13 +2979,20 @@ FilterNodeGaussianBlurSoftware::FilterNodeGaussianBlurSoftware()
  : mStdDeviation(0)
 {}
 
+static float
+ClampStdDeviation(float aStdDeviation)
+{
+  // Cap software blur radius for performance reasons.
+  return std::min(std::max(0.0f, aStdDeviation), 100.0f);
+}
+
 void
 FilterNodeGaussianBlurSoftware::SetAttribute(uint32_t aIndex,
                                              float aStdDeviation)
 {
   switch (aIndex) {
     case ATT_GAUSSIAN_BLUR_STD_DEVIATION:
-      mStdDeviation = std::max(0.0f, aStdDeviation);
+      mStdDeviation = ClampStdDeviation(aStdDeviation);
       break;
     default:
       MOZ_CRASH();
@@ -2951,7 +3016,7 @@ FilterNodeDirectionalBlurSoftware::SetAttribute(uint32_t aIndex,
 {
   switch (aIndex) {
     case ATT_DIRECTIONAL_BLUR_STD_DEVIATION:
-      mStdDeviation = std::max(0.0f, aStdDeviation);
+      mStdDeviation = ClampStdDeviation(aStdDeviation);
       break;
     default:
       MOZ_CRASH();

@@ -154,7 +154,7 @@ GetIncumbentGlobal()
   // there's nothing on the JS stack, which will cause us to check the
   // incumbent script stack below.
   if (JSObject *global = JS::GetScriptedCallerGlobal(cx)) {
-    return xpc::GetNativeForGlobal(global);
+    return xpc::NativeGlobal(global);
   }
 
   // Ok, nothing from the JS engine. Let's use whatever's on the
@@ -175,7 +175,7 @@ GetCurrentGlobal()
     return nullptr;
   }
 
-  return xpc::GetNativeForGlobal(global);
+  return xpc::NativeGlobal(global);
 }
 
 nsIPrincipal*
@@ -240,6 +240,7 @@ AutoJSAPI::AutoJSAPI()
 void
 AutoJSAPI::InitInternal(JSObject* aGlobal, JSContext* aCx, bool aIsMainThread)
 {
+  MOZ_ASSERT(aCx);
   mCx = aCx;
   if (aIsMainThread) {
     // This Rooted<> is necessary only as long as AutoCxPusher::AutoCxPusher
@@ -299,6 +300,12 @@ bool
 AutoJSAPI::Init(nsIGlobalObject* aGlobalObject)
 {
   return Init(aGlobalObject, nsContentUtils::GetDefaultJSContextForThread());
+}
+
+bool
+AutoJSAPI::Init(JSObject* aObject)
+{
+  return Init(xpc::NativeGlobal(aObject));
 }
 
 bool

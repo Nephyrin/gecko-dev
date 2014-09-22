@@ -225,8 +225,11 @@ class JSObject : public js::ObjectImpl
     static bool setLastProperty(js::ThreadSafeContext *cx,
                                 JS::HandleObject obj, js::HandleShape shape);
 
-    /* As above, but does not change the slot span. */
-    inline void setLastPropertyInfallible(js::Shape *shape);
+    // As for setLastProperty(), but allows the number of fixed slots to
+    // change. This can only be used when fixed slots are being erased from the
+    // object, and only when the object will not require dynamic slots to cover
+    // the new properties.
+    void setLastPropertyShrinkFixedSlots(js::Shape *shape);
 
     /*
      * Make a non-array object with the specified initial state. This method
@@ -253,11 +256,20 @@ class JSObject : public js::ObjectImpl
                                                js::HandleTypeObject type,
                                                js::HeapSlot *elements);
 
+    /* Make an copy-on-write array object which shares the elements of an existing object. */
+    static inline js::ArrayObject *createCopyOnWriteArray(js::ExclusiveContext *cx,
+                                                          js::gc::InitialHeap heap,
+                                                          js::HandleShape shape,
+                                                          js::HandleObject sharedElementsOwner);
+
   private:
     // Helper for the above two methods.
     static inline JSObject *
     createArrayInternal(js::ExclusiveContext *cx, js::gc::AllocKind kind, js::gc::InitialHeap heap,
                         js::HandleShape shape, js::HandleTypeObject type);
+
+    static inline js::ArrayObject *finishCreateArray(JSObject *obj,
+                                                     js::HandleShape shape);
   public:
 
     /*
@@ -773,6 +785,8 @@ class JSObject : public js::ObjectImpl
         return getElementsHeader()->isCopyOnWrite();
     }
 
+    void fixupAfterMovingGC();
+
     /* Packed information for this object's elements. */
     inline bool writeToIndexWouldMarkNotPacked(uint32_t index);
     inline void markDenseElementsNotPacked(js::ExclusiveContext *cx);
@@ -837,10 +851,10 @@ class JSObject : public js::ObjectImpl
     /*
      * Back to generic stuff.
      */
-    bool isCallable() {
-        return getClass()->isCallable();
-    }
+    bool isCallable() const;
     bool isConstructor() const;
+    JSNative callHook() const;
+    JSNative constructHook() const;
 
     inline void finish(js::FreeOp *fop);
     MOZ_ALWAYS_INLINE void finalize(js::FreeOp *fop);
@@ -1152,13 +1166,13 @@ class JSObject : public js::ObjectImpl
 
     template <class T>
     T &as() {
-        JS_ASSERT(is<T>());
+        JS_ASSERT(this->is<T>());
         return *static_cast<T *>(this);
     }
 
     template <class T>
     const T &as() const {
-        JS_ASSERT(is<T>());
+        JS_ASSERT(this->is<T>());
         return *static_cast<const T *>(this);
     }
 
@@ -1297,7 +1311,7 @@ GetBuiltinPrototypePure(GlobalObject *global, JSProtoKey protoKey);
 
 extern bool
 SetClassAndProto(JSContext *cx, HandleObject obj,
-                 const Class *clasp, Handle<TaggedProto> proto, bool *succeeded);
+                 const Class *clasp, Handle<TaggedProto> proto, bool crashOnFailure);
 
 /*
  * Property-lookup-based access to interface and prototype objects for classes.
@@ -1454,18 +1468,17 @@ LookupNameNoGC(JSContext *cx, PropertyName *name, JSObject *scopeChain,
  */
 extern bool
 LookupNameWithGlobalDefault(JSContext *cx, HandlePropertyName name, HandleObject scopeChain,
-                            MutableHandleObject objp);
+                            MutableHandleObject objp, MutableHandleShape propp);
 
 /*
  * Like LookupName except returns the unqualified var object if 'name' is not found in
  * any preceding scope. Normally the unqualified var object is the global.
  *
- * Additionally, pobjp and propp are not needed by callers so they are not
- * returned.
+ * Additionally, pobjp is not needed by callers so it is not returned.
  */
 extern bool
 LookupNameUnqualified(JSContext *cx, HandlePropertyName name, HandleObject scopeChain,
-                      MutableHandleObject objp);
+                      MutableHandleObject objp, MutableHandleShape propp);
 
 }
 

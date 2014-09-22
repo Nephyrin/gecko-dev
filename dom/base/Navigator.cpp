@@ -377,9 +377,11 @@ Navigator::GetAppName(nsAString& aAppName)
  *
  * An empty array will be returned if there is no valid languages.
  */
-void
+/* static */ void
 Navigator::GetAcceptLanguages(nsTArray<nsString>& aLanguages)
 {
+  MOZ_ASSERT(NS_IsMainThread());
+
   // E.g. "de-de, en-us,en".
   const nsAdoptingString& acceptLang =
     Preferences::GetLocalizedString("intl.accept_languages");
@@ -438,7 +440,7 @@ Navigator::GetLanguage(nsAString& aLanguage)
     aLanguage.Truncate();
   }
 
-    return NS_OK;
+  return NS_OK;
 }
 
 void
@@ -888,115 +890,6 @@ Navigator::RegisterProtocolHandler(const nsAString& aProtocol,
 
   aRv = registrar->RegisterProtocolHandler(aProtocol, aURI, aTitle,
                                            mWindow->GetOuterWindow());
-}
-
-bool
-Navigator::MozIsLocallyAvailable(const nsAString &aURI,
-                                 bool aWhenOffline,
-                                 ErrorResult& aRv)
-{
-  nsCOMPtr<nsIURI> uri;
-  nsresult rv = NS_NewURI(getter_AddRefs(uri), aURI);
-  if (NS_FAILED(rv)) {
-    aRv.Throw(rv);
-    return false;
-  }
-
-  // This method of checking the cache will only work for http/https urls.
-  bool match;
-  rv = uri->SchemeIs("http", &match);
-  if (NS_FAILED(rv)) {
-    aRv.Throw(rv);
-    return false;
-  }
-
-  if (!match) {
-    rv = uri->SchemeIs("https", &match);
-    if (NS_FAILED(rv)) {
-      aRv.Throw(rv);
-      return false;
-    }
-    if (!match) {
-      aRv.Throw(NS_ERROR_DOM_BAD_URI);
-      return false;
-    }
-  }
-
-  // Same origin check.
-  JSContext *cx = nsContentUtils::GetCurrentJSContext();
-  if (!cx) {
-    aRv.Throw(NS_ERROR_FAILURE);
-    return false;
-  }
-
-  rv = nsContentUtils::GetSecurityManager()->CheckSameOrigin(cx, uri);
-  if (NS_FAILED(rv)) {
-    aRv.Throw(rv);
-    return false;
-  }
-
-  // These load flags cause an error to be thrown if there is no
-  // valid cache entry, and skip the load if there is.
-  // If the cache is busy, assume that it is not yet available rather
-  // than waiting for it to become available.
-  uint32_t loadFlags = nsIChannel::INHIBIT_CACHING |
-                       nsICachingChannel::LOAD_NO_NETWORK_IO |
-                       nsICachingChannel::LOAD_ONLY_IF_MODIFIED |
-                       nsICachingChannel::LOAD_BYPASS_LOCAL_CACHE_IF_BUSY;
-
-  if (aWhenOffline) {
-    loadFlags |= nsICachingChannel::LOAD_CHECK_OFFLINE_CACHE |
-                 nsICachingChannel::LOAD_ONLY_FROM_CACHE |
-                 nsIRequest::LOAD_FROM_CACHE;
-  }
-
-  if (!mWindow) {
-    aRv.Throw(NS_ERROR_UNEXPECTED);
-    return false;
-  }
-
-  nsCOMPtr<nsILoadGroup> loadGroup;
-  nsCOMPtr<nsIDocument> doc = mWindow->GetDoc();
-  if (doc) {
-    loadGroup = doc->GetDocumentLoadGroup();
-  }
-
-  nsCOMPtr<nsIChannel> channel;
-  rv = NS_NewChannel(getter_AddRefs(channel), uri,
-                     nullptr, loadGroup, nullptr, loadFlags);
-  if (NS_FAILED(rv)) {
-    aRv.Throw(rv);
-    return false;
-  }
-
-  nsCOMPtr<nsIInputStream> stream;
-  rv = channel->Open(getter_AddRefs(stream));
-  if (NS_FAILED(rv)) {
-    aRv.Throw(rv);
-    return false;
-  }
-
-  stream->Close();
-
-  nsresult status;
-  rv = channel->GetStatus(&status);
-  if (NS_FAILED(rv)) {
-    aRv.Throw(rv);
-    return false;
-  }
-
-  if (NS_FAILED(status)) {
-    return false;
-  }
-
-  nsCOMPtr<nsIHttpChannel> httpChannel = do_QueryInterface(channel);
-  bool isAvailable;
-  rv = httpChannel->GetRequestSucceeded(&isAvailable);
-  if (NS_FAILED(rv)) {
-    aRv.Throw(rv);
-    return false;
-  }
-  return isAvailable;
 }
 
 nsDOMDeviceStorage*
@@ -2109,8 +2002,8 @@ Navigator::DoNewResolve(JSContext* aCx, JS::Handle<JSObject*> aObject,
       }
 
       if (name.EqualsLiteral("mozSettings")) {
-        bool hasPermission = CheckPermission("settings-read") ||
-                             CheckPermission("settings-write");
+        bool hasPermission = CheckPermission("settings-api-read") ||
+          CheckPermission("settings-api-write");
         if (!hasPermission) {
           FillPropertyDescriptor(aDesc, aObject, JS::NullValue(), false);
           return true;
@@ -2362,7 +2255,7 @@ class HasDataStoreSupportRunnable MOZ_FINAL
 public:
   bool mResult;
 
-  HasDataStoreSupportRunnable(workers::WorkerPrivate* aWorkerPrivate)
+  explicit HasDataStoreSupportRunnable(workers::WorkerPrivate* aWorkerPrivate)
     : workers::WorkerMainThreadRunnable(aWorkerPrivate)
     , mResult(false)
   {

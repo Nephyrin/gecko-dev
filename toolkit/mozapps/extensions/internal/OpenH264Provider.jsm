@@ -41,6 +41,10 @@ const OPENH264_OPTIONS_URL     = "chrome://mozapps/content/extensions/openH264Pr
 
 const GMP_PREF_LASTCHECK       = "media.gmp-manager.lastCheck";
 
+// The following is part of an awful hack to include the OpenH264 license
+// without having bug 624602 fixed yet, and intentionally ignores localisation.
+const OPENH264_FULLDESCRIPTION = "<xhtml:a href=\"chrome://mozapps/content/extensions/OpenH264-license.txt\" target=\"_blank\">License information</xhtml:a>.";
+
 XPCOMUtils.defineLazyGetter(this, "pluginsBundle",
   () => Services.strings.createBundle("chrome://global/locale/plugins.properties"));
 XPCOMUtils.defineLazyGetter(this, "prefs",
@@ -87,11 +91,13 @@ let OpenH264Wrapper = {
 
   get id() { return OPENH264_PLUGIN_ID; },
   get type() { return "plugin"; },
+  get isGMPlugin() { return true; },
   get name() { return pluginsBundle.GetStringFromName("openH264_name"); },
   get creator() { return null; },
   get homepageURL() { return OPENH264_HOMEPAGE_URL; },
 
   get description() { return pluginsBundle.GetStringFromName("openH264_description"); },
+  get fullDescription() { return OPENH264_FULLDESCRIPTION; },
 
   get version() { return prefs.get(OPENH264_PREF_VERSION, ""); },
 

@@ -124,13 +124,13 @@ class gcstats::StatisticsSerializer
         needComma_ = true;
     }
 
-    jschar *finishJSString() {
+    char16_t *finishJSString() {
         char *buf = finishCString();
         if (!buf)
             return nullptr;
 
         size_t nchars = strlen(buf);
-        jschar *out = js_pod_malloc<jschar>(nchars + 1);
+        char16_t *out = js_pod_malloc<char16_t>(nchars + 1);
         if (!out) {
             oom_ = true;
             js_free(buf);
@@ -292,6 +292,7 @@ static const PhaseInfo phases[] = {
     { PHASE_SWEEP_COMPARTMENTS, "Sweep Compartments", PHASE_SWEEP },
     { PHASE_SWEEP_DISCARD_CODE, "Sweep Discard Code", PHASE_SWEEP_COMPARTMENTS },
     { PHASE_SWEEP_TABLES, "Sweep Tables", PHASE_SWEEP_COMPARTMENTS },
+    { PHASE_SWEEP_TABLES_INNER_VIEWS, "Sweep Inner Views", PHASE_SWEEP_TABLES },
     { PHASE_SWEEP_TABLES_WRAPPER, "Sweep Cross Compartment Wrappers", PHASE_SWEEP_TABLES },
     { PHASE_SWEEP_TABLES_BASE_SHAPE, "Sweep Base Shapes", PHASE_SWEEP_TABLES },
     { PHASE_SWEEP_TABLES_INITIAL_SHAPE, "Sweep Initial Shapes", PHASE_SWEEP_TABLES },
@@ -335,6 +336,8 @@ Statistics::gcDuration(int64_t *total, int64_t *maxPause)
         if (slice->duration() > *maxPause)
             *maxPause = slice->duration();
     }
+    if (*maxPause > maxPauseInInterval)
+        maxPauseInInterval = *maxPause;
 }
 
 void
@@ -424,7 +427,7 @@ Statistics::formatData(StatisticsSerializer &ss, uint64_t timestamp)
     return !ss.isOOM();
 }
 
-jschar *
+char16_t *
 Statistics::formatMessage()
 {
     StatisticsSerializer ss(StatisticsSerializer::AsText);
@@ -432,7 +435,7 @@ Statistics::formatMessage()
     return ss.finishJSString();
 }
 
-jschar *
+char16_t *
 Statistics::formatJSON(uint64_t timestamp)
 {
     StatisticsSerializer ss(StatisticsSerializer::AsJSON);
@@ -448,6 +451,7 @@ Statistics::Statistics(JSRuntime *rt)
     gcDepth(0),
     nonincrementalReason(nullptr),
     preBytes(0),
+    maxPauseInInterval(0),
     phaseNestingDepth(0),
     sliceCallback(nullptr)
 {
@@ -493,10 +497,25 @@ Statistics::~Statistics()
 }
 
 JS::GCSliceCallback
-Statistics::setSliceCallback(JS::GCSliceCallback newCallback) {
+Statistics::setSliceCallback(JS::GCSliceCallback newCallback)
+{
     JS::GCSliceCallback oldCallback = sliceCallback;
     sliceCallback = newCallback;
     return oldCallback;
+}
+
+int64_t
+Statistics::clearMaxGCPauseAccumulator()
+{
+    int64_t prior = maxPauseInInterval;
+    maxPauseInInterval = 0;
+    return prior;
+}
+
+int64_t
+Statistics::getMaxGCPauseSinceClear()
+{
+    return maxPauseInInterval;
 }
 
 void

@@ -554,7 +554,7 @@ public:
   }
 
 protected:
-  MOZ_CONSTEXPR BuiltinCounterStyle(int32_t aStyle)
+  MOZ_CONSTEXPR explicit BuiltinCounterStyle(int32_t aStyle)
     : CounterStyle(aStyle)
   {
   }
@@ -1906,6 +1906,11 @@ InvalidateOldStyle(const nsSubstring& aKey,
         static_cast<CustomCounterStyle*>(aStyle.get());
       if (style->GetRule() != newRule) {
         toBeRemoved = true;
+        // Since |style| is being removed from mCacheTable, it won't be visited
+        // by our post-removal InvalidateDependentData() traversal. So, we have
+        // to give it a manual ResetDependentData() call. (This only really
+        // matters if something else is holding a reference & keeping it alive.)
+        style->ResetDependentData();
       } else if (style->GetRuleGeneration() != newRule->GetGeneration()) {
         toBeUpdated = true;
         style->ResetCachedData();

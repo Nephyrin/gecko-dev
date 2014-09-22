@@ -110,7 +110,7 @@ class Navigator MOZ_FINAL : public nsIDOMNavigator
                           , public nsWrapperCache
 {
 public:
-  Navigator(nsPIDOMWindow *aInnerWindow);
+  explicit Navigator(nsPIDOMWindow* aInnerWindow);
 
   NS_DECL_CYCLE_COLLECTING_ISUPPORTS
   NS_DECL_CYCLE_COLLECTION_SCRIPT_HOLDER_CLASS_AMBIGUOUS(Navigator,
@@ -207,8 +207,6 @@ public:
                          nsTArray<nsRefPtr<nsDOMDeviceStorage> >& aStores,
                          ErrorResult& aRv);
   DesktopNotificationCenter* GetMozNotification(ErrorResult& aRv);
-  bool MozIsLocallyAvailable(const nsAString& aURI, bool aWhenOffline,
-                             ErrorResult& aRv);
   MobileMessageManager* GetMozMobileMessage();
   Telephony* GetMozTelephony(ErrorResult& aRv);
   network::Connection* GetConnection(ErrorResult& aRv);
@@ -267,7 +265,8 @@ public:
   void GetOwnPropertyNames(JSContext* aCx, nsTArray<nsString>& aNames,
                            ErrorResult& aRv);
   void GetLanguages(nsTArray<nsString>& aLanguages);
-  void GetAcceptLanguages(nsTArray<nsString>& aLanguages);
+
+  static void GetAcceptLanguages(nsTArray<nsString>& aLanguages);
 
   // WebIDL helper methods
   static bool HasWakeLockSupport(JSContext* /* unused*/, JSObject* /*unused */);

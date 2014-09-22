@@ -21,7 +21,7 @@ class WebGLVertexArrayFake;
 
 class WebGLVertexArray
     : public nsWrapperCache
-    , public WebGLBindableName
+    , public WebGLBindableName<GLenum>
     , public WebGLRefCountedObject<WebGLVertexArray>
     , public LinkedListElement<WebGLVertexArray>
     , public WebGLContextBoundObject
@@ -74,7 +74,7 @@ public:
 // -----------------------------------------------------------------------------
 // PROTECTED
 protected:
-    WebGLVertexArray(WebGLContext* context);
+    explicit WebGLVertexArray(WebGLContext* aContext);
 
     virtual ~WebGLVertexArray() {
         MOZ_ASSERT(IsDeleted());

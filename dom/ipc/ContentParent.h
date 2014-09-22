@@ -363,11 +363,12 @@ private:
 
     // Transform a pre-allocated app process into a "real" app
     // process, for the specified manifest URL.
-    void TransformPreallocatedIntoApp(const nsAString& aAppManifestURL);
+    void TransformPreallocatedIntoApp(ContentParent* aOpener,
+                                      const nsAString& aAppManifestURL);
 
     // Transform a pre-allocated app process into a browser process. If this
     // returns false, the child process has died.
-    void TransformPreallocatedIntoBrowser();
+    void TransformPreallocatedIntoBrowser(ContentParent* aOpener);
 
     /**
      * Mark this ContentParent as dead for the purposes of Get*().
@@ -450,7 +451,7 @@ private:
     AllocPMemoryReportRequestParent(const uint32_t& aGeneration,
                                     const bool &aAnonymize,
                                     const bool &aMinimizeMemoryUsage,
-                                    const FileDescriptor &aDMDFile) MOZ_OVERRIDE;
+                                    const MaybeFileDesc &aDMDFile) MOZ_OVERRIDE;
     virtual bool DeallocPMemoryReportRequestParent(PMemoryReportRequestParent* actor) MOZ_OVERRIDE;
 
     virtual PCycleCollectWithLogsParent*
@@ -462,6 +463,9 @@ private:
 
     virtual PTestShellParent* AllocPTestShellParent() MOZ_OVERRIDE;
     virtual bool DeallocPTestShellParent(PTestShellParent* shell) MOZ_OVERRIDE;
+
+    virtual PMobileConnectionParent* AllocPMobileConnectionParent(const uint32_t& aClientId) MOZ_OVERRIDE;
+    virtual bool DeallocPMobileConnectionParent(PMobileConnectionParent* aActor) MOZ_OVERRIDE;
 
     virtual bool DeallocPNeckoParent(PNeckoParent* necko) MOZ_OVERRIDE;
 
@@ -597,7 +601,7 @@ private:
     virtual bool RecvAudioChannelChangeDefVolChannel(const int32_t& aChannel,
                                                      const bool& aHidden) MOZ_OVERRIDE;
     virtual bool RecvGetSystemMemory(const uint64_t& getterId) MOZ_OVERRIDE;
-    virtual bool RecvBroadcastVolume(const nsString& aVolumeName) MOZ_OVERRIDE;
+    virtual bool RecvGetVolumes(InfallibleTArray<VolumeInfo>* aResult) MOZ_OVERRIDE;
 
     virtual bool RecvDataStoreGetStores(
                        const nsString& aName,
@@ -709,8 +713,6 @@ private:
 
 #ifdef MOZ_NUWA_PROCESS
     static bool sNuwaReady;
-    struct NuwaReinitializeData;
-    nsAutoPtr<NuwaReinitializeData> mReinitializeData;
 #endif
 };
 

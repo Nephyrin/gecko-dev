@@ -14,8 +14,14 @@
 
 struct cubeb_stream;
 
-namespace mozilla {
+template <>
+class nsAutoRefTraits<cubeb_stream> : public nsPointerRefTraits<cubeb_stream>
+{
+public:
+  static void Release(cubeb_stream* aStream) { cubeb_stream_destroy(aStream); }
+};
 
+namespace mozilla {
 
 /**
  * Assume we can run an iteration of the MediaStreamGraph loop in this much time
@@ -72,7 +78,7 @@ class AudioCallbackDriver;
 class GraphDriver
 {
 public:
-  GraphDriver(MediaStreamGraphImpl* aGraphImpl);
+  explicit GraphDriver(MediaStreamGraphImpl* aGraphImpl);
 
   NS_INLINE_DECL_THREADSAFE_REFCOUNTING(GraphDriver);
   /* When the graph wakes up to do an iteration, this returns the range of time
@@ -96,6 +102,7 @@ public:
   virtual void Resume() = 0;
   /* Revive this driver, as more messages just arrived. */
   virtual void Revive() = 0;
+  void Shutdown();
   /* Rate at which the GraphDriver runs, in ms. This can either be user
    * controlled (because we are using a {System,Offline}ClockDriver, and decide
    * how often we want to wakeup/how much we want to process per iteration), or
@@ -187,6 +194,10 @@ public:
    */
   void EnsureNextIterationLocked();
 
+  MediaStreamGraphImpl* GraphImpl() {
+    return mGraphImpl;
+  }
+
 protected:
   // Time of the start of this graph iteration.
   GraphTime mIterationStart;
@@ -236,7 +247,7 @@ class MediaStreamGraphInitThreadRunnable;
 class ThreadedDriver : public GraphDriver
 {
 public:
-  ThreadedDriver(MediaStreamGraphImpl* aGraphImpl);
+  explicit ThreadedDriver(MediaStreamGraphImpl* aGraphImpl);
   virtual ~ThreadedDriver();
   virtual void Start() MOZ_OVERRIDE;
   virtual void Stop() MOZ_OVERRIDE;
@@ -262,7 +273,7 @@ protected:
 class SystemClockDriver : public ThreadedDriver
 {
 public:
-  SystemClockDriver(MediaStreamGraphImpl* aGraphImpl);
+  explicit SystemClockDriver(MediaStreamGraphImpl* aGraphImpl);
   virtual ~SystemClockDriver();
   virtual void GetIntervalForIteration(GraphTime& aFrom,
                                        GraphTime& aTo) MOZ_OVERRIDE;
@@ -321,8 +332,8 @@ class AudioCallbackDriver : public GraphDriver,
                             public MixerCallbackReceiver
 {
 public:
-  AudioCallbackDriver(MediaStreamGraphImpl* aGraphImpl,
-                      dom::AudioChannel aChannel = dom::AudioChannel::Normal);
+  explicit AudioCallbackDriver(MediaStreamGraphImpl* aGraphImpl,
+                               dom::AudioChannel aChannel = dom::AudioChannel::Normal);
   virtual ~AudioCallbackDriver();
 
   virtual void Destroy() MOZ_OVERRIDE;
@@ -429,7 +440,7 @@ private:
 
   struct AutoInCallback
   {
-    AutoInCallback(AudioCallbackDriver* aDriver);
+    explicit AutoInCallback(AudioCallbackDriver* aDriver);
     ~AutoInCallback();
     AudioCallbackDriver* mDriver;
   };
@@ -460,12 +471,7 @@ public:
   };
 
 
-  AsyncCubebTask(AudioCallbackDriver* aDriver, AsyncCubebOperation aOperation)
-    : mDriver(aDriver),
-      mOperation(aOperation)
-  {
-    MOZ_ASSERT(mDriver->mAudioStream || aOperation == INIT, "No audio stream !");
-  }
+  AsyncCubebTask(AudioCallbackDriver* aDriver, AsyncCubebOperation aOperation);
 
   nsresult Dispatch()
   {
@@ -479,13 +485,14 @@ public:
   }
 
 protected:
-  virtual ~AsyncCubebTask() {};
+  virtual ~AsyncCubebTask();
 
 private:
   NS_IMETHOD Run() MOZ_OVERRIDE MOZ_FINAL;
   nsCOMPtr<nsIThread> mThread;
   nsRefPtr<AudioCallbackDriver> mDriver;
   AsyncCubebOperation mOperation;
+  nsRefPtr<MediaStreamGraphImpl> mShutdownGrip;
 };
 
 }

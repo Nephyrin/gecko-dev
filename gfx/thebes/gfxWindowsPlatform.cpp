@@ -43,6 +43,7 @@
 #include <dwrite.h>
 #endif
 
+#include "gfxTextRun.h"
 #include "gfxUserFontSet.h"
 #include "nsWindowsHelpers.h"
 #include "gfx2DGlue.h"
@@ -312,6 +313,10 @@ gfxWindowsPlatform::gfxWindowsPlatform()
 
     UpdateRenderMode();
 
+    if (gfxPrefs::Direct2DUse1_1()) {
+      InitD3D11Devices();
+    }
+
     RegisterStrongMemoryReporter(new GPUAdapterReporter());
 }
 
@@ -438,7 +443,16 @@ gfxWindowsPlatform::UpdateRenderMode()
     if (mRenderMode == RENDER_DIRECT2D) {
       canvasMask |= BackendTypeBit(BackendType::DIRECT2D);
       contentMask |= BackendTypeBit(BackendType::DIRECT2D);
-      defaultBackend = BackendType::DIRECT2D;
+#ifdef USE_D2D1_1
+      if (gfxPrefs::Direct2DUse1_1() && Factory::SupportsD2D1()) {
+        contentMask |= BackendTypeBit(BackendType::DIRECT2D1_1);
+        defaultBackend = BackendType::DIRECT2D1_1;
+      } else {
+#endif
+        defaultBackend = BackendType::DIRECT2D;
+#ifdef USE_D2D1_1
+      }
+#endif
     } else {
       canvasMask |= BackendTypeBit(BackendType::SKIA);
     }
@@ -910,18 +924,29 @@ gfxWindowsPlatform::CreateFontGroup(const FontFamilyList& aFontFamilyList,
 }
 
 gfxFontEntry* 
-gfxWindowsPlatform::LookupLocalFont(const gfxProxyFontEntry *aProxyEntry,
-                                    const nsAString& aFontName)
+gfxWindowsPlatform::LookupLocalFont(const nsAString& aFontName,
+                                    uint16_t aWeight,
+                                    int16_t aStretch,
+                                    bool aItalic)
 {
-    return gfxPlatformFontList::PlatformFontList()->LookupLocalFont(aProxyEntry, 
-                                                                    aFontName);
+    return gfxPlatformFontList::PlatformFontList()->LookupLocalFont(aFontName,
+                                                                    aWeight,
+                                                                    aStretch,
+                                                                    aItalic);
 }
 
 gfxFontEntry* 
-gfxWindowsPlatform::MakePlatformFont(const gfxProxyFontEntry *aProxyEntry,
-                                     const uint8_t *aFontData, uint32_t aLength)
+gfxWindowsPlatform::MakePlatformFont(const nsAString& aFontName,
+                                     uint16_t aWeight,
+                                     int16_t aStretch,
+                                     bool aItalic,
+                                     const uint8_t* aFontData,
+                                     uint32_t aLength)
 {
-    return gfxPlatformFontList::PlatformFontList()->MakePlatformFont(aProxyEntry,
+    return gfxPlatformFontList::PlatformFontList()->MakePlatformFont(aFontName,
+                                                                     aWeight,
+                                                                     aStretch,
+                                                                     aItalic,
                                                                      aFontData,
                                                                      aLength);
 }
@@ -1264,7 +1289,7 @@ gfxWindowsPlatform::SetupClearTypeParams()
         // For EnhancedContrast, we override the default if the user has not set it
         // in the registry (by using the ClearType Tuner).
         if (contrast >= 0.0 && contrast <= 10.0) {
-	    contrast = contrast;
+            contrast = contrast;
         } else {
             HKEY hKey;
             if (RegOpenKeyExA(ENHANCED_CONTRAST_REGISTRY_KEY,
@@ -1305,11 +1330,11 @@ gfxWindowsPlatform::SetupClearTypeParams()
         mRenderingParams[TEXT_RENDERING_NO_CLEARTYPE] = defaultRenderingParams;
 
         GetDWriteFactory()->CreateCustomRenderingParams(gamma, contrast, level,
-	    dwriteGeometry, renderMode,
+            dwriteGeometry, renderMode,
             getter_AddRefs(mRenderingParams[TEXT_RENDERING_NORMAL]));
 
         GetDWriteFactory()->CreateCustomRenderingParams(gamma, contrast, level,
-	    dwriteGeometry, DWRITE_RENDERING_MODE_CLEARTYPE_GDI_CLASSIC,
+            dwriteGeometry, DWRITE_RENDERING_MODE_CLEARTYPE_GDI_CLASSIC,
             getter_AddRefs(mRenderingParams[TEXT_RENDERING_GDI_CLASSIC]));
     }
 #endif
@@ -1355,41 +1380,21 @@ gfxWindowsPlatform::GetD3D11Device()
     return mD3D11Device;
   }
 
-  mD3D11DeviceInitialized = true;
-
-  nsModuleHandle d3d11Module(LoadLibrarySystem32(L"d3d11.dll"));
-  decltype(D3D11CreateDevice)* d3d11CreateDevice = (decltype(D3D11CreateDevice)*)
-    GetProcAddress(d3d11Module, "D3D11CreateDevice");
-
-  if (!d3d11CreateDevice) {
-    return nullptr;
-  }
-
-  nsTArray<D3D_FEATURE_LEVEL> featureLevels;
-  if (IsWin8OrLater()) {
-    featureLevels.AppendElement(D3D_FEATURE_LEVEL_11_1);
-  }
-  featureLevels.AppendElement(D3D_FEATURE_LEVEL_11_0);
-  featureLevels.AppendElement(D3D_FEATURE_LEVEL_10_1);
-  featureLevels.AppendElement(D3D_FEATURE_LEVEL_10_0);
-  featureLevels.AppendElement(D3D_FEATURE_LEVEL_9_3);
-
-  RefPtr<IDXGIAdapter1> adapter = GetDXGIAdapter();
-
-  if (!adapter) {
-    return nullptr;
-  }
-
-  HRESULT hr = d3d11CreateDevice(adapter, D3D_DRIVER_TYPE_UNKNOWN, nullptr,
-                                 D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-                                 featureLevels.Elements(), featureLevels.Length(),
-                                 D3D11_SDK_VERSION, byRef(mD3D11Device), nullptr, nullptr);
-
-  // We leak these everywhere and we need them our entire runtime anyway, let's
-  // leak it here as well.
-  d3d11Module.disown();
+  InitD3D11Devices();
 
   return mD3D11Device;
+}
+
+ID3D11Device*
+gfxWindowsPlatform::GetD3D11ContentDevice()
+{
+  if (mD3D11DeviceInitialized) {
+    return mD3D11ContentDevice;
+  }
+
+  InitD3D11Devices();
+
+  return mD3D11ContentDevice;
 }
 
 ReadbackManagerD3D11*
@@ -1476,3 +1481,64 @@ gfxWindowsPlatform::GetDXGIAdapter()
 
   return mAdapter;
 }
+
+void
+gfxWindowsPlatform::InitD3D11Devices()
+{
+  mD3D11DeviceInitialized = true;
+
+  nsModuleHandle d3d11Module(LoadLibrarySystem32(L"d3d11.dll"));
+  decltype(D3D11CreateDevice)* d3d11CreateDevice = (decltype(D3D11CreateDevice)*)
+    GetProcAddress(d3d11Module, "D3D11CreateDevice");
+
+  if (!d3d11CreateDevice) {
+    return;
+  }
+
+  nsTArray<D3D_FEATURE_LEVEL> featureLevels;
+  if (IsWin8OrLater()) {
+    featureLevels.AppendElement(D3D_FEATURE_LEVEL_11_1);
+  }
+  featureLevels.AppendElement(D3D_FEATURE_LEVEL_11_0);
+  featureLevels.AppendElement(D3D_FEATURE_LEVEL_10_1);
+  featureLevels.AppendElement(D3D_FEATURE_LEVEL_10_0);
+  featureLevels.AppendElement(D3D_FEATURE_LEVEL_9_3);
+
+  RefPtr<IDXGIAdapter1> adapter = GetDXGIAdapter();
+
+  if (!adapter) {
+    return;
+  }
+
+  HRESULT hr;
+
+  hr = d3d11CreateDevice(adapter, D3D_DRIVER_TYPE_UNKNOWN, nullptr,
+                         D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                         featureLevels.Elements(), featureLevels.Length(),
+                         D3D11_SDK_VERSION, byRef(mD3D11Device), nullptr, nullptr);
+
+  if (FAILED(hr)) {
+    return;
+  }
+
+#ifdef USE_D2D1_1
+  if (Factory::SupportsD2D1()) {
+    hr = d3d11CreateDevice(adapter, D3D_DRIVER_TYPE_UNKNOWN, nullptr,
+                           D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+                           featureLevels.Elements(), featureLevels.Length(),
+                           D3D11_SDK_VERSION, byRef(mD3D11ContentDevice), nullptr, nullptr);
+
+    if (FAILED(hr)) {
+      mD3D11Device = nullptr;
+      return;
+    }
+
+    Factory::SetDirect3D11Device(mD3D11ContentDevice);
+  }
+#endif
+
+  // We leak these everywhere and we need them our entire runtime anyway, let's
+  // leak it here as well.
+  d3d11Module.disown();
+}
+

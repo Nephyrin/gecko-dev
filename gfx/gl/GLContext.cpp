@@ -29,6 +29,7 @@
 #include "TextureGarbageBin.h"
 #include "gfx2DGlue.h"
 #include "gfxPrefs.h"
+#include "mozilla/IntegerPrintfMacros.h"
 
 #include "OGLShaderProgram.h" // for ShaderProgramType
 
@@ -76,6 +77,7 @@ static const char *sExtensionNames[] = {
     "GL_ARB_ES2_compatibility",
     "GL_ARB_ES3_compatibility",
     "GL_ARB_color_buffer_float",
+    "GL_ARB_copy_buffer",
     "GL_ARB_depth_texture",
     "GL_ARB_draw_buffers",
     "GL_ARB_draw_instanced",
@@ -288,7 +290,8 @@ GLContext::GLContext(const SurfaceCaps& caps,
     mMaxTextureImageSize(0),
     mMaxRenderbufferSize(0),
     mNeedsTextureSizeChecks(false),
-    mWorkAroundDriverBugs(true)
+    mWorkAroundDriverBugs(true),
+    mHeavyGLCallsSinceLastFlush(false)
 {
     mOwningThreadId = PlatformThread::CurrentId();
 }
@@ -1010,6 +1013,37 @@ GLContext::InitWithPrefix(const char *prefix, bool trygl)
             }
         }
 
+        if (IsSupported(GLFeature::clear_buffers)) {
+            SymLoadStruct clearBuffersSymbols[] = {
+                { (PRFuncPtr*) &mSymbols.fClearBufferfi,  { "ClearBufferfi",  nullptr } },
+                { (PRFuncPtr*) &mSymbols.fClearBufferfv,  { "ClearBufferfv",  nullptr } },
+                { (PRFuncPtr*) &mSymbols.fClearBufferiv,  { "ClearBufferiv",  nullptr } },
+                { (PRFuncPtr*) &mSymbols.fClearBufferuiv, { "ClearBufferuiv", nullptr } },
+                END_SYMBOLS
+            };
+
+            if (!LoadSymbols(clearBuffersSymbols, trygl, prefix)) {
+                NS_ERROR("GL supports clear_buffers without supplying its functions.");
+
+                MarkUnsupported(GLFeature::clear_buffers);
+                ClearSymbols(clearBuffersSymbols);
+            }
+        }
+
+        if (IsSupported(GLFeature::copy_buffer)) {
+            SymLoadStruct copyBufferSymbols[] = {
+                { (PRFuncPtr*) &mSymbols.fCopyBufferSubData, { "CopyBufferSubData", nullptr } },
+                END_SYMBOLS
+            };
+
+            if (!LoadSymbols(copyBufferSymbols, trygl, prefix)) {
+                NS_ERROR("GL supports copy_buffer without supplying its function.");
+
+                MarkUnsupported(GLFeature::copy_buffer);
+                ClearSymbols(copyBufferSymbols);
+            }
+        }
+
         if (IsSupported(GLFeature::draw_buffers)) {
             SymLoadStruct coreSymbols[] = {
                 { (PRFuncPtr*) &mSymbols.fDrawBuffers, { "DrawBuffers", nullptr } },
@@ -1271,7 +1305,7 @@ GLContext::DebugCallback(GLenum source,
         break;
     }
 
-    printf_stderr("[KHR_debug: 0x%x] ID %u: %s %s %s:\n    %s",
+    printf_stderr("[KHR_debug: 0x%" PRIxPTR "] ID %u: %s %s %s:\n    %s",
                   (uintptr_t)this,
                   id,
                   sourceStr.BeginReading(),
@@ -2137,6 +2171,16 @@ GLContext::ReadTexImageHelper()
     }
 
     return mReadTexImageHelper.get();
+}
+
+void
+GLContext::FlushIfHeavyGLCallsSinceLastFlush()
+{
+    if (!mHeavyGLCallsSinceLastFlush) {
+        return;
+    }
+    MakeCurrent();
+    fFlush();
 }
 
 bool

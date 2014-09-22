@@ -118,6 +118,11 @@ public:
     AllocPImageBridgeChild(mozilla::ipc::Transport* aTransport,
                            base::ProcessId aOtherProcess) MOZ_OVERRIDE;
 
+#if defined(XP_WIN) && defined(MOZ_CONTENT_SANDBOX)
+    // Cleans up any resources used by the process when sandboxed.
+    void CleanUpSandboxEnvironment();
+#endif
+
     virtual bool RecvSetProcessSandbox() MOZ_OVERRIDE;
 
     PBackgroundChild*
@@ -156,7 +161,7 @@ public:
     AllocPMemoryReportRequestChild(const uint32_t& aGeneration,
                                    const bool& aAnonymize,
                                    const bool& aMinimizeMemoryUsage,
-                                   const FileDescriptor& aDMDFile) MOZ_OVERRIDE;
+                                   const MaybeFileDesc& aDMDFile) MOZ_OVERRIDE;
     virtual bool
     DeallocPMemoryReportRequestChild(PMemoryReportRequestChild* actor) MOZ_OVERRIDE;
 
@@ -165,7 +170,7 @@ public:
                                         const uint32_t& aGeneration,
                                         const bool& aAnonymize,
                                         const bool &aMinimizeMemoryUsage,
-                                        const FileDescriptor &aDMDFile) MOZ_OVERRIDE;
+                                        const MaybeFileDesc &aDMDFile) MOZ_OVERRIDE;
 
     virtual PCycleCollectWithLogsChild*
     AllocPCycleCollectWithLogsChild(const bool& aDumpAllTraces,
@@ -190,6 +195,14 @@ public:
     virtual bool DeallocPTestShellChild(PTestShellChild*) MOZ_OVERRIDE;
     virtual bool RecvPTestShellConstructor(PTestShellChild*) MOZ_OVERRIDE;
     jsipc::JavaScriptChild *GetCPOWManager();
+
+    PMobileConnectionChild*
+    SendPMobileConnectionConstructor(PMobileConnectionChild* aActor,
+                                     const uint32_t& aClientId);
+    virtual PMobileConnectionChild*
+    AllocPMobileConnectionChild(const uint32_t& aClientId) MOZ_OVERRIDE;
+    virtual bool
+    DeallocPMobileConnectionChild(PMobileConnectionChild* aActor) MOZ_OVERRIDE;
 
     virtual PNeckoChild* AllocPNeckoChild() MOZ_OVERRIDE;
     virtual bool DeallocPNeckoChild(PNeckoChild*) MOZ_OVERRIDE;
@@ -299,7 +312,8 @@ public:
                                       const bool& aIsMediaPresent,
                                       const bool& aIsSharing,
                                       const bool& aIsFormatting,
-                                      const bool& aIsFake) MOZ_OVERRIDE;
+                                      const bool& aIsFake,
+                                      const bool& aIsUnmounting) MOZ_OVERRIDE;
 
     virtual bool RecvNuwaFork() MOZ_OVERRIDE;
 
@@ -318,6 +332,9 @@ public:
     virtual bool RecvNotifyIdleObserver(const uint64_t& aObserver,
                                         const nsCString& aTopic,
                                         const nsString& aData) MOZ_OVERRIDE;
+
+    virtual bool RecvOnAppThemeChanged() MOZ_OVERRIDE;
+
 #ifdef ANDROID
     gfxIntSize GetScreenSize() { return mScreenSize; }
 #endif

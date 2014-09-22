@@ -110,7 +110,7 @@ enum TelemetryAlgorithm {
 class ClearException
 {
 public:
-  ClearException(JSContext* aCx)
+  explicit ClearException(JSContext* aCx)
     : mCx(aCx)
   {}
 
@@ -379,8 +379,8 @@ WebCryptoTask::CallCallback(nsresult rv)
 class FailureTask : public WebCryptoTask
 {
 public:
-  FailureTask(nsresult rv) {
-    mEarlyRv = rv;
+  explicit FailureTask(nsresult aRv) {
+    mEarlyRv = aRv;
   }
 };
 
@@ -1286,7 +1286,7 @@ public:
     mDataIsSet = false;
 
     // Get the current global object from the context
-    nsIGlobalObject *global = xpc::GetNativeForGlobal(JS::CurrentGlobalOrNull(aCx));
+    nsIGlobalObject *global = xpc::NativeGlobal(JS::CurrentGlobalOrNull(aCx));
     if (!global) {
       mEarlyRv = NS_ERROR_DOM_UNKNOWN_ERR;
       return;
@@ -1955,7 +1955,7 @@ public:
       const ObjectOrString& aAlgorithm, bool aExtractable,
       const Sequence<nsString>& aKeyUsages)
   {
-    nsIGlobalObject* global = xpc::GetNativeForGlobal(JS::CurrentGlobalOrNull(aCx));
+    nsIGlobalObject* global = xpc::NativeGlobal(JS::CurrentGlobalOrNull(aCx));
     if (!global) {
       mEarlyRv = NS_ERROR_DOM_UNKNOWN_ERR;
       return;
@@ -2082,7 +2082,7 @@ public:
       const ObjectOrString& aAlgorithm, bool aExtractable,
       const Sequence<nsString>& aKeyUsages)
   {
-    nsIGlobalObject* global = xpc::GetNativeForGlobal(JS::CurrentGlobalOrNull(aCx));
+    nsIGlobalObject* global = xpc::NativeGlobal(JS::CurrentGlobalOrNull(aCx));
     if (!global) {
       mEarlyRv = NS_ERROR_DOM_UNKNOWN_ERR;
       return;
@@ -2964,7 +2964,6 @@ WebCryptoTask::CreateUnwrapKeyTask(JSContext* aCx,
   }
 
   return new FailureTask(NS_ERROR_DOM_NOT_SUPPORTED_ERR);
-
 }
 
 } // namespace dom

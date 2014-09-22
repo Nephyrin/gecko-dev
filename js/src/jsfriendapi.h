@@ -156,10 +156,6 @@ JS_CloneObject(JSContext *cx, JS::HandleObject obj, JS::HandleObject proto,
 extern JS_FRIEND_API(JSString *)
 JS_BasicObjectToString(JSContext *cx, JS::HandleObject obj);
 
-extern JS_FRIEND_API(bool)
-js_GetterOnlyPropertyStub(JSContext *cx, JS::HandleObject obj, JS::HandleId id, bool strict,
-                          JS::MutableHandleValue vp);
-
 JS_FRIEND_API(void)
 js_ReportOverRecursed(JSContext *maybecx);
 
@@ -197,7 +193,7 @@ extern JS_FRIEND_API(void)
 js_DumpObject(JSObject *obj);
 
 extern JS_FRIEND_API(void)
-js_DumpChars(const jschar *s, size_t n);
+js_DumpChars(const char16_t *s, size_t n);
 #endif
 
 /*
@@ -256,16 +252,17 @@ namespace js {
  *     allow for potention JSClass extensions.
  */
 #define PROXY_MAKE_EXT(outerObject, innerObject, iteratorObject,        \
-                       isWrappedNative)                                 \
+                       isWrappedNative, objectMoved)                    \
     {                                                                   \
         outerObject,                                                    \
         innerObject,                                                    \
         iteratorObject,                                                 \
         isWrappedNative,                                                \
-        js::proxy_WeakmapKeyDelegate                                    \
+        js::proxy_WeakmapKeyDelegate,                                   \
+        objectMoved                                                     \
     }
 
-#define PROXY_CLASS_WITH_EXT(name, extraSlots, flags, callOp, constructOp, ext)         \
+#define PROXY_CLASS_WITH_EXT(name, extraSlots, flags, ext)                              \
     {                                                                                   \
         name,                                                                           \
         js::Class::NON_NATIVE |                                                         \
@@ -281,9 +278,9 @@ namespace js {
         JS_ResolveStub,                                                                 \
         js::proxy_Convert,                                                              \
         js::proxy_Finalize,      /* finalize    */                                      \
-        callOp,                  /* call        */                                      \
+        nullptr,                  /* call        */                                     \
         js::proxy_HasInstance,   /* hasInstance */                                      \
-        constructOp,             /* construct   */                                      \
+        nullptr,             /* construct   */                                          \
         js::proxy_Trace,         /* trace       */                                      \
         JS_NULL_CLASS_SPEC,                                                             \
         ext,                                                                            \
@@ -310,13 +307,14 @@ namespace js {
         }                                                                               \
     }
 
-#define PROXY_CLASS_DEF(name, extraSlots, flags, callOp, constructOp)   \
-  PROXY_CLASS_WITH_EXT(name, extraSlots, flags, callOp, constructOp,    \
+#define PROXY_CLASS_DEF(name, extraSlots, flags)                        \
+  PROXY_CLASS_WITH_EXT(name, extraSlots, flags,                         \
                        PROXY_MAKE_EXT(                                  \
                          nullptr, /* outerObject */                     \
                          nullptr, /* innerObject */                     \
                          nullptr, /* iteratorObject */                  \
-                         false    /* isWrappedNative */                 \
+                         false,   /* isWrappedNative */                 \
+                         js::proxy_ObjectMoved                          \
                        ))
 
 /*
@@ -377,6 +375,8 @@ extern JS_FRIEND_API(bool)
 proxy_Convert(JSContext *cx, JS::HandleObject proxy, JSType hint, JS::MutableHandleValue vp);
 extern JS_FRIEND_API(void)
 proxy_Finalize(FreeOp *fop, JSObject *obj);
+extern JS_FRIEND_API(void)
+proxy_ObjectMoved(JSObject *obj, const JSObject *old);
 extern JS_FRIEND_API(bool)
 proxy_HasInstance(JSContext *cx, JS::HandleObject proxy, JS::MutableHandleValue v, bool *bp);
 extern JS_FRIEND_API(bool)
@@ -413,7 +413,7 @@ class SourceHook {
      * On success, the caller owns the buffer to which |*src| points, and
      * should use JS_free to free it.
      */
-    virtual bool load(JSContext *cx, const char *filename, jschar **src, size_t *length) = 0;
+    virtual bool load(JSContext *cx, const char *filename, char16_t **src, size_t *length) = 0;
 };
 
 /*
@@ -605,9 +605,9 @@ struct String
     uint32_t length;
     union {
         const JS::Latin1Char *nonInlineCharsLatin1;
-        const jschar *nonInlineCharsTwoByte;
+        const char16_t *nonInlineCharsTwoByte;
         JS::Latin1Char inlineStorageLatin1[1];
-        jschar inlineStorageTwoByte[1];
+        char16_t inlineStorageTwoByte[1];
     };
 };
 
@@ -706,6 +706,9 @@ GetObjectParentMaybeScope(JSObject *obj);
 
 JS_FRIEND_API(JSObject *)
 GetGlobalForObjectCrossCompartment(JSObject *obj);
+
+JS_FRIEND_API(JSObject *)
+GetPrototypeNoProxy(JSObject *obj);
 
 // Sidestep the activeContext checking implicitly performed in
 // JS_SetPendingException.
@@ -867,7 +870,7 @@ GetLatin1LinearStringChars(const JS::AutoCheckCannotGC &nogc, JSLinearString *li
     return s->nonInlineCharsLatin1;
 }
 
-MOZ_ALWAYS_INLINE const jschar *
+MOZ_ALWAYS_INLINE const char16_t *
 GetTwoByteLinearStringChars(const JS::AutoCheckCannotGC &nogc, JSLinearString *linear)
 {
     MOZ_ASSERT(!LinearStringHasLatin1Chars(linear));
@@ -897,7 +900,7 @@ GetLatin1AtomChars(const JS::AutoCheckCannotGC &nogc, JSAtom *atom)
     return GetLatin1LinearStringChars(nogc, AtomToLinearString(atom));
 }
 
-MOZ_ALWAYS_INLINE const jschar *
+MOZ_ALWAYS_INLINE const char16_t *
 GetTwoByteAtomChars(const JS::AutoCheckCannotGC &nogc, JSAtom *atom)
 {
     return GetTwoByteLinearStringChars(nogc, AtomToLinearString(atom));
@@ -917,7 +920,7 @@ StringToLinearString(JSContext *cx, JSString *str)
 }
 
 MOZ_ALWAYS_INLINE void
-CopyLinearStringChars(jschar *dest, JSLinearString *s, size_t len)
+CopyLinearStringChars(char16_t *dest, JSLinearString *s, size_t len)
 {
     JS::AutoCheckCannotGC nogc;
     if (LinearStringHasLatin1Chars(s)) {
@@ -925,13 +928,13 @@ CopyLinearStringChars(jschar *dest, JSLinearString *s, size_t len)
         for (size_t i = 0; i < len; i++)
             dest[i] = src[i];
     } else {
-        const jschar *src = GetTwoByteLinearStringChars(nogc, s);
+        const char16_t *src = GetTwoByteLinearStringChars(nogc, s);
         mozilla::PodCopy(dest, src, len);
     }
 }
 
 inline bool
-CopyStringChars(JSContext *cx, jschar *dest, JSString *s, size_t len)
+CopyStringChars(JSContext *cx, char16_t *dest, JSString *s, size_t len)
 {
     JSLinearString *linear = StringToLinearString(cx, s);
     if (!linear)
@@ -942,7 +945,7 @@ CopyStringChars(JSContext *cx, jschar *dest, JSString *s, size_t len)
 }
 
 inline void
-CopyFlatStringChars(jschar *dest, JSFlatString *s, size_t len)
+CopyFlatStringChars(char16_t *dest, JSFlatString *s, size_t len)
 {
     CopyLinearStringChars(dest, FlatStringToLinearString(s), len);
 }
@@ -1292,7 +1295,7 @@ class MOZ_STACK_CLASS AutoStableStringChars
     /* Ensure the string is kept alive while we're using its chars. */
     JS::RootedString s_;
     union {
-        const jschar *twoByteChars_;
+        const char16_t *twoByteChars_;
         const JS::Latin1Char *latin1Chars_;
     };
     enum State { Uninitialized, Latin1, TwoByte };
@@ -1313,7 +1316,7 @@ class MOZ_STACK_CLASS AutoStableStringChars
     bool isLatin1() const { return state_ == Latin1; }
     bool isTwoByte() const { return state_ == TwoByte; }
 
-    const jschar *twoByteChars() const {
+    const char16_t *twoByteChars() const {
         MOZ_ASSERT(state_ == TwoByte);
         return twoByteChars_;
     }
@@ -1324,9 +1327,9 @@ class MOZ_STACK_CLASS AutoStableStringChars
                                                     GetStringLength(s_));
     }
 
-    mozilla::Range<const jschar> twoByteRange() const {
+    mozilla::Range<const char16_t> twoByteRange() const {
         MOZ_ASSERT(state_ == TwoByte);
-        return mozilla::Range<const jschar>(twoByteChars_,
+        return mozilla::Range<const char16_t>(twoByteChars_,
                                             GetStringLength(s_));
     }
 
@@ -1475,7 +1478,6 @@ extern JS_FRIEND_API(JSObject *)
 JS_NewUint8Array(JSContext *cx, uint32_t nelements);
 extern JS_FRIEND_API(JSObject *)
 JS_NewUint8ClampedArray(JSContext *cx, uint32_t nelements);
-
 extern JS_FRIEND_API(JSObject *)
 JS_NewInt16Array(JSContext *cx, uint32_t nelements);
 extern JS_FRIEND_API(JSObject *)
@@ -1488,6 +1490,25 @@ extern JS_FRIEND_API(JSObject *)
 JS_NewFloat32Array(JSContext *cx, uint32_t nelements);
 extern JS_FRIEND_API(JSObject *)
 JS_NewFloat64Array(JSContext *cx, uint32_t nelements);
+
+extern JS_FRIEND_API(JSObject *)
+JS_NewSharedInt8Array(JSContext *cx, uint32_t nelements);
+extern JS_FRIEND_API(JSObject *)
+JS_NewSharedUint8Array(JSContext *cx, uint32_t nelements);
+extern JS_FRIEND_API(JSObject *)
+JS_NewSharedUint8ClampedArray(JSContext *cx, uint32_t nelements);
+extern JS_FRIEND_API(JSObject *)
+JS_NewSharedInt16Array(JSContext *cx, uint32_t nelements);
+extern JS_FRIEND_API(JSObject *)
+JS_NewSharedUint16Array(JSContext *cx, uint32_t nelements);
+extern JS_FRIEND_API(JSObject *)
+JS_NewSharedInt32Array(JSContext *cx, uint32_t nelements);
+extern JS_FRIEND_API(JSObject *)
+JS_NewSharedUint32Array(JSContext *cx, uint32_t nelements);
+extern JS_FRIEND_API(JSObject *)
+JS_NewSharedFloat32Array(JSContext *cx, uint32_t nelements);
+extern JS_FRIEND_API(JSObject *)
+JS_NewSharedFloat64Array(JSContext *cx, uint32_t nelements);
 
 /*
  * Create a new typed array and copy in values from the given object. The
@@ -1550,6 +1571,37 @@ extern JS_FRIEND_API(JSObject *)
 JS_NewFloat64ArrayWithBuffer(JSContext *cx, JS::HandleObject arrayBuffer,
                              uint32_t byteOffset, int32_t length);
 
+// As for the above, passing length==(uint32_t)-1 signifies "up to the
+// end of the buffer".
+
+extern JS_FRIEND_API(JSObject *)
+JS_NewSharedInt8ArrayWithBuffer(JSContext *cx, JS::HandleObject arrayBuffer,
+                                uint32_t byteOffset, uint32_t length);
+extern JS_FRIEND_API(JSObject *)
+JS_NewSharedUint8ArrayWithBuffer(JSContext *cx, JS::HandleObject arrayBuffer,
+                                 uint32_t byteOffset, uint32_t length);
+extern JS_FRIEND_API(JSObject *)
+JS_NewSharedUint8ClampedArrayWithBuffer(JSContext *cx, JS::HandleObject arrayBuffer,
+                                        uint32_t byteOffset, uint32_t length);
+extern JS_FRIEND_API(JSObject *)
+JS_NewSharedInt16ArrayWithBuffer(JSContext *cx, JS::HandleObject arrayBuffer,
+                                 uint32_t byteOffset, uint32_t length);
+extern JS_FRIEND_API(JSObject *)
+JS_NewSharedUint16ArrayWithBuffer(JSContext *cx, JS::HandleObject arrayBuffer,
+                                  uint32_t byteOffset, uint32_t length);
+extern JS_FRIEND_API(JSObject *)
+JS_NewSharedInt32ArrayWithBuffer(JSContext *cx, JS::HandleObject arrayBuffer,
+                                 uint32_t byteOffset, uint32_t length);
+extern JS_FRIEND_API(JSObject *)
+JS_NewSharedUint32ArrayWithBuffer(JSContext *cx, JS::HandleObject arrayBuffer,
+                                  uint32_t byteOffset, uint32_t length);
+extern JS_FRIEND_API(JSObject *)
+JS_NewSharedFloat32ArrayWithBuffer(JSContext *cx, JS::HandleObject arrayBuffer,
+                                   uint32_t byteOffset, uint32_t length);
+extern JS_FRIEND_API(JSObject *)
+JS_NewSharedFloat64ArrayWithBuffer(JSContext *cx, JS::HandleObject arrayBuffer,
+                                   uint32_t byteOffset, uint32_t length);
+
 /*
  * Create a new ArrayBuffer with the given byte length.
  */
@@ -1564,6 +1616,12 @@ JS_NewArrayBuffer(JSContext *cx, uint32_t nbytes);
  */
 extern JS_FRIEND_API(bool)
 JS_IsTypedArrayObject(JSObject *obj);
+
+/*
+ * Ditto for JS_GetSharedTypedArray* APIs.
+ */
+extern JS_FRIEND_API(bool)
+JS_IsSharedTypedArrayObject(JSObject *obj);
 
 /*
  * Check whether obj supports JS_GetArrayBufferView* APIs. Note that this may
@@ -1598,6 +1656,25 @@ JS_IsFloat32Array(JSObject *obj);
 extern JS_FRIEND_API(bool)
 JS_IsFloat64Array(JSObject *obj);
 
+extern JS_FRIEND_API(bool)
+JS_IsSharedInt8Array(JSObject *obj);
+extern JS_FRIEND_API(bool)
+JS_IsSharedUint8Array(JSObject *obj);
+extern JS_FRIEND_API(bool)
+JS_IsSharedUint8ClampedArray(JSObject *obj);
+extern JS_FRIEND_API(bool)
+JS_IsSharedInt16Array(JSObject *obj);
+extern JS_FRIEND_API(bool)
+JS_IsSharedUint16Array(JSObject *obj);
+extern JS_FRIEND_API(bool)
+JS_IsSharedInt32Array(JSObject *obj);
+extern JS_FRIEND_API(bool)
+JS_IsSharedUint32Array(JSObject *obj);
+extern JS_FRIEND_API(bool)
+JS_IsSharedFloat32Array(JSObject *obj);
+extern JS_FRIEND_API(bool)
+JS_IsSharedFloat64Array(JSObject *obj);
+
 /*
  * Test for specific typed array types (ArrayBufferView subtypes) and return
  * the unwrapped object if so, else nullptr.  Never throws.
@@ -1630,6 +1707,25 @@ UnwrapArrayBuffer(JSObject *obj);
 extern JS_FRIEND_API(JSObject *)
 UnwrapArrayBufferView(JSObject *obj);
 
+extern JS_FRIEND_API(JSObject *)
+UnwrapSharedInt8Array(JSObject *obj);
+extern JS_FRIEND_API(JSObject *)
+UnwrapSharedUint8Array(JSObject *obj);
+extern JS_FRIEND_API(JSObject *)
+UnwrapSharedUint8ClampedArray(JSObject *obj);
+extern JS_FRIEND_API(JSObject *)
+UnwrapSharedInt16Array(JSObject *obj);
+extern JS_FRIEND_API(JSObject *)
+UnwrapSharedUint16Array(JSObject *obj);
+extern JS_FRIEND_API(JSObject *)
+UnwrapSharedInt32Array(JSObject *obj);
+extern JS_FRIEND_API(JSObject *)
+UnwrapSharedUint32Array(JSObject *obj);
+extern JS_FRIEND_API(JSObject *)
+UnwrapSharedFloat32Array(JSObject *obj);
+extern JS_FRIEND_API(JSObject *)
+UnwrapSharedFloat64Array(JSObject *obj);
+
 namespace detail {
 
 extern JS_FRIEND_DATA(const Class* const) Int8ArrayClassPtr;
@@ -1641,6 +1737,16 @@ extern JS_FRIEND_DATA(const Class* const) Int32ArrayClassPtr;
 extern JS_FRIEND_DATA(const Class* const) Uint32ArrayClassPtr;
 extern JS_FRIEND_DATA(const Class* const) Float32ArrayClassPtr;
 extern JS_FRIEND_DATA(const Class* const) Float64ArrayClassPtr;
+
+extern JS_FRIEND_DATA(const Class* const) SharedInt8ArrayClassPtr;
+extern JS_FRIEND_DATA(const Class* const) SharedUint8ArrayClassPtr;
+extern JS_FRIEND_DATA(const Class* const) SharedUint8ClampedArrayClassPtr;
+extern JS_FRIEND_DATA(const Class* const) SharedInt16ArrayClassPtr;
+extern JS_FRIEND_DATA(const Class* const) SharedUint16ArrayClassPtr;
+extern JS_FRIEND_DATA(const Class* const) SharedInt32ArrayClassPtr;
+extern JS_FRIEND_DATA(const Class* const) SharedUint32ArrayClassPtr;
+extern JS_FRIEND_DATA(const Class* const) SharedFloat32ArrayClassPtr;
+extern JS_FRIEND_DATA(const Class* const) SharedFloat64ArrayClassPtr;
 
 const size_t TypedArrayLengthSlot = 1;
 
@@ -1731,6 +1837,9 @@ JS_GetArrayBufferViewType(JSObject *obj);
  */
 extern JS_FRIEND_API(bool)
 JS_IsArrayBufferObject(JSObject *obj);
+
+extern JS_FRIEND_API(bool)
+JS_IsSharedArrayBufferObject(JSObject *obj);
 
 /*
  * Return the available byte length of an array buffer.
@@ -2472,6 +2581,9 @@ UnsafeDefineElement(JSContext *cx, JS::HandleObject obj, uint32_t index, JS::Han
 JS_FRIEND_API(bool)
 SliceSlowly(JSContext* cx, JS::HandleObject obj, JS::HandleObject receiver,
             uint32_t begin, uint32_t end, JS::HandleObject result);
+
+JS_FRIEND_API(bool)
+ForwardToNative(JSContext *cx, JSNative native, const JS::CallArgs &args);
 
 /* ES5 8.12.8. */
 extern JS_FRIEND_API(bool)

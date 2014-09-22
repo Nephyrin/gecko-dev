@@ -392,7 +392,7 @@ public:
     SetHTMLAttr(nsGkAtoms::autocomplete, aValue, aRv);
   }
 
-  void GetAutocompleteInfo(AutocompleteInfo& aInfo);
+  void GetAutocompleteInfo(Nullable<AutocompleteInfo>& aInfo);
 
   bool Autofocus() const
   {
@@ -962,6 +962,11 @@ protected:
   bool DoesValueAsNumberApply() const { return DoesMinMaxApply(); }
 
   /**
+   * Returns if autocomplete attribute applies for the current type.
+   */
+  bool DoesAutocompleteApply() const;
+
+  /**
    * Returns if the maxlength attribute applies for the current type.
    */
   bool MaxLengthApplies() const { return IsSingleLineTextControl(false, mType); }
@@ -1357,7 +1362,7 @@ private:
     nsFilePickerFilter()
       : mFilterMask(0), mIsTrusted(false) {}
 
-    nsFilePickerFilter(int32_t aFilterMask)
+    explicit nsFilePickerFilter(int32_t aFilterMask)
       : mFilterMask(aFilterMask), mIsTrusted(true) {}
 
     nsFilePickerFilter(const nsString& aTitle,

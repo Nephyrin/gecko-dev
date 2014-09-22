@@ -35,6 +35,7 @@
 #define CLASP(name)                 (&name##Class)
 #define OCLASP(name)                (&name##Object::class_)
 #define TYPED_ARRAY_CLASP(type)     (&TypedArrayObject::classes[Scalar::type])
+#define SHARED_TYPED_ARRAY_CLASP(type) (&SharedTypedArrayObject::classes[Scalar::type])
 
 #ifdef ENABLE_PARALLEL_JS
 #define IF_PJS(real,imaginary) real
@@ -58,6 +59,12 @@
 #define IF_SAB(real,imaginary) real
 #else
 #define IF_SAB(real,imaginary) imaginary
+#endif
+
+#ifdef JS_HAS_SYMBOLS
+#define IF_SYMBOLS(real,imaginary) real
+#else
+#define IF_SYMBOLS(real,imaginary) imaginary
 #endif
 
 #define JS_FOR_PROTOTYPES(real,imaginary) \
@@ -92,18 +99,27 @@
     real(Float32Array,          28,     js_InitViaClassSpec,       TYPED_ARRAY_CLASP(Float32)) \
     real(Float64Array,          29,     js_InitViaClassSpec,       TYPED_ARRAY_CLASP(Float64)) \
     real(Uint8ClampedArray,     30,     js_InitViaClassSpec,       TYPED_ARRAY_CLASP(Uint8Clamped)) \
-    real(Proxy,                 31,     js_InitProxyClass,         &ProxyObject::uncallableClass_) \
+    real(Proxy,                 31,     js_InitProxyClass,         OCLASP(Proxy)) \
     real(WeakMap,               32,     js_InitWeakMapClass,       OCLASP(WeakMap)) \
     real(Map,                   33,     js_InitMapClass,           OCLASP(Map)) \
     real(Set,                   34,     js_InitSetClass,           OCLASP(Set)) \
     real(DataView,              35,     js_InitDataViewClass,      OCLASP(DataView)) \
-    real(Symbol,                36,     js_InitSymbolClass,        &js::SymbolObject::class_) \
+IF_SYMBOLS(real,imaginary)(Symbol,              36,     js_InitSymbolClass,        &js::SymbolObject::class_) \
 IF_SAB(real,imaginary)(SharedArrayBuffer,       37,     js_InitSharedArrayBufferClass, &js::SharedArrayBufferObject::protoClass) \
 IF_INTL(real,imaginary) (Intl,                  38,     js_InitIntlClass,          CLASP(Intl)) \
 IF_BDATA(real,imaginary)(TypedObject,           39,     js_InitTypedObjectModuleObject,   OCLASP(TypedObjectModule)) \
     imaginary(GeneratorFunction,     40,     js_InitIteratorClasses, dummy) \
 IF_BDATA(real,imaginary)(SIMD,                  41,     js_InitSIMDClass, OCLASP(SIMD)) \
     real(WeakSet,               42,     js_InitWeakSetClass,       OCLASP(WeakSet)) \
+IF_SAB(real,imaginary)(SharedInt8Array,         43,     js_InitViaClassSpec,       SHARED_TYPED_ARRAY_CLASP(Int8)) \
+IF_SAB(real,imaginary)(SharedUint8Array,        44,     js_InitViaClassSpec,       SHARED_TYPED_ARRAY_CLASP(Uint8)) \
+IF_SAB(real,imaginary)(SharedInt16Array,        45,     js_InitViaClassSpec,       SHARED_TYPED_ARRAY_CLASP(Int16)) \
+IF_SAB(real,imaginary)(SharedUint16Array,       46,     js_InitViaClassSpec,       SHARED_TYPED_ARRAY_CLASP(Uint16)) \
+IF_SAB(real,imaginary)(SharedInt32Array,        47,     js_InitViaClassSpec,       SHARED_TYPED_ARRAY_CLASP(Int32)) \
+IF_SAB(real,imaginary)(SharedUint32Array,       48,     js_InitViaClassSpec,       SHARED_TYPED_ARRAY_CLASP(Uint32)) \
+IF_SAB(real,imaginary)(SharedFloat32Array,      49,     js_InitViaClassSpec,       SHARED_TYPED_ARRAY_CLASP(Float32)) \
+IF_SAB(real,imaginary)(SharedFloat64Array,      50,     js_InitViaClassSpec,       SHARED_TYPED_ARRAY_CLASP(Float64)) \
+IF_SAB(real,imaginary)(SharedUint8ClampedArray, 51,     js_InitViaClassSpec,       SHARED_TYPED_ARRAY_CLASP(Uint8Clamped)) \
 
 #define JS_FOR_EACH_PROTOTYPE(macro) JS_FOR_PROTOTYPES(macro,macro)
 

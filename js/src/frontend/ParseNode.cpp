@@ -407,6 +407,7 @@ Parser<FullParseHandler>::cloneParseTree(ParseNode *opn)
             Definition *dn = pn->pn_lexdef;
 
             pn->pn_link = dn->dn_uses;
+            pn->pn_dflags = opn->pn_dflags;
             dn->dn_uses = pn;
         } else if (opn->pn_expr) {
             NULLCHECK(pn->pn_expr = cloneParseTree(opn->pn_expr));
@@ -459,20 +460,32 @@ Parser<FullParseHandler>::cloneLeftHandSide(ParseNode *opn)
         for (ParseNode *opn2 = opn->pn_head; opn2; opn2 = opn2->pn_next) {
             ParseNode *pn2;
             if (opn->isKind(PNK_OBJECT)) {
-                JS_ASSERT(opn2->isArity(PN_BINARY));
-                JS_ASSERT(opn2->isKind(PNK_COLON) || opn2->isKind(PNK_SHORTHAND));
+                if (opn2->isKind(PNK_MUTATEPROTO)) {
+                    ParseNode *target = cloneLeftHandSide(opn2->pn_kid);
+                    if (!target)
+                        return nullptr;
+                    pn2 = handler.new_<UnaryNode>(PNK_MUTATEPROTO, JSOP_NOP, opn2->pn_pos, target);
+                } else {
+                    JS_ASSERT(opn2->isArity(PN_BINARY));
+                    JS_ASSERT(opn2->isKind(PNK_COLON) || opn2->isKind(PNK_SHORTHAND));
 
-                ParseNode *tag = cloneParseTree(opn2->pn_left);
-                if (!tag)
-                    return nullptr;
-                ParseNode *target = cloneLeftHandSide(opn2->pn_right);
-                if (!target)
-                    return nullptr;
+                    ParseNode *tag = cloneParseTree(opn2->pn_left);
+                    if (!tag)
+                        return nullptr;
+                    ParseNode *target = cloneLeftHandSide(opn2->pn_right);
+                    if (!target)
+                        return nullptr;
 
-                pn2 = handler.new_<BinaryNode>(opn2->getKind(), JSOP_INITPROP, opn2->pn_pos, tag, target);
+                    pn2 = handler.new_<BinaryNode>(opn2->getKind(), JSOP_INITPROP, opn2->pn_pos, tag, target);
+                }
             } else if (opn2->isArity(PN_NULLARY)) {
                 JS_ASSERT(opn2->isKind(PNK_ELISION));
                 pn2 = cloneParseTree(opn2);
+            } else if (opn2->isKind(PNK_SPREAD)) {
+                ParseNode *target = cloneLeftHandSide(opn2->pn_kid);
+                if (!target)
+                    return nullptr;
+                pn2 = handler.new_<UnaryNode>(PNK_SPREAD, JSOP_NOP, opn2->pn_pos, target);
             } else {
                 pn2 = cloneLeftHandSide(opn2);
             }
@@ -501,7 +514,7 @@ Parser<FullParseHandler>::cloneLeftHandSide(ParseNode *opn)
         if (opn->isDefn()) {
             /* We copied some definition-specific state into pn. Clear it out. */
             pn->pn_cookie.makeFree();
-            pn->pn_dflags &= ~PND_BOUND;
+            pn->pn_dflags &= ~(PND_LET | PND_BOUND);
             pn->setDefn(false);
 
             handler.linkUseToDef(pn, (Definition *) opn);
@@ -693,7 +706,7 @@ DumpName(const CharT *s, size_t len)
         fprintf(stderr, "#<zero-length name>");
 
     for (size_t i = 0; i < len; i++) {
-        jschar c = s[i];
+        char16_t c = s[i];
         if (c > 32 && c < 127)
             fputc(c, stderr);
         else if (c <= 255)

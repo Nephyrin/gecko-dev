@@ -43,6 +43,7 @@ class OutOfLineLoadTypedArray;
 class OutOfLineNewGCThingPar;
 class OutOfLineUpdateCache;
 class OutOfLineCallPostWriteBarrier;
+class OutOfLineIsCallable;
 
 class CodeGenerator : public CodeGeneratorSpecific
 {
@@ -67,6 +68,7 @@ class CodeGenerator : public CodeGeneratorSpecific
     bool visitCloneLiteral(LCloneLiteral *lir);
     bool visitParameter(LParameter *lir);
     bool visitCallee(LCallee *lir);
+    bool visitIsConstructing(LIsConstructing *lir);
     bool visitStart(LStart *lir);
     bool visitReturn(LReturn *ret);
     bool visitDefVar(LDefVar *lir);
@@ -263,8 +265,8 @@ class CodeGenerator : public CodeGeneratorSpecific
     bool visitClampVToUint8(LClampVToUint8 *lir);
     bool visitCallIteratorStart(LCallIteratorStart *lir);
     bool visitIteratorStart(LIteratorStart *lir);
-    bool visitIteratorNext(LIteratorNext *lir);
     bool visitIteratorMore(LIteratorMore *lir);
+    bool visitIsNoIterAndBranch(LIsNoIterAndBranch *lir);
     bool visitIteratorEnd(LIteratorEnd *lir);
     bool visitArgumentsLength(LArgumentsLength *lir);
     bool visitGetFrameArgument(LGetFrameArgument *lir);
@@ -295,13 +297,15 @@ class CodeGenerator : public CodeGeneratorSpecific
     bool visitCallDOMNative(LCallDOMNative *lir);
     bool visitCallGetIntrinsicValue(LCallGetIntrinsicValue *lir);
     bool visitIsCallable(LIsCallable *lir);
+    bool visitOutOfLineIsCallable(OutOfLineIsCallable *ool);
     bool visitIsObject(LIsObject *lir);
     bool visitHaveSameClass(LHaveSameClass *lir);
     bool visitHasClass(LHasClass *lir);
-    bool visitAsmJSCall(LAsmJSCall *lir);
     bool visitAsmJSParameter(LAsmJSParameter *lir);
     bool visitAsmJSReturn(LAsmJSReturn *ret);
     bool visitAsmJSVoidReturn(LAsmJSVoidReturn *ret);
+    bool visitLexicalCheck(LLexicalCheck *ins);
+    bool visitThrowUninitializedLexical(LThrowUninitializedLexical *ins);
 
     bool visitCheckOverRecursed(LCheckOverRecursed *lir);
     bool visitCheckOverRecursedFailure(CheckOverRecursedFailure *ool);

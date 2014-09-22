@@ -3,7 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
-/* rendering object for replaced elements with bitmap image data */
+/* rendering object for replaced elements with image data */
 
 #ifndef nsImageFrame_h___
 #define nsImageFrame_h___
@@ -46,7 +46,7 @@ protected:
   virtual ~nsImageListener();
 
 public:
-  nsImageListener(nsImageFrame *aFrame);
+  explicit nsImageListener(nsImageFrame *aFrame);
 
   NS_DECL_ISUPPORTS
   NS_DECL_IMGINOTIFICATIONOBSERVER
@@ -68,7 +68,7 @@ public:
 
   NS_DECL_FRAMEARENA_HELPERS
 
-  nsImageFrame(nsStyleContext* aContext);
+  explicit nsImageFrame(nsStyleContext* aContext);
 
   NS_DECL_QUERYFRAME_TARGET(nsImageFrame)
   NS_DECL_QUERYFRAME
@@ -173,7 +173,7 @@ public:
 protected:
   virtual ~nsImageFrame();
 
-  void EnsureIntrinsicSizeAndRatio(nsPresContext* aPresContext);
+  void EnsureIntrinsicSizeAndRatio();
 
   virtual mozilla::LogicalSize
   ComputeSize(nsRenderingContext *aRenderingContext,
@@ -389,10 +389,27 @@ public:
   virtual LayerState GetLayerState(nsDisplayListBuilder* aBuilder,
                                    LayerManager* aManager,
                                    const ContainerLayerParameters& aParameters) MOZ_OVERRIDE;
-  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap) MOZ_OVERRIDE
+  nsRect GetBounds(bool* aSnap)
   {
     *aSnap = true;
-    return nsRect(ToReferenceFrame(), Frame()->GetSize());
+
+    nsImageFrame* imageFrame = static_cast<nsImageFrame*>(mFrame);
+    return imageFrame->GetInnerArea() + ToReferenceFrame();
+  }
+
+  virtual nsRect GetBounds(nsDisplayListBuilder* aBuilder, bool* aSnap) MOZ_OVERRIDE
+  {
+    return GetBounds(aSnap);
+  }
+
+  virtual nsRegion GetOpaqueRegion(nsDisplayListBuilder* aBuilder, bool* aSnap)
+  {
+    *aSnap = true;
+    bool animated;
+    if (mImage && mImage->GetAnimated(&animated) == NS_OK && !animated && mImage->FrameIsOpaque(imgIContainer::FRAME_CURRENT)) {
+      return nsRegion(GetBounds(aSnap));
+    }
+    return nsRegion();
   }
 
   virtual already_AddRefed<Layer> BuildLayer(nsDisplayListBuilder* aBuilder,

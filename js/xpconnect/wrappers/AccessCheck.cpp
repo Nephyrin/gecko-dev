@@ -99,7 +99,7 @@ IsPermitted(const char *name, JSFlatString *prop, bool set)
     if (!propLength)
         return false;
 
-    jschar propChar0 = JS_GetFlatStringCharAt(prop, 0);
+    char16_t propChar0 = JS_GetFlatStringCharAt(prop, 0);
     if (name[0] == 'L' && !strcmp(name, "Location"))
         return dom::LocationBinding::IsPermitted(prop, propChar0, set);
     if (name[0] == 'W' && !strcmp(name, "Window"))
@@ -185,7 +185,7 @@ AccessCheck::isCrossOriginAccessPermitted(JSContext *cx, HandleObject wrapper, H
     // Check for frame IDs. If we're resolving named frames, make sure to only
     // resolve ones that don't shadow native properties. See bug 860494.
     if (IsWindow(name)) {
-        if (JSID_IS_STRING(id) && !XrayUtils::IsXrayResolving(cx, wrapper, id)) {
+        if (JSID_IS_STRING(id)) {
             bool wouldShadow = false;
             if (!XrayUtils::HasNativeProperty(cx, wrapper, id, &wouldShadow) ||
                 wouldShadow)
@@ -304,7 +304,7 @@ ExposedPropertiesOnly::check(JSContext *cx, HandleObject wrapper, HandleId id, W
     size_t length = JS_GetStringLength(JS_FORGET_STRING_FLATNESS(flat));
 
     for (size_t i = 0; i < length; ++i) {
-        jschar ch = JS_GetFlatStringCharAt(flat, i);
+        char16_t ch = JS_GetFlatStringCharAt(flat, i);
         switch (ch) {
         case 'r':
             if (access & READ) {

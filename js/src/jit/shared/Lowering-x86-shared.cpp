@@ -155,6 +155,14 @@ LIRGeneratorX86Shared::lowerDivI(MDiv *div)
             if (div->fallible() && !assignSnapshot(lir, Bailout_DoubleOutput))
                 return false;
             return defineReuseInput(lir, div, 0);
+        } else if (rhs != 0 &&
+                   gen->optimizationInfo().registerAllocator() != RegisterAllocator_LSRA)
+        {
+            LDivOrModConstantI *lir;
+            lir = new(alloc()) LDivOrModConstantI(useRegister(div->lhs()), rhs, tempFixed(eax));
+            if (div->fallible() && !assignSnapshot(lir, Bailout_DoubleOutput))
+                return false;
+            return defineFixed(lir, div, LAllocation(AnyRegister(edx)));
         }
     }
 
@@ -179,6 +187,14 @@ LIRGeneratorX86Shared::lowerModI(MMod *mod)
             if (mod->fallible() && !assignSnapshot(lir, Bailout_DoubleOutput))
                 return false;
             return defineReuseInput(lir, mod, 0);
+        } else if (rhs != 0 &&
+                   gen->optimizationInfo().registerAllocator() != RegisterAllocator_LSRA)
+        {
+            LDivOrModConstantI *lir;
+            lir = new(alloc()) LDivOrModConstantI(useRegister(mod->lhs()), rhs, tempFixed(edx));
+            if (mod->fallible() && !assignSnapshot(lir, Bailout_DoubleOutput))
+                return false;
+            return defineFixed(lir, mod, LAllocation(AnyRegister(eax)));
         }
     }
 
@@ -305,4 +321,70 @@ LIRGeneratorX86Shared::visitForkJoinGetSlice(MForkJoinGetSlice *ins)
                           tempFixed(ForkJoinGetSliceReg_temp0),
                           tempFixed(ForkJoinGetSliceReg_temp1));
     return defineFixed(lir, ins, LAllocation(AnyRegister(ForkJoinGetSliceReg_output)));
+}
+
+bool
+LIRGeneratorX86Shared::visitSimdTernaryBitwise(MSimdTernaryBitwise *ins)
+{
+    MOZ_ASSERT(IsSimdType(ins->type()));
+
+    if (ins->type() == MIRType_Int32x4 || ins->type() == MIRType_Float32x4) {
+        LSimdSelect *lins = new(alloc()) LSimdSelect;
+
+        // This must be useRegisterAtStart() because it is destroyed.
+        lins->setOperand(0, useRegisterAtStart(ins->getOperand(0)));
+        // This must be useRegisterAtStart() because it is destroyed.
+        lins->setOperand(1, useRegisterAtStart(ins->getOperand(1)));
+        // This could be useRegister(), but combining it with
+        // useRegisterAtStart() is broken see bug 772830.
+        lins->setOperand(2, useRegisterAtStart(ins->getOperand(2)));
+        // The output is constrained to be in the same register as the second
+        // argument to avoid redundantly copying the result into place. The
+        // register allocator will move the result if necessary.
+        return defineReuseInput(lins, ins, 1);
+    }
+
+    MOZ_CRASH("Unknown SIMD kind when doing bitwise operations");
+    return false;
+}
+
+bool
+LIRGeneratorX86Shared::visitSimdSplatX4(MSimdSplatX4 *ins)
+{
+    LAllocation x = useRegisterAtStart(ins->getOperand(0));
+    LSimdSplatX4 *lir = new(alloc()) LSimdSplatX4(x);
+
+    switch (ins->type()) {
+      case MIRType_Int32x4:
+        return define(lir, ins);
+      case MIRType_Float32x4:
+        return defineReuseInput(lir, ins, 0);
+      default:
+        MOZ_CRASH("Unknown SIMD kind");
+    }
+}
+
+
+bool
+LIRGeneratorX86Shared::visitSimdValueX4(MSimdValueX4 *ins)
+{
+    if (ins->type() == MIRType_Float32x4) {
+        // As x is used at start and reused for the output, other inputs can't
+        // be used at start.
+        LAllocation x = useRegisterAtStart(ins->getOperand(0));
+        LAllocation y = useRegister(ins->getOperand(1));
+        LAllocation z = useRegister(ins->getOperand(2));
+        LAllocation w = useRegister(ins->getOperand(3));
+        LDefinition copyY = tempCopy(ins->getOperand(1), 1);
+        return defineReuseInput(new (alloc()) LSimdValueFloat32x4(x, y, z, w, copyY), ins, 0);
+    }
+
+    // No defineReuseInput => useAtStart for everyone.
+    LAllocation x = useRegisterAtStart(ins->getOperand(0));
+    LAllocation y = useRegisterAtStart(ins->getOperand(1));
+    LAllocation z = useRegisterAtStart(ins->getOperand(2));
+    LAllocation w = useRegisterAtStart(ins->getOperand(3));
+
+    MOZ_ASSERT(ins->type() == MIRType_Int32x4);
+    return define(new(alloc()) LSimdValueInt32x4(x, y, z, w), ins);
 }

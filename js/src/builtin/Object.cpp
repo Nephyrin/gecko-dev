@@ -229,7 +229,7 @@ js::ObjectToSource(JSContext *cx, HandleObject obj)
                 ? !IsIdentifier(JSID_TO_ATOM(id))
                 : JSID_TO_INT(id) < 0)
             {
-                idstr = js_QuoteString(cx, idstr, jschar('\''));
+                idstr = js_QuoteString(cx, idstr, char16_t('\''));
                 if (!idstr)
                     return nullptr;
             }
@@ -1015,17 +1015,21 @@ obj_defineProperties(JSContext *cx, unsigned argc, Value *vp)
     return DefineProperties(cx, obj, props);
 }
 
+// ES6 draft rev27 (2014/08/24) 19.1.2.11 Object.isExtensible(O)
 static bool
 obj_isExtensible(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
-    RootedObject obj(cx);
-    if (!GetFirstArgumentAsObject(cx, args, "Object.isExtensible", &obj))
-        return false;
 
-    bool extensible;
-    if (!JSObject::isExtensible(cx, obj, &extensible))
-        return false;
+    // step 1
+    bool extensible = false;
+
+    // step 2
+    if (args.get(0).isObject()) {
+        RootedObject obj(cx, &args.get(0).toObject());
+        if (!JSObject::isExtensible(cx, obj, &extensible))
+            return false;
+    }
     args.rval().setBoolean(extensible);
     return true;
 }
@@ -1090,17 +1094,21 @@ obj_seal(JSContext *cx, unsigned argc, Value *vp)
     return JSObject::seal(cx, obj);
 }
 
+// ES6 draft rev27 (2014/08/24) 19.1.2.13 Object.isSealed(O)
 static bool
 obj_isSealed(JSContext *cx, unsigned argc, Value *vp)
 {
     CallArgs args = CallArgsFromVp(argc, vp);
-    RootedObject obj(cx);
-    if (!GetFirstArgumentAsObject(cx, args, "Object.isSealed", &obj))
-        return false;
 
-    bool sealed;
-    if (!JSObject::isSealed(cx, obj, &sealed))
-        return false;
+    // step 1
+    bool sealed = true;
+
+    // step 2
+    if (args.get(0).isObject()) {
+        RootedObject obj(cx, &args.get(0).toObject());
+        if (!JSObject::isSealed(cx, obj, &sealed))
+            return false;
+    }
     args.rval().setBoolean(sealed);
     return true;
 }

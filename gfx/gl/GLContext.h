@@ -80,6 +80,8 @@ namespace gl {
 MOZ_BEGIN_ENUM_CLASS(GLFeature)
     bind_buffer_offset,
     blend_minmax,
+    clear_buffers,
+    copy_buffer,
     depth_texture,
     draw_buffers,
     draw_instanced,
@@ -346,6 +348,7 @@ public:
         ARB_ES2_compatibility,
         ARB_ES3_compatibility,
         ARB_color_buffer_float,
+        ARB_copy_buffer,
         ARB_depth_texture,
         ARB_draw_buffers,
         ARB_draw_instanced,
@@ -624,7 +627,7 @@ public:
         bool mHasBeenChecked;
 
     public:
-        ScopedLocalErrorCheck(GLContext* gl)
+        explicit ScopedLocalErrorCheck(GLContext* gl)
             : mGL(gl)
             , mHasBeenChecked(false)
         {
@@ -782,8 +785,10 @@ private:
     // if it's bound.
     void AfterGLDrawCall()
     {
-        if (mScreen)
+        if (mScreen) {
             mScreen->AfterDrawCall();
+        }
+        mHeavyGLCallsSinceLastFlush = true;
     }
 
     // Do whatever setup is necessary to read from our offscreen FBO, if it's
@@ -904,6 +909,7 @@ private:
         BEFORE_GL_CALL;
         mSymbols.fBufferData(target, size, data, usage);
         AFTER_GL_CALL;
+        mHeavyGLCallsSinceLastFlush = true;
     }
 
 public:
@@ -926,6 +932,7 @@ public:
         BEFORE_GL_CALL;
         mSymbols.fBufferSubData(target, offset, size, data);
         AFTER_GL_CALL;
+        mHeavyGLCallsSinceLastFlush = true;
     }
 
 private:
@@ -940,6 +947,30 @@ public:
         BeforeGLDrawCall();
         raw_fClear(mask);
         AfterGLDrawCall();
+    }
+
+    void fClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil) {
+        BEFORE_GL_CALL;
+        mSymbols.fClearBufferfi(buffer, drawbuffer, depth, stencil);
+        AFTER_GL_CALL;
+    }
+
+    void fClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat* value) {
+        BEFORE_GL_CALL;
+        mSymbols.fClearBufferfv(buffer, drawbuffer, value);
+        AFTER_GL_CALL;
+    }
+
+    void fClearBufferiv(GLenum buffer, GLint drawbuffer, const GLint* value) {
+        BEFORE_GL_CALL;
+        mSymbols.fClearBufferiv(buffer, drawbuffer, value);
+        AFTER_GL_CALL;
+    }
+
+    void fClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint* value) {
+        BEFORE_GL_CALL;
+        mSymbols.fClearBufferuiv(buffer, drawbuffer, value);
+        AFTER_GL_CALL;
     }
 
     void fClearColor(GLclampf r, GLclampf g, GLclampf b, GLclampf a) {
@@ -971,6 +1002,7 @@ public:
         BEFORE_GL_CALL;
         mSymbols.fCompressedTexImage2D(target, level, internalformat, width, height, border, imageSize, pixels);
         AFTER_GL_CALL;
+        mHeavyGLCallsSinceLastFlush = true;
     }
 
     void fCompressedTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLsizei imageSize, const GLvoid *pixels) {
@@ -978,6 +1010,7 @@ public:
         BEFORE_GL_CALL;
         mSymbols.fCompressedTexSubImage2D(target, level, xoffset, yoffset, width, height, format, imageSize, pixels);
         AFTER_GL_CALL;
+        mHeavyGLCallsSinceLastFlush = true;
     }
 
     void fCopyTexImage2D(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width, GLsizei height, GLint border) {
@@ -1127,12 +1160,14 @@ public:
         BEFORE_GL_CALL;
         mSymbols.fFinish();
         AFTER_GL_CALL;
+        mHeavyGLCallsSinceLastFlush = false;
     }
 
     void fFlush() {
         BEFORE_GL_CALL;
         mSymbols.fFlush();
         AFTER_GL_CALL;
+        mHeavyGLCallsSinceLastFlush = false;
     }
 
     void fFrontFace(GLenum face) {
@@ -1524,6 +1559,7 @@ private:
         BEFORE_GL_CALL;
         mSymbols.fReadPixels(x, y, width, height, format, type, pixels);
         AFTER_GL_CALL;
+        mHeavyGLCallsSinceLastFlush = true;
     }
 
 public:
@@ -1626,6 +1662,7 @@ private:
         BEFORE_GL_CALL;
         mSymbols.fTexImage2D(target, level, internalformat, width, height, border, format, type, pixels);
         AFTER_GL_CALL;
+        mHeavyGLCallsSinceLastFlush = true;
     }
 
 public:
@@ -1646,6 +1683,7 @@ public:
         BEFORE_GL_CALL;
         mSymbols.fTexSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels);
         AFTER_GL_CALL;
+        mHeavyGLCallsSinceLastFlush = true;
     }
 
     void fUniform1f(GLint location, GLfloat v0) {
@@ -2263,6 +2301,7 @@ public:
         ASSERT_SYMBOL_PRESENT(fEGLImageTargetTexture2D);
         mSymbols.fEGLImageTargetTexture2D(target, image);
         AFTER_GL_CALL;
+        mHeavyGLCallsSinceLastFlush = true;
     }
 
     void fEGLImageTargetRenderbufferStorage(GLenum target, GLeglImage image)
@@ -2627,6 +2666,18 @@ public:
         AFTER_GL_CALL;
     }
 
+// Core GL & Extension ARB_copy_buffer
+public:
+    void fCopyBufferSubData(GLenum readtarget, GLenum writetarget,
+                            GLintptr readoffset, GLintptr writeoffset,
+                            GLsizeiptr size)
+    {
+        BEFORE_GL_CALL;
+        ASSERT_SYMBOL_PRESENT(fCopyBufferSubData);
+        mSymbols.fCopyBufferSubData(readtarget, writetarget, readoffset, writeoffset, size);
+        AFTER_GL_CALL;
+    }
+
 
 // -----------------------------------------------------------------------------
 // Constructor
@@ -2641,6 +2692,9 @@ protected:
 public:
     virtual ~GLContext();
 
+    // Mark this context as destroyed.  This will nullptr out all
+    // the GL function pointers!
+    void MarkDestroyed();
 
 // -----------------------------------------------------------------------------
 // Everything that isn't standard GL APIs
@@ -2682,10 +2736,6 @@ public:
     virtual bool SetupLookupFunction() = 0;
 
     virtual void ReleaseSurface() {}
-
-    // Mark this context as destroyed.  This will nullptr out all
-    // the GL function pointers!
-    void MarkDestroyed();
 
     bool IsDestroyed() {
         // MarkDestroyed will mark all these as null.
@@ -3149,6 +3199,13 @@ public:
     nsTArray<NamedResource> mTrackedBuffers;
     nsTArray<NamedResource> mTrackedQueries;
 #endif
+
+
+protected:
+    bool mHeavyGLCallsSinceLastFlush;
+
+public:
+    void FlushIfHeavyGLCallsSinceLastFlush();
 };
 
 bool DoesStringMatch(const char* aString, const char *aWantedString);

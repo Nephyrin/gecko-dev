@@ -432,20 +432,18 @@ function ArrayFind(predicate/*, thisArg*/) {
     var T = arguments.length > 1 ? arguments[1] : undefined;
 
     /* Steps 8-9. */
-    /* Steps a (implicit), and e. */
+    /* Steps a (implicit), and g. */
     /* Note: this will hang in some corner-case situations, because of IEEE-754 numbers'
      * imprecision for large values. Example:
      * var obj = { 18014398509481984: true, length: 18014398509481988 };
      * Array.prototype.find.call(obj, () => true);
      */
     for (var k = 0; k < len; k++) {
-        /* Steps b and c (implicit) */
-        if (k in O) {
-            /* Step d. */
-            var kValue = O[k];
-            if (callFunction(predicate, T, kValue, k, O))
-                return kValue;
-        }
+        /* Steps a-c. */
+        var kValue = O[k];
+        /* Steps d-f. */
+        if (callFunction(predicate, T, kValue, k, O))
+            return kValue;
     }
 
     /* Step 10. */
@@ -470,19 +468,16 @@ function ArrayFindIndex(predicate/*, thisArg*/) {
     var T = arguments.length > 1 ? arguments[1] : undefined;
 
     /* Steps 8-9. */
-    /* Steps a (implicit), and e. */
+    /* Steps a (implicit), and g. */
     /* Note: this will hang in some corner-case situations, because of IEEE-754 numbers'
      * imprecision for large values. Example:
      * var obj = { 18014398509481984: true, length: 18014398509481988 };
      * Array.prototype.find.call(obj, () => true);
      */
     for (var k = 0; k < len; k++) {
-        /* Steps b and c (implicit) */
-        if (k in O) {
-            /* Step d. */
-            if (callFunction(predicate, T, O[k], k, O))
-                return k;
-        }
+        /* Steps a-f. */
+        if (callFunction(predicate, T, O[k], k, O))
+            return k;
     }
 
     /* Step 10. */
@@ -584,6 +579,56 @@ function ArrayFill(value, start = 0, end = undefined) {
 
     // Step 13.
     return O;
+}
+
+// Proposed for ES7:
+// https://github.com/domenic/Array.prototype.contains/blob/master/spec.md
+function ArrayContains(searchElement, fromIndex = 0) {
+    // Steps 1-2.
+    var O = ToObject(this);
+
+    // Steps 3-4.
+    var len = ToLength(O.length);
+
+    // Step 5.
+    if (len === 0)
+        return false;
+
+    // Steps 6-7.
+    var n = ToInteger(fromIndex);
+
+    // Step 8.
+    if (n >= len)
+        return false;
+
+    // Step 9.
+    var k;
+    if (n >= 0)
+        k = n;
+    // Step 10.
+    else {
+        // Step a.
+        k = len + n;
+        // Step b.
+        if (k < 0)
+            k = 0;
+    }
+
+    // Step 11.
+    while (k < len) {
+        // Steps a-b.
+        var elementK = O[k];
+
+        // Step c.
+        if (SameValueZero(searchElement, elementK))
+            return true;
+
+        // Step d.
+        k++;
+    }
+
+    // Step 12.
+    return false;
 }
 
 #define ARRAY_ITERATOR_SLOT_ITERATED_OBJECT 0

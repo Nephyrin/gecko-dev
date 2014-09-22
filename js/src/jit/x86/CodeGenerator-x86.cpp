@@ -332,6 +332,33 @@ CodeGeneratorX86::visitLoadTypedArrayElementStatic(LLoadTypedArrayElementStatic 
 }
 
 bool
+CodeGeneratorX86::visitAsmJSCall(LAsmJSCall *ins)
+{
+    MAsmJSCall *mir = ins->mir();
+
+    emitAsmJSCall(ins);
+
+    if (IsFloatingPointType(mir->type()) && mir->callee().which() == MAsmJSCall::Callee::Builtin) {
+        if (mir->type() == MIRType_Float32) {
+            masm.reserveStack(sizeof(float));
+            Operand op(esp, 0);
+            masm.fstp32(op);
+            masm.loadFloat32(op, ReturnFloat32Reg);
+            masm.freeStack(sizeof(float));
+        } else {
+            JS_ASSERT(mir->type() == MIRType_Double);
+            masm.reserveStack(sizeof(double));
+            Operand op(esp, 0);
+            masm.fstp(op);
+            masm.loadDouble(op, ReturnDoubleReg);
+            masm.freeStack(sizeof(double));
+        }
+    }
+
+    return true;
+}
+
+bool
 CodeGeneratorX86::visitAsmJSLoadHeap(LAsmJSLoadHeap *ins)
 {
     const MAsmJSLoadHeap *mir = ins->mir();
@@ -462,15 +489,30 @@ CodeGeneratorX86::visitAsmJSLoadGlobalVar(LAsmJSLoadGlobalVar *ins)
 {
     MAsmJSLoadGlobalVar *mir = ins->mir();
     MIRType type = mir->type();
-    JS_ASSERT(IsNumberType(type));
+    JS_ASSERT(IsNumberType(type) || IsSimdType(type));
 
     CodeOffsetLabel label;
-    if (type == MIRType_Int32)
+    switch (type) {
+      case MIRType_Int32:
         label = masm.movlWithPatch(PatchedAbsoluteAddress(), ToRegister(ins->output()));
-    else if (type == MIRType_Float32)
+        break;
+      case MIRType_Float32:
         label = masm.movssWithPatch(PatchedAbsoluteAddress(), ToFloatRegister(ins->output()));
-    else
+        break;
+      case MIRType_Double:
         label = masm.movsdWithPatch(PatchedAbsoluteAddress(), ToFloatRegister(ins->output()));
+        break;
+      // Aligned access: code is aligned on PageSize + there is padding
+      // before the global data section.
+      case MIRType_Int32x4:
+        label = masm.movdqaWithPatch(PatchedAbsoluteAddress(), ToFloatRegister(ins->output()));
+        break;
+      case MIRType_Float32x4:
+        label = masm.movapsWithPatch(PatchedAbsoluteAddress(), ToFloatRegister(ins->output()));
+        break;
+      default:
+        MOZ_CRASH("unexpected type in visitAsmJSLoadGlobalVar");
+    }
     masm.append(AsmJSGlobalAccess(label, mir->globalDataOffset()));
     return true;
 }
@@ -481,15 +523,30 @@ CodeGeneratorX86::visitAsmJSStoreGlobalVar(LAsmJSStoreGlobalVar *ins)
     MAsmJSStoreGlobalVar *mir = ins->mir();
 
     MIRType type = mir->value()->type();
-    JS_ASSERT(IsNumberType(type));
+    JS_ASSERT(IsNumberType(type) || IsSimdType(type));
 
     CodeOffsetLabel label;
-    if (type == MIRType_Int32)
+    switch (type) {
+      case MIRType_Int32:
         label = masm.movlWithPatch(ToRegister(ins->value()), PatchedAbsoluteAddress());
-    else if (type == MIRType_Float32)
+        break;
+      case MIRType_Float32:
         label = masm.movssWithPatch(ToFloatRegister(ins->value()), PatchedAbsoluteAddress());
-    else
+        break;
+      case MIRType_Double:
         label = masm.movsdWithPatch(ToFloatRegister(ins->value()), PatchedAbsoluteAddress());
+        break;
+      // Aligned access: code is aligned on PageSize + there is padding
+      // before the global data section.
+      case MIRType_Int32x4:
+        label = masm.movdqaWithPatch(ToFloatRegister(ins->value()), PatchedAbsoluteAddress());
+        break;
+      case MIRType_Float32x4:
+        label = masm.movapsWithPatch(ToFloatRegister(ins->value()), PatchedAbsoluteAddress());
+        break;
+      default:
+        MOZ_CRASH("unexpected type in visitAsmJSStoreGlobalVar");
+    }
     masm.append(AsmJSGlobalAccess(label, mir->globalDataOffset()));
     return true;
 }
@@ -515,28 +572,6 @@ CodeGeneratorX86::visitAsmJSLoadFFIFunc(LAsmJSLoadFFIFunc *ins)
     CodeOffsetLabel label = masm.movlWithPatch(PatchedAbsoluteAddress(), out);
     masm.append(AsmJSGlobalAccess(label, mir->globalDataOffset()));
     return true;
-}
-
-void
-CodeGeneratorX86::postAsmJSCall(LAsmJSCall *lir)
-{
-    MAsmJSCall *mir = lir->mir();
-    if (!IsFloatingPointType(mir->type()) || mir->callee().which() != MAsmJSCall::Callee::Builtin)
-        return;
-
-    if (mir->type() == MIRType_Float32) {
-        masm.reserveStack(sizeof(float));
-        Operand op(esp, 0);
-        masm.fstp32(op);
-        masm.loadFloat32(op, ReturnFloat32Reg);
-        masm.freeStack(sizeof(float));
-    } else {
-        masm.reserveStack(sizeof(double));
-        Operand op(esp, 0);
-        masm.fstp(op);
-        masm.loadDouble(op, ReturnDoubleReg);
-        masm.freeStack(sizeof(double));
-    }
 }
 
 void

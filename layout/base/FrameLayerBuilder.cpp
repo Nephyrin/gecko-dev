@@ -24,6 +24,8 @@
 #include "ActiveLayerTracker.h"
 #include "gfx2DGlue.h"
 #include "mozilla/LookAndFeel.h"
+#include "nsDocShell.h"
+#include "nsImageFrame.h"
 
 #include "GeckoProfiler.h"
 #include "mozilla/gfx/Tools.h"
@@ -184,7 +186,7 @@ FrameLayerBuilder::DisplayItemData::GetFrameListChanges()
  */
 class LayerManagerData : public LayerUserData {
 public:
-  LayerManagerData(LayerManager *aManager)
+  explicit LayerManagerData(LayerManager *aManager)
     : mLayerManager(aManager)
 #ifdef DEBUG_DISPLAY_ITEM_DATA
     , mParent(nullptr)
@@ -259,6 +261,7 @@ public:
     mNeedComponentAlpha(false),
     mForceTransparentSurface(false),
     mHideAllLayersBelow(false),
+    mOpaqueForAnimatedGeometryRootParent(false),
     mImage(nullptr),
     mCommonClipCount(-1),
     mNewChildLayersIndex(-1),
@@ -458,6 +461,13 @@ public:
    * Set if all layers below this ThebesLayer should be hidden.
    */
   bool mHideAllLayersBelow;
+  /**
+   * Set if the opaque region for this layer can be applied to the parent
+   * animated geometry root of this layer's animated geometry root.
+   * We set this when a ThebesLayer's animated geometry root is a scrollframe
+   * and the ThebesLayer completely fills the displayport of the scrollframe.
+   */
+  bool mOpaqueForAnimatedGeometryRootParent;
 
   /**
    * Stores the pointer to the nsDisplayImage if we want to
@@ -491,6 +501,10 @@ public:
    * in mItemClip).
    */
   void UpdateCommonClipCount(const DisplayItemClip& aCurrentClip);
+  /**
+   * The union of all the bounds of the display items in this layer.
+   */
+  nsIntRegion mBounds;
 
 private:
   /**
@@ -532,6 +546,9 @@ struct NewLayerEntry {
   nsRefPtr<Layer> mLayer;
   const nsIFrame* mAnimatedGeometryRoot;
   const nsIFrame* mFixedPosFrameForLayerData;
+  // If non-null, this FrameMetrics is set to the be the first FrameMetrics
+  // on the layer.
+  UniquePtr<FrameMetrics> mBaseFrameMetrics;
   // The following are only used for retained layers (for occlusion
   // culling of those layers). These regions are all relative to the
   // container reference frame.
@@ -756,14 +773,22 @@ protected:
   bool ItemCoversScrollableArea(nsDisplayItem* aItem, const nsRegion& aOpaque);
 
   /**
+   * Set FrameMetrics and scroll-induced clipping on aEntry's layer.
+   */
+  void SetupScrollingMetadata(NewLayerEntry* aEntry);
+
+  /**
+   * Applies occlusion culling.
    * For each layer in mNewChildLayers, remove from its visible region the
    * opaque regions of the layers at higher z-index, but only if they have
    * the same animated geometry root and fixed-pos frame ancestor.
    * The opaque region for the child layers that share the same animated
    * geometry root as the container frame is returned in
    * *aOpaqueRegionForContainer.
+   *
+   * Also sets scroll metadata on the layers.
    */
-  void ApplyOcclusionCulling(nsIntRegion* aOpaqueRegionForContainer);
+  void PostprocessRetainedLayers(nsIntRegion* aOpaqueRegionForContainer);
 
   /**
    * Computes the snapped opaque area of aItem. Sets aList's opaque flag
@@ -776,7 +801,8 @@ protected:
                                 const nsIFrame* aFixedPosFrame,
                                 const DisplayItemClip& aClip,
                                 nsDisplayList* aList,
-                                bool* aHideAllLayersBelow);
+                                bool* aHideAllLayersBelow,
+                                bool* aOpaqueForAnimatedGeometryRootParent);
 
   /**
    * Indicate that we are done adding items to the ThebesLayer at the top of
@@ -1704,8 +1730,7 @@ ContainerState::CreateOrRecycleThebesLayer(const nsIFrame* aAnimatedGeometryRoot
                        RoundToMatchResidual(scaledOffset.y, data->mAnimatedGeometryRootPosition.y));
   data->mTranslation = pixOffset;
   pixOffset += mParameters.mOffset;
-  Matrix matrix;
-  matrix.Translate(pixOffset.x, pixOffset.y);
+  Matrix matrix = Matrix::Translation(pixOffset.x, pixOffset.y);
   layer->SetBaseTransform(Matrix4x4::From2D(matrix));
 
   // FIXME: Temporary workaround for bug 681192 and bug 724786.
@@ -2140,15 +2165,14 @@ ContainerState::PopThebesLayerData()
     newLayerEntry->mVisibleRegion = data->mVisibleRegion;
     newLayerEntry->mOpaqueRegion = data->mOpaqueRegion;
     newLayerEntry->mHideAllLayersBelow = data->mHideAllLayersBelow;
-    if (nsLayoutUtils::GetScrollableFrameFor(newLayerEntry->mAnimatedGeometryRoot) &&
-        !nsDisplayScrollLayer::IsConstructingScrollLayerForScrolledFrame(newLayerEntry->mAnimatedGeometryRoot)) {
-      // Async scrolling not currently active so we can propagate our opaque region
-      // up to the parent animated geometry root.
-      newLayerEntry->mOpaqueForAnimatedGeometryRootParent = true;
-    }
+    newLayerEntry->mOpaqueForAnimatedGeometryRootParent = data->mOpaqueForAnimatedGeometryRootParent;
   } else {
     SetOuterVisibleRegionForLayer(layer, data->mVisibleRegion);
   }
+
+  nsIntRect layerBounds = data->mBounds.GetBounds();
+  layerBounds.MoveBy(-GetTranslationForThebesLayer(data->mLayer));
+  layer->SetLayerBounds(layerBounds);
 
 #ifdef MOZ_DUMP_PAINTING
   layer->AddExtraDumpInfo(nsCString(data->mLog));
@@ -2310,6 +2334,10 @@ ThebesLayerData::Accumulate(ContainerState* aState,
 {
   FLB_LOG_THEBES_DECISION(this, "Accumulating dp=%s(%p), f=%p against tld=%p\n", aItem->Name(), aItem, aItem->Frame(), this);
 
+  bool snap;
+  nsRect itemBounds = aItem->GetBounds(aState->mBuilder, &snap);
+  mBounds.OrWith(aState->ScaleToOutsidePixels(itemBounds, snap));
+
   if (aState->mBuilder->NeedToForceTransparentSurfaceForItem(aItem)) {
     mForceTransparentSurface = true;
   }
@@ -2320,22 +2348,11 @@ ThebesLayerData::Accumulate(ContainerState* aState,
     aItem->DisableComponentAlpha();
   }
 
-  /* Mark as available for conversion to image layer if this is a nsDisplayImage and
-   * we are the first visible item in the ThebesLayerData object.
-   */
-  if (mVisibleRegion.IsEmpty() &&
-      aItem->SupportsOptimizingToImage()) {
-    mImage = static_cast<nsDisplayImageContainer*>(aItem);
-    FLB_LOG_THEBES_DECISION(this, "  Tracking image\n");
-  } else if (mImage) {
-    FLB_LOG_THEBES_DECISION(this, "  No longer tracking image\n");
-    mImage = nullptr;
-  }
   bool clipMatches = mItemClip == aClip;
   mItemClip = aClip;
 
   if (!mIsSolidColorInVisibleRegion && mOpaqueRegion.Contains(aDrawRect) &&
-      mVisibleRegion.Contains(aVisibleRect)) {
+      mVisibleRegion.Contains(aVisibleRect) && !mImage) {
     // A very common case! Most pages have a ThebesLayer with the page
     // background (opaque) visible and most or all of the page content over the
     // top of that background.
@@ -2346,6 +2363,19 @@ ThebesLayerData::Accumulate(ContainerState* aState,
     // and therefore aDrawRect.
     NS_ASSERTION(mDrawRegion.Contains(aDrawRect), "Draw region not covered");
     return;
+  }
+
+  /* Mark as available for conversion to image layer if this is a nsDisplayImage and
+   * it's the only thing visible in this layer.
+   */
+  if (nsIntRegion(aVisibleRect).Contains(mVisibleRegion) &&
+      aClippedOpaqueRegion.Contains(mVisibleRegion) &&
+      aItem->SupportsOptimizingToImage()) {
+    mImage = static_cast<nsDisplayImageContainer*>(aItem);
+    FLB_LOG_THEBES_DECISION(this, "  Tracking image: nsDisplayImageContainer covers the layer\n");
+  } else if (mImage) {
+    FLB_LOG_THEBES_DECISION(this, "  No longer tracking image\n");
+    mImage = nullptr;
   }
 
   nscolor uniformColor;
@@ -2551,8 +2581,8 @@ PaintInactiveLayer(nsDisplayListBuilder* aBuilder,
                                       itemVisibleRect.Size().ToIntSize(),
                                       SurfaceFormat::B8G8R8A8);
     context = new gfxContext(tempDT);
-    context->SetMatrix(gfxMatrix().Translate(-gfxPoint(itemVisibleRect.x,
-                                                       itemVisibleRect.y)));
+    context->SetMatrix(gfxMatrix::Translation(-itemVisibleRect.x,
+                                              -itemVisibleRect.y));
   }
 #endif
   basic->BeginTransaction();
@@ -2638,31 +2668,14 @@ IsScrollLayerItemAndOverlayScrollbarForScrollFrame(
   return false;
 }
 
-bool
-ContainerState::ItemCoversScrollableArea(nsDisplayItem* aItem, const nsRegion& aOpaque)
-{
-  nsIPresShell* presShell = aItem->Frame()->PresContext()->PresShell();
-  nsIFrame* rootFrame = presShell->GetRootFrame();
-  if (mContainerFrame != rootFrame) {
-    return false;
-  }
-  nsRect scrollableArea;
-  if (presShell->IsScrollPositionClampingScrollPortSizeSet()) {
-    scrollableArea = nsRect(nsPoint(0, 0),
-      presShell->GetScrollPositionClampingScrollPortSize());
-  } else {
-    scrollableArea = rootFrame->GetRectRelativeToSelf();
-  }
-  return aOpaque.Contains(scrollableArea);
-}
-
 nsIntRegion
 ContainerState::ComputeOpaqueRect(nsDisplayItem* aItem,
                                   const nsIFrame* aAnimatedGeometryRoot,
                                   const nsIFrame* aFixedPosFrame,
                                   const DisplayItemClip& aClip,
                                   nsDisplayList* aList,
-                                  bool* aHideAllLayersBelow)
+                                  bool* aHideAllLayersBelow,
+                                  bool* aOpaqueForAnimatedGeometryRootParent)
 {
   bool snapOpaque;
   nsRegion opaque = aItem->GetOpaqueRegion(mBuilder, &snapOpaque);
@@ -2675,8 +2688,8 @@ ContainerState::ComputeOpaqueRect(nsDisplayItem* aItem,
     }
     if (aAnimatedGeometryRoot == mContainerAnimatedGeometryRoot &&
         aFixedPosFrame == mContainerFixedPosFrame &&
-        !aList->IsOpaque() &&
         opaqueClipped.Contains(mContainerBounds)) {
+      *aHideAllLayersBelow = true;
       aList->SetIsOpaque();
     }
     // Add opaque areas to the "exclude glass" region. Only do this when our
@@ -2687,8 +2700,22 @@ ContainerState::ComputeOpaqueRect(nsDisplayItem* aItem,
       mBuilder->AddWindowOpaqueRegion(opaqueClipped);
     }
     opaquePixels = ScaleRegionToInsidePixels(opaqueClipped, snapOpaque);
-    if (aFixedPosFrame && ItemCoversScrollableArea(aItem, opaque)) {
-      *aHideAllLayersBelow = true;
+
+    nsIScrollableFrame* sf = nsLayoutUtils::GetScrollableFrameFor(aAnimatedGeometryRoot);
+    if (sf) {
+      nsRect displayport;
+      bool usingDisplayport =
+        nsLayoutUtils::GetDisplayPort(aAnimatedGeometryRoot->GetContent(), &displayport);
+      if (!usingDisplayport) {
+        // No async scrolling, so all that matters is that the layer contents
+        // cover the scrollport.
+        displayport = sf->GetScrollPortRect();
+      }
+      nsIFrame* scrollFrame = do_QueryFrame(sf);
+      displayport += scrollFrame->GetOffsetToCrossDoc(mContainerReferenceFrame);
+      if (opaque.Contains(displayport)) {
+        *aOpaqueForAnimatedGeometryRootParent = true;
+      }
     }
   }
   return opaquePixels;
@@ -2970,15 +2997,24 @@ ContainerState::ProcessDisplayItems(nsDisplayList* aList,
         newLayerEntry->mVisibleRegion = itemVisibleRect;
         newLayerEntry->mOpaqueRegion = ComputeOpaqueRect(item,
           animatedGeometryRoot, fixedPosFrame, itemClip, aList,
-          &newLayerEntry->mHideAllLayersBelow);
+          &newLayerEntry->mHideAllLayersBelow,
+          &newLayerEntry->mOpaqueForAnimatedGeometryRootParent);
       } else {
         SetOuterVisibleRegionForLayer(ownLayer, itemVisibleRect,
             layerContentsVisibleRect.width >= 0 ? &layerContentsVisibleRect : nullptr);
       }
-      if (itemType == nsDisplayItem::TYPE_SCROLL_LAYER) {
+      if (itemType == nsDisplayItem::TYPE_SCROLL_LAYER ||
+          itemType == nsDisplayItem::TYPE_SCROLL_INFO_LAYER) {
         nsDisplayScrollLayer* scrollItem = static_cast<nsDisplayScrollLayer*>(item);
         newLayerEntry->mOpaqueForAnimatedGeometryRootParent =
             scrollItem->IsDisplayPortOpaque();
+        newLayerEntry->mBaseFrameMetrics =
+            scrollItem->ComputeFrameMetrics(ownLayer, mParameters);
+      } else if (itemType == nsDisplayItem::TYPE_SUBDOCUMENT ||
+                 itemType == nsDisplayItem::TYPE_ZOOM ||
+                 itemType == nsDisplayItem::TYPE_RESOLUTION) {
+        newLayerEntry->mBaseFrameMetrics =
+          static_cast<nsDisplaySubDocument*>(item)->ComputeFrameMetrics(ownLayer, mParameters);
       }
 
       /**
@@ -3011,7 +3047,8 @@ ContainerState::ProcessDisplayItems(nsDisplayList* aList,
         nsIntRegion opaquePixels = ComputeOpaqueRect(item,
             animatedGeometryRoot, thebesLayerData->mFixedPosFrameForLayerData,
             itemClip, aList,
-            &thebesLayerData->mHideAllLayersBelow);
+            &thebesLayerData->mHideAllLayersBelow,
+            &thebesLayerData->mOpaqueForAnimatedGeometryRootParent);
         thebesLayerData->Accumulate(this, item, opaquePixels,
             itemVisibleRect, itemDrawRect, itemClip);
       }
@@ -3437,7 +3474,63 @@ FindOpaqueRegionEntry(nsTArray<OpaqueRegionEntry>& aEntries,
 }
 
 void
-ContainerState::ApplyOcclusionCulling(nsIntRegion* aOpaqueRegionForContainer)
+ContainerState::SetupScrollingMetadata(NewLayerEntry* aEntry)
+{
+  nsAutoTArray<FrameMetrics,2> metricsArray;
+  if (aEntry->mBaseFrameMetrics) {
+    metricsArray.AppendElement(*aEntry->mBaseFrameMetrics);
+  }
+  uint32_t baseLength = metricsArray.Length();
+
+  nsIntRect tmpClipRect;
+  const nsIntRect* layerClip = aEntry->mLayer->GetClipRect();
+  nsIFrame* fParent;
+  for (const nsIFrame* f = aEntry->mAnimatedGeometryRoot;
+       f != mContainerAnimatedGeometryRoot;
+       f = nsLayoutUtils::GetAnimatedGeometryRootForFrame(
+           fParent, mContainerAnimatedGeometryRoot)) {
+    fParent = nsLayoutUtils::GetCrossDocParentFrame(f);
+    if (!fParent) {
+      // This means mContainerAnimatedGeometryRoot was not an ancestor
+      // of aEntry->mAnimatedGeometryRoot. This is a weird case but it
+      // can happen, e.g. when a scrolled frame contains a frame with opacity
+      // which contains a frame that is not scrolled by the scrolled frame.
+      // For now, we just don't apply any specific async scrolling to this layer.
+      // It will async-scroll with mContainerAnimatedGeometryRoot, which
+      // is substandard but not fatal.
+      metricsArray.SetLength(baseLength);
+      aEntry->mLayer->SetFrameMetrics(metricsArray);
+      return;
+    }
+
+    nsIScrollableFrame* scrollFrame = nsLayoutUtils::GetScrollableFrameFor(f);
+    if (!scrollFrame) {
+      continue;
+    }
+
+    nsRect clipRect(0, 0, -1, -1);
+    scrollFrame->ComputeFrameMetrics(aEntry->mLayer, mContainerReferenceFrame,
+                                     mParameters, &clipRect, &metricsArray);
+    if (clipRect.width >= 0) {
+      nsIntRect pixClip = ScaleToNearestPixels(clipRect);
+      if (layerClip) {
+        tmpClipRect.IntersectRect(pixClip, *layerClip);
+      } else {
+        tmpClipRect = pixClip;
+      }
+      layerClip = &tmpClipRect;
+      // XXX this could cause IPC churn due to cliprects being updated
+      // twice during layer building --- for non-ThebesLayers that have
+      // both CSS and scroll clipping.
+    }
+  }
+  aEntry->mLayer->SetClipRect(layerClip);
+  // Watch out for FrameMetrics copies in profiles
+  aEntry->mLayer->SetFrameMetrics(metricsArray);
+}
+
+void
+ContainerState::PostprocessRetainedLayers(nsIntRegion* aOpaqueRegionForContainer)
 {
   nsAutoTArray<OpaqueRegionEntry,4> opaqueRegions;
   bool hideAll = false;
@@ -3458,6 +3551,10 @@ ContainerState::ApplyOcclusionCulling(nsIntRegion* aOpaqueRegionForContainer)
       e->mVisibleRegion.Sub(e->mVisibleRegion, data->mOpaqueRegion);
     }
 
+    SetOuterVisibleRegionForLayer(e->mLayer, e->mVisibleRegion,
+      e->mLayerContentsVisibleRect.width >= 0 ? &e->mLayerContentsVisibleRect : nullptr);
+    SetupScrollingMetadata(e);
+
     if (!e->mOpaqueRegion.IsEmpty()) {
       const nsIFrame* animatedGeometryRootToCover = e->mAnimatedGeometryRoot;
       if (e->mOpaqueForAnimatedGeometryRootParent &&
@@ -3471,7 +3568,7 @@ ContainerState::ApplyOcclusionCulling(nsIntRegion* aOpaqueRegionForContainer)
 
       if (!data) {
         if (animatedGeometryRootToCover == mContainerAnimatedGeometryRoot &&
-            !e->mFixedPosFrameForLayerData) {
+            e->mFixedPosFrameForLayerData == mContainerFixedPosFrame) {
           NS_ASSERTION(opaqueRegionForContainer == -1, "Already found it?");
           opaqueRegionForContainer = opaqueRegions.Length();
         }
@@ -3484,9 +3581,6 @@ ContainerState::ApplyOcclusionCulling(nsIntRegion* aOpaqueRegionForContainer)
         hideAll = true;
       }
     }
-
-    SetOuterVisibleRegionForLayer(e->mLayer, e->mVisibleRegion,
-	  e->mLayerContentsVisibleRect.width >= 0 ? &e->mLayerContentsVisibleRect : nullptr);
 
     if (e->mLayer->GetType() == Layer::TYPE_READBACK) {
       // ReadbackLayers need to accurately read what's behind them. So,
@@ -3518,7 +3612,7 @@ ContainerState::Finish(uint32_t* aTextContentFlags, LayerManagerData* aData,
 
   if (mLayerBuilder->IsBuildingRetainedLayers()) {
     nsIntRegion containerOpaqueRegion;
-    ApplyOcclusionCulling(&containerOpaqueRegion);
+    PostprocessRetainedLayers(&containerOpaqueRegion);
     if (containerOpaqueRegion.Contains(aContainerPixelBounds)) {
       aChildItems->SetIsOpaque();
     }
@@ -4097,7 +4191,7 @@ static void DebugPaintItem(nsRenderingContext* aDest,
                                           IntSize(bounds.width, bounds.height),
                                           SurfaceFormat::B8G8R8A8);
   nsRefPtr<gfxContext> context = new gfxContext(tempDT);
-  context->SetMatrix(gfxMatrix().Translate(-gfxPoint(bounds.x, bounds.y)));
+  context->SetMatrix(gfxMatrix::Translation(-gfxPoint(bounds.x, bounds.y)));
   nsRefPtr<nsRenderingContext> ctx = new nsRenderingContext();
   ctx->Init(aDest->DeviceContext(), context);
 
@@ -4383,8 +4477,9 @@ FrameLayerBuilder::DrawThebesLayer(ThebesLayer* aLayer,
       // Apply the residual transform if it has been enabled, to ensure that
       // snapping when we draw into aContext exactly matches the ideal transform.
       // See above for why this is OK.
-      aContext->Translate(aLayer->GetResidualTranslation() - gfxPoint(offset.x, offset.y));
-      aContext->Scale(userData->mXScale, userData->mYScale);
+      aContext->SetMatrix(
+        aContext->CurrentMatrix().Translate(aLayer->GetResidualTranslation() - gfxPoint(offset.x, offset.y)).
+                                  Scale(userData->mXScale, userData->mYScale));
 
       layerBuilder->PaintItems(entry->mItems, *iterRect, aContext, rc,
                                builder, presContext,
@@ -4395,8 +4490,9 @@ FrameLayerBuilder::DrawThebesLayer(ThebesLayer* aLayer,
     // Apply the residual transform if it has been enabled, to ensure that
     // snapping when we draw into aContext exactly matches the ideal transform.
     // See above for why this is OK.
-    aContext->Translate(aLayer->GetResidualTranslation() - gfxPoint(offset.x, offset.y));
-    aContext->Scale(userData->mXScale, userData->mYScale);
+    aContext->SetMatrix(
+      aContext->CurrentMatrix().Translate(aLayer->GetResidualTranslation() - gfxPoint(offset.x, offset.y)).
+                                Scale(userData->mXScale,userData->mYScale));
 
     layerBuilder->PaintItems(entry->mItems, aRegionToDraw.GetBounds(), aContext, rc,
                              builder, presContext,
@@ -4404,8 +4500,9 @@ FrameLayerBuilder::DrawThebesLayer(ThebesLayer* aLayer,
                              entry->mCommonClipCount);
   }
 
-  if (presContext->GetPaintFlashing() &&
-      !aLayer->Manager()->IsInactiveLayerManager()) {
+  bool isActiveLayerManager = !aLayer->Manager()->IsInactiveLayerManager();
+
+  if (presContext->GetPaintFlashing() && isActiveLayerManager) {
     gfxContextAutoSaveRestore save(aContext);
     if (shouldDrawRectsSeparately) {
       if (aClip == DrawRegionClip::DRAW_SNAPPED) {
@@ -4415,6 +4512,11 @@ FrameLayerBuilder::DrawThebesLayer(ThebesLayer* aLayer,
       }
     }
     FlashPaint(aContext);
+  }
+
+  if (presContext && presContext->GetDocShell() && isActiveLayerManager) {
+    nsDocShell* docShell = static_cast<nsDocShell*>(presContext->GetDocShell());
+    docShell->AddProfileTimelineMarker("Layer", TRACING_EVENT);
   }
 
   if (!aRegionToInvalidate.IsEmpty()) {
@@ -4524,14 +4626,14 @@ ContainerState::SetupMaskLayer(Layer *aLayer,
   // component of imageTransform), and its inverse used when the mask is used for
   // masking.
   // It is the transform from the masked layer's space to mask space
-  gfx::Matrix maskTransform;
-  maskTransform.Scale(surfaceSize.width/boundingRect.Width(),
-                      surfaceSize.height/boundingRect.Height());
+  gfx::Matrix maskTransform =
+    Matrix::Scaling(surfaceSize.width / boundingRect.Width(),
+                    surfaceSize.height / boundingRect.Height());
   gfx::Point p = boundingRect.TopLeft();
-  maskTransform.Translate(-p.x, -p.y);
+  maskTransform.PreTranslate(-p.x, -p.y);
   // imageTransform is only used when the clip is painted to the mask
   gfx::Matrix imageTransform = maskTransform;
-  imageTransform.Scale(mParameters.mXScale, mParameters.mYScale);
+  imageTransform.PreScale(mParameters.mXScale, mParameters.mYScale);
 
   nsAutoPtr<MaskLayerImageCache::MaskLayerImageKey> newKey(
     new MaskLayerImageCache::MaskLayerImageKey());
