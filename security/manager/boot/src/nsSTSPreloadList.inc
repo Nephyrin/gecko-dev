@@ -8,7 +8,7 @@
 /*****************************************************************************/
 
 #include <stdint.h>
-const PRTime gPreloadListExpirationTime = INT64_C(1420884435199000);
+const PRTime gPreloadListExpirationTime = INT64_C(1422094025761000);
 
 class nsSTSPreload
 {
@@ -18,6 +18,7 @@ class nsSTSPreload
 };
 
 static const nsSTSPreload kSTSPreloadList[] = {
+  { "accounts.firefox.com", true },
   { "accounts.google.com", true },
   { "aclu.org", false },
   { "activiti.alfresco.com", false },
@@ -68,7 +69,7 @@ static const nsSTSPreload kSTSPreloadList[] = {
   { "blacklane.com", true },
   { "blocksatz-medien.de", true },
   { "blog.cyveillance.com", true },
-  { "blog.gparent.org", false },
+  { "blog.gparent.org", true },
   { "blog.linode.com", false },
   { "blog.torproject.org", false },
   { "bohramt.de", true },
@@ -78,11 +79,10 @@ static const nsSTSPreload kSTSPreloadList[] = {
   { "bugzil.la", true },
   { "bugzilla.mozilla.org", true },
   { "business.lookout.com", false },
-  { "bytepark.de", true },
+  { "bytepark.de", false },
   { "ca.gparent.org", false },
   { "carezone.com", false },
   { "cartouche24.eu", true },
-  { "celltek-server.de", true },
   { "certible.com", true },
   { "check.torproject.org", false },
   { "checkout.google.com", true },
@@ -122,7 +122,6 @@ static const nsSTSPreload kSTSPreloadList[] = {
   { "detectify.com", false },
   { "developer.mydigipass.com", false },
   { "die-besten-weisheiten.de", true },
-  { "dillonkorman.com", true },
   { "dist.torproject.org", false },
   { "dl.google.com", true },
   { "dm.lookout.com", false },
@@ -196,7 +195,6 @@ static const nsSTSPreload kSTSPreloadList[] = {
   { "helpium.de", true },
   { "hex2013.com", true },
   { "history.google.com", true },
-  { "hoerbuecher-und-hoerspiele.de", true },
   { "hostedtalkgadget.google.com", true },
   { "hostinginnederland.nl", true },
   { "hostix.de", true },
@@ -217,9 +215,9 @@ static const nsSTSPreload kSTSPreloadList[] = {
   { "jelmer.co.uk", true },
   { "jelmer.uk", true },
   { "jfreitag.de", true },
+  { "jitsi.org", false },
   { "jonas-keidel.de", true },
   { "jonaswitmer.ch", true },
-  { "julian-kipka.de", true },
   { "k-dev.de", true },
   { "kardize24.pl", true },
   { "keeperapp.com", true },
@@ -300,7 +298,6 @@ static const nsSTSPreload kSTSPreloadList[] = {
   { "neg9.org", false },
   { "neilwynne.com", false },
   { "netzbit.de", true },
-  { "netzpolitik.org", true },
   { "ng-security.com", true },
   { "npw.net", true },
   { "onedrive.com", true },
@@ -378,7 +375,6 @@ static const nsSTSPreload kSTSPreloadList[] = {
   { "servethecity-karlsruhe.de", true },
   { "sherbers.de", true },
   { "shodan.io", true },
-  { "siammedia.co", true },
   { "silentcircle.com", true },
   { "simbolo.co.uk", false },
   { "simple.com", false },
@@ -505,6 +501,7 @@ static const nsSTSPreload kSTSPreloadList[] = {
   { "www.mylookout.com", false },
   { "www.noisebridge.net", false },
   { "www.opsmate.com", true },
+  { "www.paypal.com", false },
   { "www.python.org", true },
   { "www.schokokeks.org", false },
   { "www.simbolo.co.uk", false },

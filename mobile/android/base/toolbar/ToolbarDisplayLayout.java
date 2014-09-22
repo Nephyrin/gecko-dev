@@ -18,7 +18,7 @@ import org.mozilla.gecko.SiteIdentity.SecurityMode;
 import org.mozilla.gecko.Tab;
 import org.mozilla.gecko.animation.PropertyAnimator;
 import org.mozilla.gecko.animation.ViewHelper;
-import org.mozilla.gecko.toolbar.BrowserToolbar.ForwardButtonAnimation;
+import org.mozilla.gecko.toolbar.BrowserToolbarTabletBase.ForwardButtonAnimation;
 import org.mozilla.gecko.util.StringUtils;
 import org.mozilla.gecko.widget.ThemedLinearLayout;
 import org.mozilla.gecko.widget.ThemedTextView;
@@ -323,7 +323,7 @@ public class ToolbarDisplayLayout extends ThemedLinearLayout
         }
 
         // If the pref to show the URL isn't set, just use the tab's display title.
-        if (!mPrefs.shouldShowUrl() || url == null) {
+        if (!mPrefs.shouldShowUrl(mActivity) || url == null) {
             setTitle(tab.getDisplayTitle());
             return;
         }

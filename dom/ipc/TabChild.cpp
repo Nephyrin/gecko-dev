@@ -492,7 +492,7 @@ TabChildBase::DispatchMessageManagerMessage(const nsAString& aMessageName,
     StructuredCloneData cloneData;
     JSAutoStructuredCloneBuffer buffer;
     if (JS_ParseJSON(cx,
-                      static_cast<const jschar*>(aJSONData.BeginReading()),
+                      static_cast<const char16_t*>(aJSONData.BeginReading()),
                       aJSONData.Length(),
                       &json)) {
         WriteStructuredClone(cx, json, buffer, cloneData.mClosure);
@@ -747,7 +747,10 @@ TabChild::PreloadSlowThings()
 {
     MOZ_ASSERT(!sPreallocatedTab);
 
-    nsRefPtr<TabChild> tab(new TabChild(ContentChild::GetSingleton(),
+    // Pass nullptr to aManager since at this point the TabChild is
+    // not connected to any manager. Any attempt to use the TabChild
+    // in IPC will crash.
+    nsRefPtr<TabChild> tab(new TabChild(nullptr,
                                         TabContext(), /* chromeFlags */ 0));
     if (!NS_SUCCEEDED(tab->Init()) ||
         !tab->InitTabChildGlobal(DONT_LOAD_SCRIPTS)) {
@@ -777,7 +780,9 @@ TabChild::PreloadSlowThings()
 }
 
 /*static*/ already_AddRefed<TabChild>
-TabChild::Create(nsIContentChild* aManager, const TabContext &aContext, uint32_t aChromeFlags)
+TabChild::Create(nsIContentChild* aManager,
+                 const TabContext &aContext,
+                 uint32_t aChromeFlags)
 {
     if (sPreallocatedTab &&
         sPreallocatedTab->mChromeFlags == aChromeFlags &&
@@ -788,6 +793,7 @@ TabChild::Create(nsIContentChild* aManager, const TabContext &aContext, uint32_t
 
         MOZ_ASSERT(!child->mTriedBrowserInit);
 
+        child->mManager = aManager;
         child->SetTabContext(aContext);
         child->NotifyTabContextUpdated();
         return child.forget();
@@ -799,7 +805,9 @@ TabChild::Create(nsIContentChild* aManager, const TabContext &aContext, uint32_t
 }
 
 
-TabChild::TabChild(nsIContentChild* aManager, const TabContext& aContext, uint32_t aChromeFlags)
+TabChild::TabChild(nsIContentChild* aManager,
+                   const TabContext& aContext,
+                   uint32_t aChromeFlags)
   : TabContext(aContext)
   , mRemoteFrame(nullptr)
   , mManager(aManager)
@@ -1867,6 +1875,9 @@ TabChild::RecvAcknowledgeScrollUpdate(const ViewID& aScrollId,
 bool
 TabChild::RecvHandleDoubleTap(const CSSPoint& aPoint, const ScrollableLayerGuid& aGuid)
 {
+    TABC_LOG("Handling double tap at %s with %p %p\n",
+      Stringify(aPoint).c_str(), mGlobal.get(), mTabChildGlobal.get());
+
     if (!mGlobal || !mTabChildGlobal) {
         return true;
     }
@@ -1887,6 +1898,10 @@ TabChild::RecvHandleDoubleTap(const CSSPoint& aPoint, const ScrollableLayerGuid&
 bool
 TabChild::RecvHandleSingleTap(const CSSPoint& aPoint, const ScrollableLayerGuid& aGuid)
 {
+  TABC_LOG("Handling single tap at %s on %s with %p %p %d\n",
+    Stringify(aPoint).c_str(), Stringify(aGuid).c_str(), mGlobal.get(),
+    mTabChildGlobal.get(), mTouchEndCancelled);
+
   if (!mGlobal || !mTabChildGlobal) {
     return true;
   }
@@ -1916,6 +1931,8 @@ TabChild::FireSingleTapEvent(LayoutDevicePoint aPoint)
   if (mDestroyed) {
     return;
   }
+  TABC_LOG("Dispatching single-tap component events to %s\n",
+    Stringify(aPoint).c_str());
   int time = 0;
   DispatchSynthesizedMouseEvent(NS_MOUSE_MOVE, time, aPoint, mWidget);
   DispatchSynthesizedMouseEvent(NS_MOUSE_BUTTON_DOWN, time, aPoint, mWidget);
@@ -1925,6 +1942,9 @@ TabChild::FireSingleTapEvent(LayoutDevicePoint aPoint)
 bool
 TabChild::RecvHandleLongTap(const CSSPoint& aPoint, const ScrollableLayerGuid& aGuid)
 {
+  TABC_LOG("Handling long tap at %s with %p %p\n",
+    Stringify(aPoint).c_str(), mGlobal.get(), mTabChildGlobal.get());
+
   if (!mGlobal || !mTabChildGlobal) {
     return true;
   }
@@ -1937,6 +1957,8 @@ TabChild::RecvHandleLongTap(const CSSPoint& aPoint, const ScrollableLayerGuid& a
                          2, 1, 0, true,
                          nsIDOMMouseEvent::MOZ_SOURCE_TOUCH);
 
+  TABC_LOG("Contextmenu event handled: %d\n", eventHandled);
+
   // If no one handle context menu, fire MOZLONGTAP event
   if (!eventHandled) {
     LayoutDevicePoint currentPoint =
@@ -1945,6 +1967,7 @@ TabChild::RecvHandleLongTap(const CSSPoint& aPoint, const ScrollableLayerGuid& a
     nsEventStatus status =
       DispatchSynthesizedMouseEvent(NS_MOUSE_MOZLONGTAP, time, currentPoint, mWidget);
     eventHandled = (status == nsEventStatus_eConsumeNoDefault);
+    TABC_LOG("MOZLONGTAP event handled: %d\n", eventHandled);
   }
 
   SendContentReceivedTouch(aGuid, eventHandled);
@@ -2218,6 +2241,8 @@ bool
 TabChild::RecvRealTouchEvent(const WidgetTouchEvent& aEvent,
                              const ScrollableLayerGuid& aGuid)
 {
+  TABC_LOG("Receiving touch event of type %d\n", aEvent.message);
+
   WidgetTouchEvent localEvent(aEvent);
   localEvent.widget = mWidget;
   for (size_t i = 0; i < localEvent.touches.Length(); i++) {

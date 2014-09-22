@@ -8,6 +8,7 @@
 #include "gfxFontConstants.h"
 #include "gfxHarfBuzzShaper.h"
 #include "gfxFontUtils.h"
+#include "gfxTextRun.h"
 #include "nsUnicodeProperties.h"
 #include "nsUnicodeScriptCodes.h"
 #include "nsUnicodeNormalizer.h"
@@ -107,6 +108,10 @@ gfxHarfBuzzShaper::GetGlyph(hb_codepoint_t unicode,
                                                                       compat);
                         }
                         break;
+                    case 10:
+                        gid = gfxFontUtils::MapCharToGlyphFormat10(data + mSubtableOffset,
+                                                                   compat);
+                        break;
                     case 12:
                         gid = gfxFontUtils::MapCharToGlyphFormat12(data + mSubtableOffset,
                                                                    compat);
@@ -124,6 +129,10 @@ gfxHarfBuzzShaper::GetGlyph(hb_codepoint_t unicode,
             gid = unicode < UNICODE_BMP_LIMIT ?
                 gfxFontUtils::MapCharToGlyphFormat4(data + mSubtableOffset,
                                                     unicode) : 0;
+            break;
+        case 10:
+            gid = gfxFontUtils::MapCharToGlyphFormat10(data + mSubtableOffset,
+                                                       unicode);
             break;
         case 12:
             gid = gfxFontUtils::MapCharToGlyphFormat12(data + mSubtableOffset,
@@ -1001,7 +1010,7 @@ gfxHarfBuzzShaper::ShapeText(gfxContext      *aContext,
     hb_buffer_set_direction(buffer, isRightToLeft ? HB_DIRECTION_RTL :
                                                     HB_DIRECTION_LTR);
     hb_script_t scriptTag;
-    if (aShapedText->Flags() & gfxTextRunFactory::TEXT_USE_MATH_SCRIPT) {
+    if (aShapedText->GetFlags() & gfxTextRunFactory::TEXT_USE_MATH_SCRIPT) {
         scriptTag = sMathScript;
     } else {
         scriptTag = GetHBScriptUsedForShaping(aScript);

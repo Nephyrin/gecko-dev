@@ -126,6 +126,11 @@ public:
   TextureClientPool* GetTexturePool(gfx::SurfaceFormat aFormat);
   SimpleTextureClientPool* GetSimpleTileTexturePool(gfx::SurfaceFormat aFormat);
 
+  /// Utility methods for managing texture clients.
+  void ReturnTextureClientDeferred(TextureClient& aClient);
+  void ReturnTextureClient(TextureClient& aClient);
+  void ReportClientLost(TextureClient& aClient);
+
   // Drop cached resources and ask our shadow manager to do the same,
   // if we have one.
   virtual void ClearCachedResources(Layer* aSubtree = nullptr) MOZ_OVERRIDE;
@@ -252,7 +257,7 @@ private:
     NS_DECL_ISUPPORTS
     NS_DECL_NSIOBSERVER
 
-    MemoryPressureObserver(ClientLayerManager* aClientLayerManager)
+    explicit MemoryPressureObserver(ClientLayerManager* aClientLayerManager)
       : mClientLayerManager(aClientLayerManager)
     {
       RegisterMemoryPressureEvent();
@@ -284,9 +289,6 @@ private:
   bool EndTransactionInternal(DrawThebesLayerCallback aCallback,
                               void* aCallbackData,
                               EndTransactionFlags);
-
-  // The bounds of |mTarget| in device pixels.
-  nsIntRect mTargetBounds;
 
   LayerRefArray mKeepAlive;
 

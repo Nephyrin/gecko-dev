@@ -65,6 +65,14 @@ struct GLContextSymbols
     PFNGLBUFFERSUBDATAPROC fBufferSubData;
     typedef void (GLAPIENTRY * PFNGLCLEARPROC) (GLbitfield);
     PFNGLCLEARPROC fClear;
+    typedef void (GLAPIENTRY * PFNGLCLEARBUFFERFIPROC) (GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil);
+    PFNGLCLEARBUFFERFIPROC fClearBufferfi;
+    typedef void (GLAPIENTRY * PFNGLCLEARBUFFERFVPROC) (GLenum buffer, GLint drawbuffer, const GLfloat* value);
+    PFNGLCLEARBUFFERFVPROC fClearBufferfv;
+    typedef void (GLAPIENTRY * PFNGLCLEARBUFFERIVPROC) (GLenum buffer, GLint drawbuffer, const GLint* value);
+    PFNGLCLEARBUFFERIVPROC fClearBufferiv;
+    typedef void (GLAPIENTRY * PFNGLCLEARBUFFERUIVPROC) (GLenum buffer, GLint drawbuffer, const GLuint* value);
+    PFNGLCLEARBUFFERUIVPROC fClearBufferuiv;
     typedef void (GLAPIENTRY * PFNGLCLEARCOLORPROC) (GLclampf, GLclampf, GLclampf, GLclampf);
     PFNGLCLEARCOLORPROC fClearColor;
     typedef void (GLAPIENTRY * PFNGLCLEARSTENCILPROC) (GLint);
@@ -411,6 +419,12 @@ struct GLContextSymbols
     PFNGLMAPBUFFER fMapBuffer;
     typedef realGLboolean (GLAPIENTRY * PFNGLUNMAPBUFFER) (GLenum target);
     PFNGLUNMAPBUFFER fUnmapBuffer;
+
+    // ARB_copy_buffer / OpenGL 3.1 / OpenGL ES 3.0
+    typedef void (GLAPIENTRY * PFNGLCOPYBUFFERSUBDATAPROC) (GLenum readTarget, GLenum writeTarget,
+                                                            GLintptr readOffset, GLintptr writeOffset,
+                                                            GLsizeiptr size);
+    PFNGLCOPYBUFFERSUBDATAPROC fCopyBufferSubData;
 
     typedef GLenum (GLAPIENTRY * PFNGLGETGRAPHICSRESETSTATUS) (void);
     PFNGLGETGRAPHICSRESETSTATUS fGetGraphicsResetStatus;

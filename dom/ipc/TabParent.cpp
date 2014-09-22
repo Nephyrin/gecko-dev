@@ -1258,13 +1258,16 @@ TabParent::RecvNotifyIMETextChange(const uint32_t& aStart,
 }
 
 bool
-TabParent::RecvNotifyIMESelectedCompositionRect(const uint32_t& aOffset,
-                                                const nsIntRect& aRect,
-                                                const nsIntRect& aCaretRect)
+TabParent::RecvNotifyIMESelectedCompositionRect(
+  const uint32_t& aOffset,
+  const InfallibleTArray<nsIntRect>& aRects,
+  const uint32_t& aCaretOffset,
+  const nsIntRect& aCaretRect)
 {
   // add rect to cache for another query
   mIMECompositionRectOffset = aOffset;
-  mIMECompositionRect = aRect;
+  mIMECompositionRects = aRects;
+  mIMECaretOffset = aCaretOffset;
   mIMECaretRect = aCaretRect;
 
   nsCOMPtr<nsIWidget> widget = GetWidget();
@@ -1307,6 +1310,22 @@ TabParent::RecvNotifyIMETextHint(const nsString& aText)
 {
   // Replace our cache with new text
   mIMECacheText = aText;
+  return true;
+}
+
+bool
+TabParent::RecvNotifyIMEMouseButtonEvent(
+             const IMENotification& aIMENotification,
+             bool* aConsumedByIME)
+{
+
+  nsCOMPtr<nsIWidget> widget = GetWidget();
+  if (!widget) {
+    *aConsumedByIME = false;
+    return true;
+  }
+  nsresult rv = widget->NotifyIME(aIMENotification);
+  *aConsumedByIME = rv == NS_SUCCESS_EVENT_CONSUMED;
   return true;
 }
 
@@ -1453,23 +1472,33 @@ TabParent::HandleQueryContentEvent(WidgetQueryContentEvent& aEvent)
     break;
   case NS_QUERY_TEXT_RECT:
     {
-      if (aEvent.mInput.mOffset != mIMECompositionRectOffset ||
-          aEvent.mInput.mLength != 1) {
+      if (aEvent.mInput.mOffset < mIMECompositionRectOffset ||
+          (aEvent.mInput.mOffset + aEvent.mInput.mLength >
+            mIMECompositionRectOffset + mIMECompositionRects.Length())) {
+        // XXX
+        // we doesn't have cache for this request.
         break;
       }
 
-      aEvent.mReply.mOffset = mIMECompositionRectOffset;
-      aEvent.mReply.mRect = mIMECompositionRect - GetChildProcessOffset();
+      uint32_t baseOffset = aEvent.mInput.mOffset - mIMECompositionRectOffset;
+      uint32_t endOffset = baseOffset + aEvent.mInput.mLength;
+      aEvent.mReply.mRect.SetEmpty();
+      for (uint32_t i = baseOffset; i < endOffset; i++) {
+        aEvent.mReply.mRect =
+          aEvent.mReply.mRect.Union(mIMECompositionRects[i]);
+      }
+      aEvent.mReply.mOffset = aEvent.mInput.mOffset;
+      aEvent.mReply.mRect = aEvent.mReply.mRect - GetChildProcessOffset();
       aEvent.mSucceeded = true;
     }
     break;
   case NS_QUERY_CARET_RECT:
     {
-      if (aEvent.mInput.mOffset != mIMECompositionRectOffset) {
+      if (aEvent.mInput.mOffset != mIMECaretOffset) {
         break;
       }
 
-      aEvent.mReply.mOffset = mIMECompositionRectOffset;
+      aEvent.mReply.mOffset = mIMECaretOffset;
       aEvent.mReply.mRect = mIMECaretRect - GetChildProcessOffset();
       aEvent.mSucceeded = true;
     }

@@ -108,7 +108,6 @@
 #include "nsIDOMNode.h"
 #include "nsIDOMNodeList.h"
 #include "nsIDOMScriptObjectFactory.h"
-#include "nsIDOMUserDataHandler.h"
 #include "nsIDOMXULCommandEvent.h"
 #include "nsIDragService.h"
 #include "nsIEditor.h"
@@ -2592,6 +2591,7 @@ nsIPrincipal*
 nsContentUtils::SubjectPrincipal()
 {
   MOZ_ASSERT(IsInitialized());
+  MOZ_ASSERT(NS_IsMainThread());
   JSContext* cx = GetCurrentJSContext();
   if (!cx) {
     return GetSystemPrincipal();
@@ -6408,7 +6408,7 @@ nsContentUtils::IsPatternMatching(nsAString& aValue, nsAString& aPattern,
 
   JS::Rooted<JSObject*> re(cx,
     JS_NewUCRegExpObjectNoStatics(cx,
-                                  static_cast<jschar*>(aPattern.BeginWriting()),
+                                  static_cast<char16_t*>(aPattern.BeginWriting()),
                                   aPattern.Length(), 0));
   if (!re) {
     JS_ClearPendingException(cx);
@@ -6418,7 +6418,7 @@ nsContentUtils::IsPatternMatching(nsAString& aValue, nsAString& aPattern,
   JS::Rooted<JS::Value> rval(cx, JS::NullValue());
   size_t idx = 0;
   if (!JS_ExecuteRegExpNoStatics(cx, re,
-                                 static_cast<jschar*>(aValue.BeginWriting()),
+                                 static_cast<char16_t*>(aValue.BeginWriting()),
                                  aValue.Length(), &idx, true, &rval)) {
     JS_ClearPendingException(cx);
     return true;

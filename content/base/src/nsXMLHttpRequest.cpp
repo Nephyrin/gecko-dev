@@ -352,7 +352,7 @@ nsXMLHttpRequest::Init()
   // Instead of grabbing some random global from the context stack,
   // let's use the default one (junk scope) for now.
   // We should move away from this Init...
-  Construct(subjectPrincipal, xpc::GetNativeForGlobal(xpc::PrivilegedJunkScope()));
+  Construct(subjectPrincipal, xpc::NativeGlobal(xpc::PrivilegedJunkScope()));
   return NS_OK;
 }
 
@@ -766,7 +766,7 @@ nsXMLHttpRequest::CreateResponseParsedJSON(JSContext* aCx)
   // The Unicode converter has already zapped the BOM if there was one
   JS::Rooted<JS::Value> value(aCx);
   if (!JS_ParseJSON(aCx,
-                    static_cast<const jschar*>(mResponseText.get()), mResponseText.Length(),
+                    static_cast<const char16_t*>(mResponseText.get()), mResponseText.Length(),
                     &value)) {
     return NS_ERROR_FAILURE;
   }

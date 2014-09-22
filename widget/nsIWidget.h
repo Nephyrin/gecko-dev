@@ -499,7 +499,8 @@ struct SizeConstraints {
 // IMEMessage is shared by IMEStateManager and TextComposition.
 // Update values in GeckoEditable.java if you make changes here.
 // XXX Negative values are used in Android...
-enum IMEMessage MOZ_ENUM_TYPE(int8_t)
+typedef int8_t IMEMessageType;
+enum IMEMessage MOZ_ENUM_TYPE(IMEMessageType)
 {
   // XXX We should replace NOTIFY_IME_OF_CURSOR_POS_CHANGED with
   //     NOTIFY_IME_OF_SELECTION_CHANGE later.
@@ -528,6 +529,10 @@ enum IMEMessage MOZ_ENUM_TYPE(int8_t)
 
 struct IMENotification
 {
+  IMENotification()
+    : mMessage(static_cast<IMEMessage>(-1))
+  {}
+
   MOZ_IMPLICIT IMENotification(IMEMessage aMessage)
     : mMessage(aMessage)
   {
@@ -649,9 +654,6 @@ struct IMENotification
         return false;
     }
   }
-
-private:
-  IMENotification();
 };
 
 } // namespace widget
@@ -1515,6 +1517,11 @@ class nsIWidget : public nsISupports {
      * @param aOpaqueRegion the region of the window that is opaque.
      */
     virtual void UpdateOpaqueRegion(const nsIntRegion &aOpaqueRegion) {}
+
+    /**
+     * Informs the widget about the region of the window that is draggable.
+     */
+    virtual void UpdateWindowDraggingRegion(const nsIntRegion& aRegion) {}
 
     /** 
      * Internal methods

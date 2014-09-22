@@ -32,6 +32,7 @@
 #include "vm/NumericConversions.h"
 #include "vm/Shape.h"
 #include "vm/StringBuffer.h"
+#include "vm/TypedArrayCommon.h"
 
 #include "jsatominlines.h"
 
@@ -346,7 +347,7 @@ DeleteArrayElement(JSContext *cx, HandleObject obj, double index, bool *succeede
                     obj->markDenseElementsNotPacked(cx);
                     obj->setDenseElement(idx, MagicValue(JS_ELEMENTS_HOLE));
                 }
-                if (!js_SuppressDeletedElement(cx, obj, idx))
+                if (!SuppressDeletedElement(cx, obj, idx))
                     return false;
             }
         }
@@ -848,7 +849,7 @@ js::ObjectMayHaveExtraIndexedProperties(JSObject *obj)
             return true;
         if (obj->getDenseInitializedLength() > 0)
             return true;
-        if (obj->is<TypedArrayObject>())
+        if (IsAnyTypedArray(obj))
             return true;
     }
 
@@ -1062,8 +1063,6 @@ js::ArrayJoin(JSContext *cx, HandleObject obj, HandleLinearString sepstr, uint32
 
     // Steps 1 to 6, should be done by the caller.
 
-    JS::Anchor<JSString*> anchor(sepstr);
-
     // Step 6 is implicit in the loops below.
 
     // An optimized version of a special case of steps 7-11: when length==1 and
@@ -1094,13 +1093,13 @@ js::ArrayJoin(JSContext *cx, HandleObject obj, HandleLinearString sepstr, uint32
         if (!ArrayJoinKernel<Locale>(cx, op, obj, length, sb))
             return nullptr;
     } else if (seplen == 1) {
-        jschar c = sepstr->latin1OrTwoByteChar(0);
+        char16_t c = sepstr->latin1OrTwoByteChar(0);
         if (c <= JSString::MAX_LATIN1_CHAR) {
             CharSeparatorOp<Latin1Char> op(c);
             if (!ArrayJoinKernel<Locale>(cx, op, obj, length, sb))
                 return nullptr;
         } else {
-            CharSeparatorOp<jschar> op(c);
+            CharSeparatorOp<char16_t> op(c);
             if (!ArrayJoinKernel<Locale>(cx, op, obj, length, sb))
                 return nullptr;
         }
@@ -1379,12 +1378,14 @@ array_reverse(JSContext *cx, unsigned argc, Value *vp)
             orighi = obj->getDenseElement(hi);
             obj->setDenseElement(lo, orighi);
             if (orighi.isMagic(JS_ELEMENTS_HOLE) &&
-                !js_SuppressDeletedProperty(cx, obj, INT_TO_JSID(lo))) {
+                !SuppressDeletedProperty(cx, obj, INT_TO_JSID(lo)))
+            {
                 return false;
             }
             obj->setDenseElement(hi, origlo);
             if (origlo.isMagic(JS_ELEMENTS_HOLE) &&
-                !js_SuppressDeletedProperty(cx, obj, INT_TO_JSID(hi))) {
+                !SuppressDeletedProperty(cx, obj, INT_TO_JSID(hi)))
+            {
                 return false;
             }
         }
@@ -2073,7 +2074,7 @@ js::array_push(JSContext *cx, unsigned argc, Value *vp)
 
     /* Fast path for native objects with dense elements. */
     do {
-        if (!obj->isNative() || obj->is<TypedArrayObject>())
+        if (!obj->isNative() || IsAnyTypedArray(obj.get()))
             break;
 
         if (obj->is<ArrayObject>() && !obj->as<ArrayObject>().lengthIsWritable())
@@ -2213,7 +2214,7 @@ js::array_shift(JSContext *cx, unsigned argc, Value *vp)
         if (!SetLengthProperty(cx, obj, newlen))
             return false;
 
-        return js_SuppressDeletedProperty(cx, obj, INT_TO_JSID(newlen));
+        return SuppressDeletedProperty(cx, obj, INT_TO_JSID(newlen));
     }
 
     /* Steps 5, 10. */
@@ -3022,6 +3023,12 @@ static const JSFunctionSpec array_methods[] = {
     JS_SELF_HOSTED_FN("@@iterator",  "ArrayValues",      0,0),
     JS_SELF_HOSTED_FN("entries",     "ArrayEntries",     0,0),
     JS_SELF_HOSTED_FN("keys",        "ArrayKeys",        0,0),
+
+    /* ES7 additions */
+#ifdef NIGHTLY_BUILD
+    JS_SELF_HOSTED_FN("contains",    "ArrayContains",    2,0),
+#endif
+
     JS_FS_END
 };
 
@@ -3294,7 +3301,7 @@ js::NewDenseUnallocatedArray(ExclusiveContext *cx, uint32_t length, JSObject *pr
     return NewArray<0>(cx, length, proto, newKind);
 }
 
-ArrayObject * JS_FASTCALL
+ArrayObject *
 js::NewDenseArray(ExclusiveContext *cx, uint32_t length, HandleTypeObject type,
                   AllocatingBehaviour allocating)
 {

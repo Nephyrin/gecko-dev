@@ -80,7 +80,7 @@ class GetCameraNameRunnable;
  * MainThread:
  *   mCaptureIndex, mLastCapture, mState,  mWidth, mHeight,
  *
- * Where mWidth, mHeight, mImage are protected by mMonitor
+ * Where mWidth, mHeight, mImage, mPhotoCallbacks are protected by mMonitor
  *       mState is protected by mCallbackMonitor
  * Other variable is accessed only from single thread
  */
@@ -101,6 +101,7 @@ public:
     , mCallbackMonitor("WebRTCCamera.CallbackMonitor")
     , mRotation(0)
     , mBackCamera(false)
+    , mOrientationChanged(true) // Correct the orientation at first time takePhoto.
     , mCaptureIndex(aIndex)
     , mMediaSource(aMediaSource)
     , mMonitor("WebRTCCamera.Monitor")
@@ -175,6 +176,11 @@ public:
 
 #ifndef MOZ_B2G_CAMERA
   NS_DECL_THREADSAFE_ISUPPORTS
+
+  nsresult TakePhoto(PhotoCallback* aCallback)
+  {
+    return NS_ERROR_NOT_IMPLEMENTED;
+  }
 #else
   // We are subclassed from CameraControlListener, which implements a
   // threadsafe reference-count for us.
@@ -192,7 +198,15 @@ public:
   void StopImpl();
   void SnapshotImpl();
   void RotateImage(layers::Image* aImage, uint32_t aWidth, uint32_t aHeight);
+  uint32_t ConvertPixelFormatToFOURCC(int aFormat);
   void Notify(const mozilla::hal::ScreenConfiguration& aConfiguration);
+
+  nsresult TakePhoto(PhotoCallback* aCallback) MOZ_OVERRIDE;
+
+  // It sets the correct photo orientation via camera parameter according to
+  // current screen orientation.
+  nsresult UpdatePhotoOrientation();
+
 #endif
 
   // This runnable is for creating a temporary file on the main thread.
@@ -230,11 +244,13 @@ private:
   // This is only modified on MainThread (AllocImpl and DeallocImpl)
   nsRefPtr<ICameraControl> mCameraControl;
   nsCOMPtr<nsIDOMFile> mLastCapture;
+  nsTArray<nsRefPtr<PhotoCallback>> mPhotoCallbacks;
 
   // These are protected by mMonitor below
   int mRotation;
   int mCameraAngle; // See dom/base/ScreenOrientation.h
   bool mBackCamera;
+  bool mOrientationChanged; // True when screen rotates.
 #else
   webrtc::VideoEngine* mVideoEngine; // Weak reference, don't free.
   webrtc::ViEBase* mViEBase;
@@ -328,6 +344,11 @@ public:
 
   virtual const MediaSourceType GetMediaSource() {
     return MediaSourceType::Microphone;
+  }
+
+  virtual nsresult TakePhoto(PhotoCallback* aCallback)
+  {
+    return NS_ERROR_NOT_IMPLEMENTED;
   }
 
   // VoEMediaProcess.

@@ -74,8 +74,8 @@ function TypedObjectGet(descr, typedObj, offset) {
   case JS_TYPEREPR_REFERENCE_KIND:
     return TypedObjectGetReference(descr, typedObj, offset);
 
-  case JS_TYPEREPR_X4_KIND:
-    return TypedObjectGetX4(descr, typedObj, offset);
+  case JS_TYPEREPR_SIMD_KIND:
+    return TypedObjectGetSimd(descr, typedObj, offset);
 
   case JS_TYPEREPR_SIZED_ARRAY_KIND:
   case JS_TYPEREPR_STRUCT_KIND:
@@ -161,17 +161,17 @@ function TypedObjectGetReference(descr, typedObj, offset) {
   return undefined;
 }
 
-function TypedObjectGetX4(descr, typedObj, offset) {
+function TypedObjectGetSimd(descr, typedObj, offset) {
   var type = DESCR_TYPE(descr);
   switch (type) {
-  case JS_X4TYPEREPR_FLOAT32:
+  case JS_SIMDTYPEREPR_FLOAT32:
     var x = Load_float32(typedObj, offset + 0);
     var y = Load_float32(typedObj, offset + 4);
     var z = Load_float32(typedObj, offset + 8);
     var w = Load_float32(typedObj, offset + 12);
     return GetFloat32x4TypeDescr()(x, y, z, w);
 
-  case JS_X4TYPEREPR_INT32:
+  case JS_SIMDTYPEREPR_INT32:
     var x = Load_int32(typedObj, offset + 0);
     var y = Load_int32(typedObj, offset + 4);
     var z = Load_int32(typedObj, offset + 8);
@@ -179,7 +179,7 @@ function TypedObjectGetX4(descr, typedObj, offset) {
     return GetInt32x4TypeDescr()(x, y, z, w);
   }
 
-  assert(false, "Unhandled x4 type: " + type);
+  assert(false, "Unhandled SIMD type: " + type);
   return undefined;
 }
 
@@ -195,20 +195,6 @@ function TypedObjectSet(descr, typedObj, offset, fromValue) {
   if (!TypedObjectIsAttached(typedObj))
     ThrowError(JSMSG_TYPEDOBJECT_HANDLE_UNATTACHED);
 
-  // Fast path: `fromValue` is a typed object with same type
-  // representation as the destination. In that case, we can just do a
-  // memcpy.
-  if (IsObject(fromValue) && ObjectIsTypedObject(fromValue)) {
-    if (!descr.variable && DescrsEquiv(descr, TypedObjectTypeDescr(fromValue))) {
-      if (!TypedObjectIsAttached(fromValue))
-        ThrowError(JSMSG_TYPEDOBJECT_HANDLE_UNATTACHED);
-
-      var size = DESCR_SIZE(descr);
-      Memcpy(typedObj, offset, fromValue, 0, size);
-      return;
-    }
-  }
-
   switch (DESCR_KIND(descr)) {
   case JS_TYPEREPR_SCALAR_KIND:
     TypedObjectSetScalar(descr, typedObj, offset, fromValue);
@@ -218,8 +204,8 @@ function TypedObjectSet(descr, typedObj, offset, fromValue) {
     TypedObjectSetReference(descr, typedObj, offset, fromValue);
     return;
 
-  case JS_TYPEREPR_X4_KIND:
-    TypedObjectSetX4(descr, typedObj, offset, fromValue);
+  case JS_TYPEREPR_SIMD_KIND:
+    TypedObjectSetSimd(descr, typedObj, offset, fromValue);
     return;
 
   case JS_TYPEREPR_SIZED_ARRAY_KIND:
@@ -342,14 +328,34 @@ function TypedObjectSetReference(descr, typedObj, offset, fromValue) {
 }
 
 // Sets `fromValue` to `this` assuming that `this` is a scalar type.
-function TypedObjectSetX4(descr, typedObj, offset, fromValue) {
-  // It is only permitted to set a float32x4/int32x4 value from another
-  // float32x4/int32x4; in that case, the "fast path" that uses memcopy will
-  // have already matched. So if we get to this point, we're supposed
-  // to "adapt" fromValue, but there are no legal adaptions.
-  ThrowError(JSMSG_CANT_CONVERT_TO,
-             typeof(fromValue),
-             DESCR_STRING_REPR(descr));
+function TypedObjectSetSimd(descr, typedObj, offset, fromValue) {
+  if (!IsObject(fromValue) || !ObjectIsTypedObject(fromValue))
+    ThrowError(JSMSG_CANT_CONVERT_TO,
+               typeof(fromValue),
+               DESCR_STRING_REPR(descr));
+
+  if (!DescrsEquiv(descr, TypedObjectTypeDescr(fromValue)))
+    ThrowError(JSMSG_CANT_CONVERT_TO,
+               typeof(fromValue),
+               DESCR_STRING_REPR(descr));
+
+  var type = DESCR_TYPE(descr);
+  switch (type) {
+    case JS_SIMDTYPEREPR_FLOAT32:
+      Store_float32(typedObj, offset + 0, Load_float32(fromValue, 0));
+      Store_float32(typedObj, offset + 4, Load_float32(fromValue, 4));
+      Store_float32(typedObj, offset + 8, Load_float32(fromValue, 8));
+      Store_float32(typedObj, offset + 12, Load_float32(fromValue, 12));
+      break;
+    case JS_SIMDTYPEREPR_INT32:
+      Store_int32(typedObj, offset + 0, Load_int32(fromValue, 0));
+      Store_int32(typedObj, offset + 4, Load_int32(fromValue, 4));
+      Store_int32(typedObj, offset + 8, Load_int32(fromValue, 8));
+      Store_int32(typedObj, offset + 12, Load_int32(fromValue, 12));
+      break;
+    default:
+      assert(false, "Unhandled Simd type: " + type);
+  }
 }
 
 ///////////////////////////////////////////////////////////////////////////
@@ -476,13 +482,13 @@ function TypedArrayRedimension(newArrayType) {
 }
 
 ///////////////////////////////////////////////////////////////////////////
-// X4
+// SIMD
 
-function X4ProtoString(type) {
+function SimdProtoString(type) {
   switch (type) {
-  case JS_X4TYPEREPR_INT32:
+  case JS_SIMDTYPEREPR_INT32:
     return "int32x4";
-  case JS_X4TYPEREPR_FLOAT32:
+  case JS_SIMDTYPEREPR_FLOAT32:
     return "float32x4";
   }
 
@@ -490,17 +496,17 @@ function X4ProtoString(type) {
   return undefined;
 }
 
-function X4ToSource() {
+function SimdToSource() {
   if (!IsObject(this) || !ObjectIsTypedObject(this))
-    ThrowError(JSMSG_INCOMPATIBLE_PROTO, "X4", "toSource", typeof this);
+    ThrowError(JSMSG_INCOMPATIBLE_PROTO, "SIMD", "toSource", typeof this);
 
   var descr = TypedObjectTypeDescr(this);
 
-  if (DESCR_KIND(descr) != JS_TYPEREPR_X4_KIND)
-    ThrowError(JSMSG_INCOMPATIBLE_PROTO, "X4", "toSource", typeof this);
+  if (DESCR_KIND(descr) != JS_TYPEREPR_SIMD_KIND)
+    ThrowError(JSMSG_INCOMPATIBLE_PROTO, "SIMD", "toSource", typeof this);
 
   var type = DESCR_TYPE(descr);
-  return X4ProtoString(type)+"("+this.x+", "+this.y+", "+this.z+", "+this.w+")";
+  return SimdProtoString(type)+"("+this.x+", "+this.y+", "+this.z+", "+this.w+")";
 }
 
 ///////////////////////////////////////////////////////////////////////////

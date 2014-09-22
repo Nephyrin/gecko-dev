@@ -49,9 +49,10 @@
 #include "mozilla/dom/FileSystemRequestParent.h"
 #include "mozilla/dom/GeolocationBinding.h"
 #include "mozilla/dom/FileDescriptorSetParent.h"
+#include "mozilla/dom/mobileconnection/MobileConnectionParent.h"
+#include "mozilla/dom/mobilemessage/SmsParent.h"
 #include "mozilla/dom/telephony/TelephonyParent.h"
 #include "mozilla/dom/time/DateCacheCleaner.h"
-#include "SmsParent.h"
 #include "mozilla/hal_sandbox/PHalParent.h"
 #include "mozilla/ipc/BackgroundChild.h"
 #include "mozilla/ipc/BackgroundParent.h"
@@ -147,6 +148,7 @@
 
 #ifdef MOZ_WIDGET_GONK
 #include "nsIVolume.h"
+#include "nsVolumeService.h"
 #include "nsIVolumeService.h"
 #include "SpeakerManagerService.h"
 using namespace mozilla::system;
@@ -177,10 +179,6 @@ using namespace mozilla::system;
 #include "nsIIPCBackgroundChildCreateCallback.h"
 #endif
 
-#ifdef MOZ_B2G_RIL
-#include "mozilla/dom/mobileconnection/MobileConnectionParent.h"
-using namespace mozilla::dom::mobileconnection;
-#endif
 
 #if defined(MOZ_CONTENT_SANDBOX) && defined(XP_LINUX)
 #include "mozilla/Sandbox.h"
@@ -195,6 +193,7 @@ using namespace mozilla::dom::bluetooth;
 using namespace mozilla::dom::devicestorage;
 using namespace mozilla::dom::indexedDB;
 using namespace mozilla::dom::power;
+using namespace mozilla::dom::mobileconnection;
 using namespace mozilla::dom::mobilemessage;
 using namespace mozilla::dom::telephony;
 using namespace mozilla::hal;
@@ -341,30 +340,6 @@ namespace dom {
 
 #ifdef MOZ_NUWA_PROCESS
 bool ContentParent::sNuwaReady = false;
-
-// Contains data that is observed by Nuwa and is going to be sent to
-// the new process when it is forked.
-struct ContentParent::NuwaReinitializeData {
-    NuwaReinitializeData()
-        : mReceivedFilePathUpdate(false)
-        , mReceivedFileSystemUpdate(false) { }
-
-    bool mReceivedFilePathUpdate;
-    nsString mFilePathUpdateStoageType;
-    nsString mFilePathUpdateStorageName;
-    nsString mFilePathUpdatePath;
-    nsCString mFilePathUpdateReason;
-
-    bool mReceivedFileSystemUpdate;
-    nsString mFileSystemUpdateFsName;
-    nsString mFileSystemUpdateMountPount;
-    int32_t mFileSystemUpdateState;
-    int32_t mFileSystemUpdateMountGeneration;
-    bool mFileSystemUpdateIsMediaPresent;
-    bool mFileSystemUpdateIsSharing;
-    bool mFileSystemUpdateIsFormatting;
-    bool mFileSystemUpdateIsFake;
-};
 #endif
 
 #define NS_IPC_IOSERVICE_SET_OFFLINE_TOPIC "ipc:network:set-offline"
@@ -651,7 +626,8 @@ ContentParent::GetNewOrPreallocatedAppProcess(mozIApplication* aApp,
                 NS_ERROR("Failed to get manifest URL");
                 return nullptr;
             }
-            process->TransformPreallocatedIntoApp(manifestURL);
+            process->TransformPreallocatedIntoApp(aOpener,
+                                                  manifestURL);
             if (aTookPreAllocated) {
                 *aTookPreAllocated = true;
             }
@@ -799,15 +775,9 @@ ContentParent::GetNewOrUsedBrowserProcess(bool aForBrowserElement,
     // Try to take and transform the preallocated process into browser.
     nsRefPtr<ContentParent> p = PreallocatedProcessManager::Take();
     if (p) {
-        p->TransformPreallocatedIntoBrowser();
+        p->TransformPreallocatedIntoBrowser(aOpener);
     } else {
       // Failed in using the preallocated process: fork from the chrome process.
-#ifdef MOZ_NUWA_PROCESS
-        if (Preferences::GetBool("dom.ipc.processPrelaunch.enabled", false)) {
-            // Wait until the Nuwa process forks a new process.
-            return nullptr;
-        }
-#endif
         p = new ContentParent(/* app = */ nullptr,
                               aOpener,
                               aForBrowserElement,
@@ -898,7 +868,10 @@ ContentParent::RecvCreateChildProcess(const IPCTabContext& aContext,
     }
 
     if (!cp) {
-        return false;
+        *aId = 0;
+        *aIsForApp = false;
+        *aIsForBrowser = false;
+        return true;
     }
 
     *aId = cp->ChildID();
@@ -948,13 +921,15 @@ ContentParent::CreateBrowserOrApp(const TabContext& aContext,
         nsRefPtr<nsIContentParent> constructorSender;
         if (isInContentProcess) {
             MOZ_ASSERT(aContext.IsBrowserElement());
-            constructorSender = CreateContentBridgeParent(aContext, initialPriority);
+            constructorSender =
+                CreateContentBridgeParent(aContext, initialPriority);
         } else {
           if (aOpenerContentParent) {
             constructorSender = aOpenerContentParent;
           } else {
-            constructorSender = GetNewOrUsedBrowserProcess(aContext.IsBrowserElement(),
-                                                                    initialPriority);
+            constructorSender =
+                GetNewOrUsedBrowserProcess(aContext.IsBrowserElement(),
+                                           initialPriority);
           }
         }
         if (constructorSender) {
@@ -1147,6 +1122,9 @@ ContentParent::CreateContentBridgeParent(const TabContext& aContext,
                                        &id,
                                        &isForApp,
                                        &isForBrowser)) {
+        return nullptr;
+    }
+    if (id == 0) {
         return nullptr;
     }
     if (!child->CallBridgeToChildProcess(id)) {
@@ -1381,17 +1359,20 @@ TryGetNameFromManifestURL(const nsAString& aManifestURL,
 }
 
 void
-ContentParent::TransformPreallocatedIntoApp(const nsAString& aAppManifestURL)
+ContentParent::TransformPreallocatedIntoApp(ContentParent* aOpener,
+                                            const nsAString& aAppManifestURL)
 {
     MOZ_ASSERT(IsPreallocated());
+    mOpener = aOpener;
     mAppManifestURL = aAppManifestURL;
     TryGetNameFromManifestURL(aAppManifestURL, mAppName);
 }
 
 void
-ContentParent::TransformPreallocatedIntoBrowser()
+ContentParent::TransformPreallocatedIntoBrowser(ContentParent* aOpener)
 {
     // Reset mAppManifestURL, mIsForBrowser and mOSPrivileges for browser.
+    mOpener = aOpener;
     mAppManifestURL.Truncate();
     mIsForBrowser = true;
 }
@@ -2437,17 +2418,14 @@ ContentParent::RecvDataStoreGetStores(
 }
 
 bool
-ContentParent::RecvBroadcastVolume(const nsString& aVolumeName)
+ContentParent::RecvGetVolumes(InfallibleTArray<VolumeInfo>* aResult)
 {
 #ifdef MOZ_WIDGET_GONK
-    nsresult rv;
-    nsCOMPtr<nsIVolumeService> vs = do_GetService(NS_VOLUMESERVICE_CONTRACTID, &rv);
-    if (vs) {
-        vs->BroadcastVolume(aVolumeName);
-    }
+    nsRefPtr<nsVolumeService> vs = nsVolumeService::GetSingleton();
+    vs->GetVolumesForIPC(aResult);
     return true;
 #else
-    NS_WARNING("ContentParent::RecvBroadcastVolume shouldn't be called when MOZ_WIDGET_GONK is not defined");
+    NS_WARNING("ContentParent::RecvGetVolumes shouldn't be called when MOZ_WIDGET_GONK is not defined");
     return false;
 #endif
 }
@@ -2506,26 +2484,6 @@ ContentParent::RecvAddNewProcess(const uint32_t& aPid,
     bool isOffline;
     RecvGetXPCOMProcessAttributes(&isOffline);
     content->SendSetOffline(isOffline);
-
-    // Send observed updates to new content.
-    if (mReinitializeData) {
-        if (mReinitializeData->mReceivedFilePathUpdate) {
-            unused << content->SendFilePathUpdate(mReinitializeData->mFilePathUpdateStoageType,
-                                                  mReinitializeData->mFilePathUpdateStorageName,
-                                                  mReinitializeData->mFilePathUpdatePath,
-                                                  mReinitializeData->mFilePathUpdateReason);
-        }
-        if (mReinitializeData->mReceivedFilePathUpdate) {
-            unused << content->SendFileSystemUpdate(mReinitializeData->mFileSystemUpdateFsName,
-                                                    mReinitializeData->mFileSystemUpdateMountPount,
-                                                    mReinitializeData->mFileSystemUpdateState,
-                                                    mReinitializeData->mFileSystemUpdateMountGeneration,
-                                                    mReinitializeData->mFileSystemUpdateIsMediaPresent,
-                                                    mReinitializeData->mFileSystemUpdateIsSharing,
-                                                    mReinitializeData->mFileSystemUpdateIsFormatting,
-                                                    mReinitializeData->mFileSystemUpdateIsFake);
-        }
-    }
 
     PreallocatedProcessManager::PublishSpareProcess(content);
     return true;
@@ -2633,18 +2591,20 @@ ContentParent::Observe(nsISupports* aSubject,
             // The pre-%n part of the string should be all ASCII, so the byte
             // offset in identOffset should be correct as a char offset.
             MOZ_ASSERT(cmsg[identOffset - 1] == '=');
-            FileDescriptor dmdFileDesc;
+            MaybeFileDesc dmdFileDesc = void_t();
 #ifdef MOZ_DMD
-            FILE *dmdFile;
             nsAutoString dmdIdent(Substring(msg, identOffset));
-            nsresult rv = nsMemoryInfoDumper::OpenDMDFile(dmdIdent, Pid(), &dmdFile);
-            if (NS_WARN_IF(NS_FAILED(rv))) {
-                // Proceed with the memory report as if DMD were disabled.
-                dmdFile = nullptr;
-            }
-            if (dmdFile) {
-                dmdFileDesc = FILEToFileDescriptor(dmdFile);
-                fclose(dmdFile);
+            if (!dmdIdent.IsEmpty()) {
+                FILE *dmdFile = nullptr;
+                nsresult rv = nsMemoryInfoDumper::OpenDMDFile(dmdIdent, Pid(), &dmdFile);
+                if (NS_WARN_IF(NS_FAILED(rv))) {
+                    // Proceed with the memory report as if DMD were disabled.
+                    dmdFile = nullptr;
+                }
+                if (dmdFile) {
+                    dmdFileDesc = FILEToFileDescriptor(dmdFile);
+                    fclose(dmdFile);
+                }
             }
 #endif
             unused << SendPMemoryReportRequestConstructor(
@@ -2669,23 +2629,11 @@ ContentParent::Observe(nsISupports* aSubject,
         DeviceStorageFile* file = static_cast<DeviceStorageFile*>(aSubject);
 
 #ifdef MOZ_NUWA_PROCESS
-        if (!(IsNuwaReady() && IsNuwaProcess())) {
+        if (!(IsNuwaReady() && IsNuwaProcess()))
 #endif
-
+        {
             unused << SendFilePathUpdate(file->mStorageType, file->mStorageName, file->mPath, creason);
-
-#ifdef MOZ_NUWA_PROCESS
-        } else {
-            if (!mReinitializeData) {
-                mReinitializeData = new NuwaReinitializeData();
-            }
-            mReinitializeData->mReceivedFilePathUpdate = true;
-            mReinitializeData->mFilePathUpdateStoageType = file->mStorageType;
-            mReinitializeData->mFilePathUpdateStorageName = file->mStorageName;
-            mReinitializeData->mFilePathUpdatePath = file->mPath;
-            mReinitializeData->mFilePathUpdateReason = creason;
         }
-#endif
     }
 #ifdef MOZ_WIDGET_GONK
     else if(!strcmp(aTopic, NS_VOLUME_STATE_CHANGED)) {
@@ -2702,6 +2650,7 @@ ContentParent::Observe(nsISupports* aSubject,
         bool     isSharing;
         bool     isFormatting;
         bool     isFake;
+        bool     isUnmounting;
 
         vol->GetName(volName);
         vol->GetMountPoint(mountPoint);
@@ -2711,31 +2660,17 @@ ContentParent::Observe(nsISupports* aSubject,
         vol->GetIsSharing(&isSharing);
         vol->GetIsFormatting(&isFormatting);
         vol->GetIsFake(&isFake);
+        vol->GetIsUnmounting(&isUnmounting);
 
 #ifdef MOZ_NUWA_PROCESS
-        if (!(IsNuwaReady() && IsNuwaProcess())) {
+        if (!(IsNuwaReady() && IsNuwaProcess()))
 #endif
-
+        {
             unused << SendFileSystemUpdate(volName, mountPoint, state,
                                            mountGeneration, isMediaPresent,
-                                           isSharing, isFormatting, isFake);
-
-#ifdef MOZ_NUWA_PROCESS
-        } else {
-            if (!mReinitializeData) {
-                mReinitializeData = new NuwaReinitializeData();
-            }
-            mReinitializeData->mReceivedFileSystemUpdate = true;
-            mReinitializeData->mFileSystemUpdateFsName = volName;
-            mReinitializeData->mFileSystemUpdateMountPount = mountPoint;
-            mReinitializeData->mFileSystemUpdateState = state;
-            mReinitializeData->mFileSystemUpdateMountPount = mountGeneration;
-            mReinitializeData->mFileSystemUpdateIsMediaPresent = isMediaPresent;
-            mReinitializeData->mFileSystemUpdateIsSharing = isSharing;
-            mReinitializeData->mFileSystemUpdateIsFormatting = isFormatting;
-            mReinitializeData->mFileSystemUpdateIsFake = isFake;
+                                           isSharing, isFormatting, isFake,
+                                           isUnmounting);
         }
-#endif
     } else if (!strcmp(aTopic, "phone-state-changed")) {
         nsString state(aData);
         unused << SendNotifyPhoneStateChange(state);
@@ -3047,7 +2982,7 @@ PMemoryReportRequestParent*
 ContentParent::AllocPMemoryReportRequestParent(const uint32_t& aGeneration,
                                                const bool &aAnonymize,
                                                const bool &aMinimizeMemoryUsage,
-                                               const FileDescriptor &aDMDFile)
+                                               const MaybeFileDesc &aDMDFile)
 {
     MemoryReportRequestParent* parent = new MemoryReportRequestParent();
     return parent;

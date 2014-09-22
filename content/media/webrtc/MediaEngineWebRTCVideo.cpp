@@ -799,6 +799,8 @@ MediaEngineWebRTCVideoSource::Notify(const hal::ScreenConfiguration& aConfigurat
          mRotation, mCaptureIndex, mBackCamera, mCameraAngle));
   }
 #endif
+
+  mOrientationChanged = true;
 }
 
 void
@@ -877,18 +879,111 @@ MediaEngineWebRTCVideoSource::GetRotation()
 void
 MediaEngineWebRTCVideoSource::OnUserError(UserContext aContext, nsresult aError)
 {
-  ReentrantMonitorAutoEnter sync(mCallbackMonitor);
-  mCallbackMonitor.Notify();
+  {
+    // Scope the monitor, since there is another monitor below and we don't want
+    // unexpected deadlock.
+    ReentrantMonitorAutoEnter sync(mCallbackMonitor);
+    mCallbackMonitor.Notify();
+  }
+
+  // A main thread runnable to send error code to all queued PhotoCallbacks.
+  class TakePhotoError : public nsRunnable {
+  public:
+    TakePhotoError(nsTArray<nsRefPtr<PhotoCallback>>& aCallbacks,
+                   nsresult aRv)
+      : mRv(aRv)
+    {
+      mCallbacks.SwapElements(aCallbacks);
+    }
+
+    NS_IMETHOD Run()
+    {
+      uint32_t callbackNumbers = mCallbacks.Length();
+      for (uint8_t i = 0; i < callbackNumbers; i++) {
+        mCallbacks[i]->PhotoError(mRv);
+      }
+      // PhotoCallback needs to dereference on main thread.
+      mCallbacks.Clear();
+      return NS_OK;
+    }
+
+  protected:
+    nsTArray<nsRefPtr<PhotoCallback>> mCallbacks;
+    nsresult mRv;
+  };
+
+  if (aContext == UserContext::kInTakePicture) {
+    MonitorAutoLock lock(mMonitor);
+    if (mPhotoCallbacks.Length()) {
+      NS_DispatchToMainThread(new TakePhotoError(mPhotoCallbacks, aError));
+    }
+  }
 }
 
 void
 MediaEngineWebRTCVideoSource::OnTakePictureComplete(uint8_t* aData, uint32_t aLength, const nsAString& aMimeType)
 {
-  ReentrantMonitorAutoEnter sync(mCallbackMonitor);
-  mLastCapture = dom::DOMFile::CreateMemoryFile(static_cast<void*>(aData),
-                                                static_cast<uint64_t>(aLength),
-                                                aMimeType);
-  mCallbackMonitor.Notify();
+  // It needs to start preview because Gonk camera will stop preview while
+  // taking picture.
+  mCameraControl->StartPreview();
+
+  // Create a main thread runnable to generate a blob and call all current queued
+  // PhotoCallbacks.
+  class GenerateBlobRunnable : public nsRunnable {
+  public:
+    GenerateBlobRunnable(nsTArray<nsRefPtr<PhotoCallback>>& aCallbacks,
+                         uint8_t* aData,
+                         uint32_t aLength,
+                         const nsAString& aMimeType)
+    {
+      mCallbacks.SwapElements(aCallbacks);
+      mPhoto.AppendElements(aData, aLength);
+      mMimeType = aMimeType;
+    }
+
+    NS_IMETHOD Run()
+    {
+      nsRefPtr<dom::DOMFile> blob =
+        dom::DOMFile::CreateMemoryFile(mPhoto.Elements(), mPhoto.Length(), mMimeType);
+      uint32_t callbackCounts = mCallbacks.Length();
+      for (uint8_t i = 0; i < callbackCounts; i++) {
+        nsRefPtr<dom::DOMFile> tempBlob = blob;
+        mCallbacks[i]->PhotoComplete(tempBlob.forget());
+      }
+      // PhotoCallback needs to dereference on main thread.
+      mCallbacks.Clear();
+      return NS_OK;
+    }
+
+    nsTArray<nsRefPtr<PhotoCallback>> mCallbacks;
+    nsTArray<uint8_t> mPhoto;
+    nsString mMimeType;
+  };
+
+  // All elements in mPhotoCallbacks will be swapped in GenerateBlobRunnable
+  // constructor. This captured image will be sent to all the queued
+  // PhotoCallbacks in this runnable.
+  MonitorAutoLock lock(mMonitor);
+  if (mPhotoCallbacks.Length()) {
+    NS_DispatchToMainThread(
+      new GenerateBlobRunnable(mPhotoCallbacks, aData, aLength, aMimeType));
+  }
+}
+
+uint32_t
+MediaEngineWebRTCVideoSource::ConvertPixelFormatToFOURCC(int aFormat)
+{
+  switch (aFormat) {
+  case HAL_PIXEL_FORMAT_YCrCb_420_SP:
+    return libyuv::FOURCC_NV21;
+  case HAL_PIXEL_FORMAT_YV12:
+    return libyuv::FOURCC_YV12;
+  default: {
+    LOG((" xxxxx Unknown pixel format %d", aFormat));
+    MOZ_ASSERT(false, "Unknown pixel format.");
+    return libyuv::FOURCC_ANY;
+    }
+  }
 }
 
 void
@@ -926,7 +1021,7 @@ MediaEngineWebRTCVideoSource::RotateImage(layers::Image* aImage, uint32_t aWidth
                         aWidth, aHeight,
                         aWidth, aHeight,
                         static_cast<libyuv::RotationMode>(mRotation),
-                        libyuv::FOURCC_NV21);
+                        ConvertPixelFormatToFOURCC(graphicBuffer->getPixelFormat()));
   graphicBuffer->unlock();
 
   const uint8_t lumaBpp = 8;
@@ -976,6 +1071,69 @@ MediaEngineWebRTCVideoSource::OnNewPreviewFrame(layers::Image* aImage, uint32_t 
 
   return true; // return true because we're accepting the frame
 }
+
+nsresult
+MediaEngineWebRTCVideoSource::TakePhoto(PhotoCallback* aCallback)
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  MonitorAutoLock lock(mMonitor);
+
+  // If other callback exists, that means there is a captured picture on the way,
+  // it doesn't need to TakePicture() again.
+  if (!mPhotoCallbacks.Length()) {
+    nsresult rv;
+    if (mOrientationChanged) {
+      UpdatePhotoOrientation();
+    }
+    rv = mCameraControl->TakePicture();
+    if (NS_FAILED(rv)) {
+      return rv;
+    }
+  }
+
+  mPhotoCallbacks.AppendElement(aCallback);
+
+  return NS_OK;
+}
+
+nsresult
+MediaEngineWebRTCVideoSource::UpdatePhotoOrientation()
+{
+  MOZ_ASSERT(NS_IsMainThread());
+
+  hal::ScreenConfiguration config;
+  hal::GetCurrentScreenConfiguration(&config);
+
+  // The rotation angle is clockwise.
+  int orientation = 0;
+  switch (config.orientation()) {
+    case eScreenOrientation_PortraitPrimary:
+      orientation = 0;
+      break;
+    case eScreenOrientation_PortraitSecondary:
+      orientation = 180;
+      break;
+   case eScreenOrientation_LandscapePrimary:
+      orientation = 270;
+      break;
+   case eScreenOrientation_LandscapeSecondary:
+      orientation = 90;
+      break;
+  }
+
+  // Front camera is inverse angle comparing to back camera.
+  orientation = (mBackCamera ? orientation : (-orientation));
+
+  ICameraControlParameterSetAutoEnter batch(mCameraControl);
+  // It changes the orientation value in EXIF information only.
+  mCameraControl->Set(CAMERA_PARAM_PICTURE_ROTATION, orientation);
+
+  mOrientationChanged = false;
+
+  return NS_OK;
+}
+
 #endif
 
 }

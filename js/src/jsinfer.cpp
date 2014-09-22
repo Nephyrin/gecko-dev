@@ -614,6 +614,8 @@ TypeSet::print()
         fprintf(stderr, " float");
     if (flags & TYPE_FLAG_STRING)
         fprintf(stderr, " string");
+    if (flags & TYPE_FLAG_SYMBOL)
+        fprintf(stderr, " symbol");
     if (flags & TYPE_FLAG_LAZYARGS)
         fprintf(stderr, " lazyargs");
 
@@ -698,8 +700,20 @@ TypeSet::cloneObjectsOnly(LifoAlloc *alloc)
     if (!res)
         return nullptr;
 
-    res->flags &= TYPE_FLAG_ANYOBJECT;
+    res->flags &= ~TYPE_FLAG_BASE_MASK | TYPE_FLAG_ANYOBJECT;
 
+    return res;
+}
+
+TemporaryTypeSet *
+TypeSet::cloneWithoutObjects(LifoAlloc *alloc)
+{
+    TemporaryTypeSet *res = alloc->new_<TemporaryTypeSet>();
+    if (!res)
+        return nullptr;
+
+    res->flags = flags & ~TYPE_FLAG_ANYOBJECT;
+    res->setBaseObjectCount(0);
     return res;
 }
 
@@ -719,6 +733,53 @@ TypeSet::unionSets(TypeSet *a, TypeSet *b, LifoAlloc *alloc)
         for (size_t i = 0; i < b->getObjectCount() && !res->unknownObject(); i++) {
             if (TypeObjectKey *key = b->getObject(i))
                 res->addType(Type::ObjectType(key), alloc);
+        }
+    }
+
+    return res;
+}
+
+/* static */ TemporaryTypeSet *
+TypeSet::intersectSets(TemporaryTypeSet *a, TemporaryTypeSet *b, LifoAlloc *alloc)
+{
+    TemporaryTypeSet *res;
+    res = alloc->new_<TemporaryTypeSet>(a->baseFlags() & b->baseFlags(),
+                static_cast<TypeObjectKey**>(nullptr));
+    if (!res)
+        return nullptr;
+
+    res->setBaseObjectCount(0);
+    if (res->unknownObject())
+        return res;
+
+    MOZ_ASSERT(!a->unknownObject() || !b->unknownObject());
+
+    if (a->unknownObject()) {
+        for (size_t i = 0; i < b->getObjectCount(); i++) {
+            if (b->getObject(i))
+                res->addType(Type::ObjectType(b->getObject(i)), alloc);
+        }
+        return res;
+    }
+
+    if (b->unknownObject()) {
+        for (size_t i = 0; i < a->getObjectCount(); i++) {
+            if (b->getObject(i))
+                res->addType(Type::ObjectType(a->getObject(i)), alloc);
+        }
+        return res;
+    }
+
+    MOZ_ASSERT(!a->unknownObject() && !b->unknownObject());
+
+    for (size_t i = 0; i < a->getObjectCount(); i++) {
+        for (size_t j = 0; j < b->getObjectCount(); j++) {
+            if (b->getObject(j) != a->getObject(i))
+                continue;
+            if (!b->getObject(j))
+                continue;
+            res->addType(Type::ObjectType(b->getObject(j)), alloc);
+            break;
         }
     }
 
@@ -1191,7 +1252,7 @@ types::FinishCompilation(JSContext *cx, HandleScript script, ExecutionMode execu
 
     if (!succeeded || types.compilerOutputs->back().pendingInvalidation()) {
         types.compilerOutputs->back().invalidate();
-        script->resetUseCount();
+        script->resetWarmUpCounter();
         return false;
     }
 
@@ -1439,7 +1500,7 @@ HeapTypeSetKey::needsBarrier(CompilerConstraintList *constraints)
         return false;
     bool result = types->unknownObject()
                || types->getObjectCount() > 0
-               || types->hasAnyFlag(TYPE_FLAG_STRING);
+               || types->hasAnyFlag(TYPE_FLAG_STRING | TYPE_FLAG_SYMBOL);
     if (!result)
         freeze(constraints);
     return result;
@@ -1976,6 +2037,16 @@ TemporaryTypeSet::getTypedArrayType()
     return Scalar::TypeMax;
 }
 
+Scalar::Type
+TemporaryTypeSet::getSharedTypedArrayType()
+{
+    const Class *clasp = getKnownClass();
+
+    if (clasp && IsSharedTypedArrayClass(clasp))
+        return (Scalar::Type) (clasp - &SharedTypedArrayObject::classes[0]);
+    return Scalar::TypeMax;
+}
+
 bool
 TemporaryTypeSet::isDOMClass()
 {
@@ -2004,7 +2075,7 @@ TemporaryTypeSet::maybeCallable()
     unsigned count = getObjectCount();
     for (unsigned i = 0; i < count; i++) {
         const Class *clasp = getObjectClass(i);
-        if (clasp && clasp->isCallable())
+        if (clasp && (clasp->isProxy() || clasp->nonProxyCallable()))
             return true;
     }
 
@@ -2216,8 +2287,12 @@ types::UseNewTypeForInitializer(JSScript *script, jsbytecode *pc, JSProtoKey key
     if (script->functionNonDelazifying() && !script->treatAsRunOnce())
         return GenericObject;
 
-    if (key != JSProto_Object && !(key >= JSProto_Int8Array && key <= JSProto_Uint8ClampedArray))
+    if (key != JSProto_Object &&
+        !(key >= JSProto_Int8Array && key <= JSProto_Uint8ClampedArray) &&
+        !(key >= JSProto_SharedInt8Array && key <= JSProto_SharedUint8ClampedArray))
+    {
         return GenericObject;
+    }
 
     /*
      * All loops in the script will have a JSTRY_ITER or JSTRY_LOOP try note
@@ -2258,7 +2333,7 @@ ClassCanHaveExtraProperties(const Class *clasp)
     return clasp->resolve != JS_ResolveStub
         || clasp->ops.lookupGeneric
         || clasp->ops.getGeneric
-        || IsTypedArrayClass(clasp);
+        || IsAnyTypedArrayClass(clasp);
 }
 
 static inline bool
@@ -2298,7 +2373,7 @@ types::TypeCanHaveExtraIndexedProperties(CompilerConstraintList *constraints,
     // Note: typed arrays have indexed properties not accounted for by type
     // information, though these are all in bounds and will be accounted for
     // by JIT paths.
-    if (!clasp || (ClassCanHaveExtraProperties(clasp) && !IsTypedArrayClass(clasp)))
+    if (!clasp || (ClassCanHaveExtraProperties(clasp) && !IsAnyTypedArrayClass(clasp)))
         return true;
 
     if (types->hasObjectFlags(constraints, types::OBJECT_FLAG_SPARSE_INDEXES))
@@ -2359,7 +2434,7 @@ TypeZone::addPendingRecompile(JSContext *cx, JSScript *script)
 
     // Let the script warm up again before attempting another compile.
     if (jit::IsBaselineEnabled(cx))
-        script->resetUseCount();
+        script->resetWarmUpCounter();
 
     if (script->hasIonScript())
         addPendingRecompile(cx, script->ionScript()->recompileInfo());
@@ -2718,11 +2793,11 @@ TypeCompartment::fixObjectType(ExclusiveContext *cx, JSObject *obj)
     if (obj->isIndexed())
         objType->setFlags(cx, OBJECT_FLAG_SPARSE_INDEXES);
 
-    ScopedJSFreePtr<jsid> ids(objType->pod_calloc<jsid>(properties.length()));
+    ScopedJSFreePtr<jsid> ids(objType->zone()->pod_calloc<jsid>(properties.length()));
     if (!ids)
         return;
 
-    ScopedJSFreePtr<Type> types(objType->pod_calloc<Type>(properties.length()));
+    ScopedJSFreePtr<Type> types(objType->zone()->pod_calloc<Type>(properties.length()));
     if (!types)
         return;
 
@@ -3008,7 +3083,8 @@ InlineAddTypeProperty(ExclusiveContext *cx, TypeObject *obj, jsid id, Type type)
     if (obj->newScript() && obj->newScript()->initializedType()) {
         if (type.isObjectUnchecked() && types->unknownObject())
             type = Type::AnyObjectType();
-        obj->newScript()->initializedType()->addPropertyType(cx, id, type);
+        if (!obj->newScript()->initializedType()->unknownProperties())
+            obj->newScript()->initializedType()->addPropertyType(cx, id, type);
     }
 }
 
@@ -3587,7 +3663,7 @@ JSScript::makeTypes(JSContext *cx)
     unsigned count = TypeScript::NumTypeSets(this);
 
     TypeScript *typeScript = (TypeScript *)
-        pod_calloc<uint8_t>(TypeScript::SizeIncludingTypeArray(count));
+        zone()->pod_calloc<uint8_t>(TypeScript::SizeIncludingTypeArray(count));
     if (!typeScript)
         return false;
 
@@ -3659,7 +3735,7 @@ TypeNewScript::make(JSContext *cx, TypeObject *type, JSFunction *fun)
 
     newScript->fun = fun;
 
-    JSObject **preliminaryObjects = type->pod_calloc<JSObject *>(PRELIMINARY_OBJECT_COUNT);
+    JSObject **preliminaryObjects = type->zone()->pod_calloc<JSObject *>(PRELIMINARY_OBJECT_COUNT);
     if (!preliminaryObjects)
         return;
 
@@ -3923,7 +3999,7 @@ TypeNewScript::maybeAnalyze(JSContext *cx, TypeObject *type, bool *regenerate, b
         if (!initializerVector.append(done))
             return false;
 
-        initializerList = type->pod_calloc<Initializer>(initializerVector.length());
+        initializerList = type->zone()->pod_calloc<Initializer>(initializerVector.length());
         if (!initializerList)
             return false;
         PodCopy(initializerList, initializerVector.begin(), initializerVector.length());

@@ -874,6 +874,18 @@ LIRGenerator::visitTest(MTest *test)
         }
     }
 
+    if (opd->isIsNoIter()) {
+        MOZ_ASSERT(opd->isEmittedAtUses());
+
+        MDefinition *input = opd->toIsNoIter()->input();
+        MOZ_ASSERT(input->type() == MIRType_Value);
+
+        LIsNoIterAndBranch *lir = new(alloc()) LIsNoIterAndBranch(ifTrue, ifFalse);
+        if (!useBox(lir, LIsNoIterAndBranch::Input, input))
+            return false;
+        return add(lir, test);
+    }
+
     if (opd->type() == MIRType_Double)
         return add(new(alloc()) LTestDAndBranch(useRegister(opd), ifTrue, ifFalse));
 
@@ -1276,6 +1288,12 @@ LIRGenerator::visitMinMax(MMinMax *ins)
         return defineReuseInput(lir, ins, 0);
     }
 
+    if (ins->specialization() == MIRType_Float32) {
+        LMinMaxF *lir = new(alloc()) LMinMaxF(useRegisterAtStart(first), useRegister(second));
+        return defineReuseInput(lir, ins, 0);
+    }
+
+    MOZ_ASSERT(ins->specialization() == MIRType_Double);
     LMinMaxD *lir = new(alloc()) LMinMaxD(useRegisterAtStart(first), useRegister(second));
     return defineReuseInput(lir, ins, 0);
 }
@@ -3332,17 +3350,17 @@ LIRGenerator::visitIteratorStart(MIteratorStart *ins)
 }
 
 bool
-LIRGenerator::visitIteratorNext(MIteratorNext *ins)
+LIRGenerator::visitIteratorMore(MIteratorMore *ins)
 {
-    LIteratorNext *lir = new(alloc()) LIteratorNext(useRegister(ins->iterator()), temp());
+    LIteratorMore *lir = new(alloc()) LIteratorMore(useRegister(ins->iterator()), temp());
     return defineBox(lir, ins) && assignSafepoint(lir, ins);
 }
 
 bool
-LIRGenerator::visitIteratorMore(MIteratorMore *ins)
+LIRGenerator::visitIsNoIter(MIsNoIter *ins)
 {
-    LIteratorMore *lir = new(alloc()) LIteratorMore(useRegister(ins->iterator()), temp());
-    return define(lir, ins) && assignSafepoint(lir, ins);
+    MOZ_ASSERT(ins->hasOneUse());
+    return emitAtUses(ins);
 }
 
 bool
@@ -3687,17 +3705,6 @@ LIRGenerator::visitRecompileCheck(MRecompileCheck *ins)
 }
 
 bool
-LIRGenerator::visitSimdValueX4(MSimdValueX4 *ins)
-{
-    LAllocation x = useRegisterAtStart(ins->getOperand(0));
-    LAllocation y = useRegisterAtStart(ins->getOperand(1));
-    LAllocation z = useRegisterAtStart(ins->getOperand(2));
-    LAllocation w = useRegisterAtStart(ins->getOperand(3));
-
-    return define(new(alloc()) LSimdValueX4(x, y, z, w), ins);
-}
-
-bool
 LIRGenerator::visitSimdConstant(MSimdConstant *ins)
 {
     JS_ASSERT(IsSimdType(ins->type()));
@@ -3720,15 +3727,30 @@ LIRGenerator::visitSimdExtractElement(MSimdExtractElement *ins)
         // Note: there could be int16x8 in the future, which doesn't use the
         // same instruction. We either need to pass the arity or create new LIns.
         LUse use = useRegisterAtStart(ins->input());
-        return define(new(alloc()) LSimdExtractElementI(use, ins->lane()), ins);
+        return define(new(alloc()) LSimdExtractElementI(use), ins);
     }
 
     if (ins->input()->type() == MIRType_Float32x4) {
         LUse use = useRegisterAtStart(ins->input());
-        return define(new(alloc()) LSimdExtractElementF(use, ins->lane()), ins);
+        return define(new(alloc()) LSimdExtractElementF(use), ins);
     }
 
     MOZ_CRASH("Unknown SIMD kind when extracting element");
+}
+
+bool
+LIRGenerator::visitSimdInsertElement(MSimdInsertElement *ins)
+{
+    JS_ASSERT(IsSimdType(ins->type()));
+
+    LUse vec = useRegisterAtStart(ins->vector());
+    LUse val = useRegister(ins->value());
+    if (ins->type() == MIRType_Int32x4)
+        return defineReuseInput(new(alloc()) LSimdInsertElementI(vec, val), ins, 0);
+    if (ins->type() == MIRType_Float32x4)
+        return defineReuseInput(new(alloc()) LSimdInsertElementF(vec, val), ins, 0);
+
+    MOZ_CRASH("Unknown SIMD kind when generating constant");
 }
 
 bool
@@ -3799,6 +3821,23 @@ LIRGenerator::visitSimdBinaryBitwise(MSimdBinaryBitwise *ins)
 
     MOZ_CRASH("Unknown SIMD kind when doing bitwise operations");
     return false;
+}
+
+bool
+LIRGenerator::visitLexicalCheck(MLexicalCheck *ins)
+{
+    MDefinition *input = ins->input();
+    MOZ_ASSERT(input->type() == MIRType_Value);
+    LLexicalCheck *lir = new(alloc()) LLexicalCheck();
+    return redefine(ins, input) && useBox(lir, LLexicalCheck::Input, input) &&
+           add(lir, ins) && assignSafepoint(lir, ins);
+}
+
+bool
+LIRGenerator::visitThrowUninitializedLexical(MThrowUninitializedLexical *ins)
+{
+    LThrowUninitializedLexical *lir = new(alloc()) LThrowUninitializedLexical();
+    return add(lir, ins) && assignSafepoint(lir, ins);
 }
 
 static void
@@ -3883,7 +3922,7 @@ void
 LIRGenerator::updateResumeState(MInstruction *ins)
 {
     lastResumePoint_ = ins->resumePoint();
-    if (JitSpewEnabled(JitSpew_Snapshots) && lastResumePoint_)
+    if (JitSpewEnabled(JitSpew_IonSnapshots) && lastResumePoint_)
         SpewResumePoint(nullptr, ins, lastResumePoint_);
 }
 
@@ -3891,7 +3930,7 @@ void
 LIRGenerator::updateResumeState(MBasicBlock *block)
 {
     lastResumePoint_ = block->entryResumePoint();
-    if (JitSpewEnabled(JitSpew_Snapshots) && lastResumePoint_)
+    if (JitSpewEnabled(JitSpew_IonSnapshots) && lastResumePoint_)
         SpewResumePoint(block, nullptr, lastResumePoint_);
 }
 
@@ -3940,6 +3979,17 @@ LIRGenerator::visitBlock(MBasicBlock *block)
     // Now emit the last instruction, which is some form of branch.
     if (!visitInstruction(block->lastIns()))
         return false;
+
+    if (lastResumePoint_) {
+        for (size_t s = 0; s < block->numSuccessors(); s++) {
+            MBasicBlock *succ = block->getSuccessor(s);
+            if (!succ->entryResumePoint()) {
+                MOZ_ASSERT(succ->isSplitEdge());
+                MOZ_ASSERT(succ->phisBegin() == succ->phisEnd());
+                succ->setEntryResumePoint(lastResumePoint_);
+            }
+        }
+    }
 
     return true;
 }
@@ -3998,4 +4048,10 @@ LIRGenerator::visitArrayState(MArrayState *objState)
 {
     // ArrayState nodes are always recovered on bailouts
     MOZ_CRASH("Unexpected ArrayState node during Lowering.");
+}
+
+bool
+LIRGenerator::visitUnknownValue(MUnknownValue *ins)
+{
+    MOZ_CRASH("Can not lower unknown value.");
 }

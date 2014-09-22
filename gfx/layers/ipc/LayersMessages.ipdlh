@@ -49,7 +49,6 @@ namespace layers {
 struct TargetConfig {
   nsIntRect naturalBounds;
   ScreenRotation rotation;
-  nsIntRect clientBounds;
   ScreenOrientation orientation;
   nsIntRegion clearRegion;
 };
@@ -191,6 +190,7 @@ struct Animation {
 
 // Change a layer's attributes
 struct CommonLayerAttributes {
+  nsIntRect layerBounds;
   nsIntRegion visibleRegion;
   EventRegions eventRegions;
   TransformMatrix transform;

@@ -24,6 +24,8 @@
 #include "ActiveLayerTracker.h"
 #include "gfx2DGlue.h"
 #include "mozilla/LookAndFeel.h"
+#include "nsDocShell.h"
+#include "nsImageFrame.h"
 
 #include "GeckoProfiler.h"
 #include "mozilla/gfx/Tools.h"
@@ -499,6 +501,10 @@ public:
    * in mItemClip).
    */
   void UpdateCommonClipCount(const DisplayItemClip& aCurrentClip);
+  /**
+   * The union of all the bounds of the display items in this layer.
+   */
+  nsIntRegion mBounds;
 
 private:
   /**
@@ -1724,8 +1730,7 @@ ContainerState::CreateOrRecycleThebesLayer(const nsIFrame* aAnimatedGeometryRoot
                        RoundToMatchResidual(scaledOffset.y, data->mAnimatedGeometryRootPosition.y));
   data->mTranslation = pixOffset;
   pixOffset += mParameters.mOffset;
-  Matrix matrix;
-  matrix.Translate(pixOffset.x, pixOffset.y);
+  Matrix matrix = Matrix::Translation(pixOffset.x, pixOffset.y);
   layer->SetBaseTransform(Matrix4x4::From2D(matrix));
 
   // FIXME: Temporary workaround for bug 681192 and bug 724786.
@@ -2165,6 +2170,10 @@ ContainerState::PopThebesLayerData()
     SetOuterVisibleRegionForLayer(layer, data->mVisibleRegion);
   }
 
+  nsIntRect layerBounds = data->mBounds.GetBounds();
+  layerBounds.MoveBy(-GetTranslationForThebesLayer(data->mLayer));
+  layer->SetLayerBounds(layerBounds);
+
 #ifdef MOZ_DUMP_PAINTING
   layer->AddExtraDumpInfo(nsCString(data->mLog));
 #endif
@@ -2325,6 +2334,10 @@ ThebesLayerData::Accumulate(ContainerState* aState,
 {
   FLB_LOG_THEBES_DECISION(this, "Accumulating dp=%s(%p), f=%p against tld=%p\n", aItem->Name(), aItem, aItem->Frame(), this);
 
+  bool snap;
+  nsRect itemBounds = aItem->GetBounds(aState->mBuilder, &snap);
+  mBounds.OrWith(aState->ScaleToOutsidePixels(itemBounds, snap));
+
   if (aState->mBuilder->NeedToForceTransparentSurfaceForItem(aItem)) {
     mForceTransparentSurface = true;
   }
@@ -2335,22 +2348,11 @@ ThebesLayerData::Accumulate(ContainerState* aState,
     aItem->DisableComponentAlpha();
   }
 
-  /* Mark as available for conversion to image layer if this is a nsDisplayImage and
-   * we are the first visible item in the ThebesLayerData object.
-   */
-  if (mVisibleRegion.IsEmpty() &&
-      aItem->SupportsOptimizingToImage()) {
-    mImage = static_cast<nsDisplayImageContainer*>(aItem);
-    FLB_LOG_THEBES_DECISION(this, "  Tracking image\n");
-  } else if (mImage) {
-    FLB_LOG_THEBES_DECISION(this, "  No longer tracking image\n");
-    mImage = nullptr;
-  }
   bool clipMatches = mItemClip == aClip;
   mItemClip = aClip;
 
   if (!mIsSolidColorInVisibleRegion && mOpaqueRegion.Contains(aDrawRect) &&
-      mVisibleRegion.Contains(aVisibleRect)) {
+      mVisibleRegion.Contains(aVisibleRect) && !mImage) {
     // A very common case! Most pages have a ThebesLayer with the page
     // background (opaque) visible and most or all of the page content over the
     // top of that background.
@@ -2361,6 +2363,19 @@ ThebesLayerData::Accumulate(ContainerState* aState,
     // and therefore aDrawRect.
     NS_ASSERTION(mDrawRegion.Contains(aDrawRect), "Draw region not covered");
     return;
+  }
+
+  /* Mark as available for conversion to image layer if this is a nsDisplayImage and
+   * it's the only thing visible in this layer.
+   */
+  if (nsIntRegion(aVisibleRect).Contains(mVisibleRegion) &&
+      aClippedOpaqueRegion.Contains(mVisibleRegion) &&
+      aItem->SupportsOptimizingToImage()) {
+    mImage = static_cast<nsDisplayImageContainer*>(aItem);
+    FLB_LOG_THEBES_DECISION(this, "  Tracking image: nsDisplayImageContainer covers the layer\n");
+  } else if (mImage) {
+    FLB_LOG_THEBES_DECISION(this, "  No longer tracking image\n");
+    mImage = nullptr;
   }
 
   nscolor uniformColor;
@@ -2566,8 +2581,8 @@ PaintInactiveLayer(nsDisplayListBuilder* aBuilder,
                                       itemVisibleRect.Size().ToIntSize(),
                                       SurfaceFormat::B8G8R8A8);
     context = new gfxContext(tempDT);
-    context->SetMatrix(gfxMatrix().Translate(-gfxPoint(itemVisibleRect.x,
-                                                       itemVisibleRect.y)));
+    context->SetMatrix(gfxMatrix::Translation(-itemVisibleRect.x,
+                                              -itemVisibleRect.y));
   }
 #endif
   basic->BeginTransaction();
@@ -2653,24 +2668,6 @@ IsScrollLayerItemAndOverlayScrollbarForScrollFrame(
   return false;
 }
 
-bool
-ContainerState::ItemCoversScrollableArea(nsDisplayItem* aItem, const nsRegion& aOpaque)
-{
-  nsIPresShell* presShell = aItem->Frame()->PresContext()->PresShell();
-  nsIFrame* rootFrame = presShell->GetRootFrame();
-  if (mContainerFrame != rootFrame) {
-    return false;
-  }
-  nsRect scrollableArea;
-  if (presShell->IsScrollPositionClampingScrollPortSizeSet()) {
-    scrollableArea = nsRect(nsPoint(0, 0),
-      presShell->GetScrollPositionClampingScrollPortSize());
-  } else {
-    scrollableArea = rootFrame->GetRectRelativeToSelf();
-  }
-  return aOpaque.Contains(scrollableArea);
-}
-
 nsIntRegion
 ContainerState::ComputeOpaqueRect(nsDisplayItem* aItem,
                                   const nsIFrame* aAnimatedGeometryRoot,
@@ -2691,8 +2688,8 @@ ContainerState::ComputeOpaqueRect(nsDisplayItem* aItem,
     }
     if (aAnimatedGeometryRoot == mContainerAnimatedGeometryRoot &&
         aFixedPosFrame == mContainerFixedPosFrame &&
-        !aList->IsOpaque() &&
         opaqueClipped.Contains(mContainerBounds)) {
+      *aHideAllLayersBelow = true;
       aList->SetIsOpaque();
     }
     // Add opaque areas to the "exclude glass" region. Only do this when our
@@ -2703,9 +2700,6 @@ ContainerState::ComputeOpaqueRect(nsDisplayItem* aItem,
       mBuilder->AddWindowOpaqueRegion(opaqueClipped);
     }
     opaquePixels = ScaleRegionToInsidePixels(opaqueClipped, snapOpaque);
-    if (aFixedPosFrame && ItemCoversScrollableArea(aItem, opaque)) {
-      *aHideAllLayersBelow = true;
-    }
 
     nsIScrollableFrame* sf = nsLayoutUtils::GetScrollableFrameFor(aAnimatedGeometryRoot);
     if (sf) {
@@ -3574,7 +3568,7 @@ ContainerState::PostprocessRetainedLayers(nsIntRegion* aOpaqueRegionForContainer
 
       if (!data) {
         if (animatedGeometryRootToCover == mContainerAnimatedGeometryRoot &&
-            !e->mFixedPosFrameForLayerData) {
+            e->mFixedPosFrameForLayerData == mContainerFixedPosFrame) {
           NS_ASSERTION(opaqueRegionForContainer == -1, "Already found it?");
           opaqueRegionForContainer = opaqueRegions.Length();
         }
@@ -4197,7 +4191,7 @@ static void DebugPaintItem(nsRenderingContext* aDest,
                                           IntSize(bounds.width, bounds.height),
                                           SurfaceFormat::B8G8R8A8);
   nsRefPtr<gfxContext> context = new gfxContext(tempDT);
-  context->SetMatrix(gfxMatrix().Translate(-gfxPoint(bounds.x, bounds.y)));
+  context->SetMatrix(gfxMatrix::Translation(-gfxPoint(bounds.x, bounds.y)));
   nsRefPtr<nsRenderingContext> ctx = new nsRenderingContext();
   ctx->Init(aDest->DeviceContext(), context);
 
@@ -4483,8 +4477,9 @@ FrameLayerBuilder::DrawThebesLayer(ThebesLayer* aLayer,
       // Apply the residual transform if it has been enabled, to ensure that
       // snapping when we draw into aContext exactly matches the ideal transform.
       // See above for why this is OK.
-      aContext->Translate(aLayer->GetResidualTranslation() - gfxPoint(offset.x, offset.y));
-      aContext->Scale(userData->mXScale, userData->mYScale);
+      aContext->SetMatrix(
+        aContext->CurrentMatrix().Translate(aLayer->GetResidualTranslation() - gfxPoint(offset.x, offset.y)).
+                                  Scale(userData->mXScale, userData->mYScale));
 
       layerBuilder->PaintItems(entry->mItems, *iterRect, aContext, rc,
                                builder, presContext,
@@ -4495,8 +4490,9 @@ FrameLayerBuilder::DrawThebesLayer(ThebesLayer* aLayer,
     // Apply the residual transform if it has been enabled, to ensure that
     // snapping when we draw into aContext exactly matches the ideal transform.
     // See above for why this is OK.
-    aContext->Translate(aLayer->GetResidualTranslation() - gfxPoint(offset.x, offset.y));
-    aContext->Scale(userData->mXScale, userData->mYScale);
+    aContext->SetMatrix(
+      aContext->CurrentMatrix().Translate(aLayer->GetResidualTranslation() - gfxPoint(offset.x, offset.y)).
+                                Scale(userData->mXScale,userData->mYScale));
 
     layerBuilder->PaintItems(entry->mItems, aRegionToDraw.GetBounds(), aContext, rc,
                              builder, presContext,
@@ -4504,8 +4500,9 @@ FrameLayerBuilder::DrawThebesLayer(ThebesLayer* aLayer,
                              entry->mCommonClipCount);
   }
 
-  if (presContext->GetPaintFlashing() &&
-      !aLayer->Manager()->IsInactiveLayerManager()) {
+  bool isActiveLayerManager = !aLayer->Manager()->IsInactiveLayerManager();
+
+  if (presContext->GetPaintFlashing() && isActiveLayerManager) {
     gfxContextAutoSaveRestore save(aContext);
     if (shouldDrawRectsSeparately) {
       if (aClip == DrawRegionClip::DRAW_SNAPPED) {
@@ -4515,6 +4512,11 @@ FrameLayerBuilder::DrawThebesLayer(ThebesLayer* aLayer,
       }
     }
     FlashPaint(aContext);
+  }
+
+  if (presContext && presContext->GetDocShell() && isActiveLayerManager) {
+    nsDocShell* docShell = static_cast<nsDocShell*>(presContext->GetDocShell());
+    docShell->AddProfileTimelineMarker("Layer", TRACING_EVENT);
   }
 
   if (!aRegionToInvalidate.IsEmpty()) {
@@ -4624,14 +4626,14 @@ ContainerState::SetupMaskLayer(Layer *aLayer,
   // component of imageTransform), and its inverse used when the mask is used for
   // masking.
   // It is the transform from the masked layer's space to mask space
-  gfx::Matrix maskTransform;
-  maskTransform.Scale(surfaceSize.width/boundingRect.Width(),
-                      surfaceSize.height/boundingRect.Height());
+  gfx::Matrix maskTransform =
+    Matrix::Scaling(surfaceSize.width / boundingRect.Width(),
+                    surfaceSize.height / boundingRect.Height());
   gfx::Point p = boundingRect.TopLeft();
-  maskTransform.Translate(-p.x, -p.y);
+  maskTransform.PreTranslate(-p.x, -p.y);
   // imageTransform is only used when the clip is painted to the mask
   gfx::Matrix imageTransform = maskTransform;
-  imageTransform.Scale(mParameters.mXScale, mParameters.mYScale);
+  imageTransform.PreScale(mParameters.mXScale, mParameters.mYScale);
 
   nsAutoPtr<MaskLayerImageCache::MaskLayerImageKey> newKey(
     new MaskLayerImageCache::MaskLayerImageKey());

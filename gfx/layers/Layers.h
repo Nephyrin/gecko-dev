@@ -805,6 +805,24 @@ public:
       Mutated();
     }
   }
+
+  /**
+   * CONSTRUCTION PHASE ONLY
+   * The union of the bounds of all the display item that got flattened
+   * into this layer. This is intended to be an approximation to the
+   * size of the layer if the nearest scrollable ancestor had an infinitely
+   * large displayport. Computing this more exactly is too expensive,
+   * but this approximation is sufficient for what we need to use it for.
+   */
+  virtual void SetLayerBounds(const nsIntRect& aLayerBounds)
+  {
+    if (!mLayerBounds.IsEqualEdges(aLayerBounds)) {
+      MOZ_LAYERS_LOG_IF_SHADOWABLE(this, ("Layer::Mutated(%p) LayerBounds", this));
+      mLayerBounds = aLayerBounds;
+      Mutated();
+    }
+  }
+
   /**
    * CONSTRUCTION PHASE ONLY
    * Tell this layer which region will be visible. The visible region
@@ -1178,6 +1196,7 @@ public:
   gfx::CompositionOp GetMixBlendMode() const { return mMixBlendMode; }
   const nsIntRect* GetClipRect() { return mUseClipRect ? &mClipRect : nullptr; }
   uint32_t GetContentFlags() { return mContentFlags; }
+  const nsIntRect& GetLayerBounds() const { return mLayerBounds; }
   const nsIntRegion& GetVisibleRegion() const { return mVisibleRegion; }
   const FrameMetrics& GetFrameMetrics(uint32_t aIndex) const;
   uint32_t GetFrameMetricsCount() const { return mFrameMetrics.Length(); }
@@ -1392,12 +1411,8 @@ public:
    * nearest ancestor that has an intermediate surface, or relative to the root
    * viewport if no ancestor has an intermediate surface, corresponding to the
    * clip rect for this layer intersected with aCurrentScissorRect.
-   * If no ancestor has an intermediate surface, the clip rect is transformed
-   * by aWorldTransform before being combined with aCurrentScissorRect, if
-   * aWorldTransform is non-null.
    */
-  RenderTargetIntRect CalculateScissorRect(const RenderTargetIntRect& aCurrentScissorRect,
-                                           const gfx::Matrix* aWorldTransform);
+  RenderTargetIntRect CalculateScissorRect(const RenderTargetIntRect& aCurrentScissorRect);
 
   virtual const char* Name() const =0;
   virtual LayerType GetType() const =0;
@@ -1593,6 +1608,7 @@ protected:
   void* mImplData;
   nsRefPtr<Layer> mMaskLayer;
   gfx::UserData mUserData;
+  nsIntRect mLayerBounds;
   nsIntRegion mVisibleRegion;
   nsTArray<FrameMetrics> mFrameMetrics;
   EventRegions mEventRegions;

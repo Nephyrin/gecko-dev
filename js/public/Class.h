@@ -152,7 +152,7 @@ typedef void
 
 // Finalizes external strings created by JS_NewExternalString.
 struct JSStringFinalizer {
-    void (*finalize)(const JSStringFinalizer *fin, jschar *chars);
+    void (*finalize)(const JSStringFinalizer *fin, char16_t *chars);
 };
 
 // Check whether v is an instance of obj.  Return false on error or exception,
@@ -482,7 +482,8 @@ struct Class
         return flags & JSCLASS_EMULATES_UNDEFINED;
     }
 
-    bool isCallable() const {
+    bool nonProxyCallable() const {
+        MOZ_ASSERT(!isProxy());
         return this == js::FunctionClassPtr || call;
     }
 
@@ -531,8 +532,8 @@ Valueify(const JSClass *c)
  */
 enum ESClassValue {
     ESClass_Object, ESClass_Array, ESClass_Number, ESClass_String,
-    ESClass_Boolean, ESClass_RegExp, ESClass_ArrayBuffer, ESClass_Date,
-    ESClass_Set, ESClass_Map
+    ESClass_Boolean, ESClass_RegExp, ESClass_ArrayBuffer, ESClass_SharedArrayBuffer,
+    ESClass_Date, ESClass_Set, ESClass_Map
 };
 
 /*

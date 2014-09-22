@@ -367,10 +367,9 @@ public:
   nsCaret* GetCaret();
   /**
    * Notify the display list builder that we're entering a presshell.
-   * aReferenceFrame should be a frame in the new presshell and aDirtyRect
-   * should be the current dirty rect in aReferenceFrame's coordinate space.
+   * aReferenceFrame should be a frame in the new presshell.
    */
-  void EnterPresShell(nsIFrame* aReferenceFrame, const nsRect& aDirtyRect);
+  void EnterPresShell(nsIFrame* aReferenceFrame);
   /**
    * For print-preview documents, we sometimes need to build display items for
    * the same frames multiple times in the same presentation, with different
@@ -382,7 +381,7 @@ public:
   /**
    * Notify the display list builder that we're leaving a presshell.
    */
-  void LeavePresShell(nsIFrame* aReferenceFrame, const nsRect& aDirtyRect);
+  void LeavePresShell(nsIFrame* aReferenceFrame);
 
   /**
    * Returns true if we're currently building a display list that's
@@ -394,6 +393,12 @@ public:
    * nsDisplayTransform or SVG foreignObject.
    */
   void SetInTransform(bool aInTransform) { mInTransform = aInTransform; }
+
+  /**
+   * Return true if we're currently building a display list for a
+   * nested presshell.
+   */
+  bool IsInSubdocument() { return mPresShellStates.Length() > 1; }
 
   /**
    * @return true if images have been set to decode synchronously.
@@ -472,11 +477,20 @@ public:
    */
   void RegisterThemeGeometry(uint8_t aWidgetType,
                              const nsIntRect& aRect) {
-    if (mIsPaintingToWindow && mPresShellStates.Length() == 1) {
-      ThemeGeometry geometry(aWidgetType, aRect);
-      mThemeGeometries.AppendElement(geometry);
+    if (mIsPaintingToWindow) {
+      mThemeGeometries.AppendElement(ThemeGeometry(aWidgetType, aRect));
     }
   }
+
+  /**
+   * Adjusts mWindowDraggingRegion to take into account aFrame. If aFrame's
+   * -moz-window-dragging value is |drag|, its border box is added to the
+   * collected dragging region; if the value is |no-drag|, the border box is
+   * subtracted from the region.
+   */
+  void AdjustWindowDraggingRegion(nsIFrame* aFrame);
+
+  const nsRegion& GetWindowDraggingRegion() { return mWindowDraggingRegion; }
 
   /**
    * Allocate memory in our arena. It will only be freed when this display list
@@ -710,7 +724,6 @@ private:
     nsIPresShell* mPresShell;
     nsIFrame*     mCaretFrame;
     nsRect        mCaretRect;
-    nsRect        mPrevDirtyRect;
     uint32_t      mFirstFrameMarkedForDisplay;
     bool          mIsBackgroundOnly;
   };
@@ -740,6 +753,7 @@ private:
   // Relative to mCurrentFrame.
   nsRect                         mDirtyRect;
   nsRegion                       mWindowOpaqueRegion;
+  nsRegion                       mWindowDraggingRegion;
   // The display item for the Windows window glass background, if any
   nsDisplayItem*                 mGlassDisplayItem;
   nsTArray<DisplayItemClip*>     mDisplayItemClipsToDestroy;

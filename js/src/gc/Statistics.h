@@ -43,6 +43,7 @@ enum Phase {
     PHASE_SWEEP_COMPARTMENTS,
     PHASE_SWEEP_DISCARD_CODE,
     PHASE_SWEEP_TABLES,
+    PHASE_SWEEP_TABLES_INNER_VIEWS,
     PHASE_SWEEP_TABLES_WRAPPER,
     PHASE_SWEEP_TABLES_BASE_SHAPE,
     PHASE_SWEEP_TABLES_INITIAL_SHAPE,
@@ -117,10 +118,13 @@ struct Statistics
     int64_t beginSCC();
     void endSCC(unsigned scc, int64_t start);
 
-    jschar *formatMessage();
-    jschar *formatJSON(uint64_t timestamp);
+    char16_t *formatMessage();
+    char16_t *formatJSON(uint64_t timestamp);
 
     JS::GCSliceCallback setSliceCallback(JS::GCSliceCallback callback);
+
+    int64_t clearMaxGCPauseAccumulator();
+    int64_t getMaxGCPauseSinceClear();
 
   private:
     JSRuntime *runtime;
@@ -172,6 +176,9 @@ struct Statistics
 
     /* Allocated space before the GC started. */
     size_t preBytes;
+
+    /* Records the maximum GC pause in an API-controlled interval (in us). */
+    int64_t maxPauseInInterval;
 
 #ifdef DEBUG
     /* Phases that are currently on stack. */

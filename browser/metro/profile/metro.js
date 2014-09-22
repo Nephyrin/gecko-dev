@@ -57,7 +57,7 @@ pref("apz.x_skate_size_multiplier", "2.5");
 pref("apz.y_skate_size_multiplier", "2.5");
 pref("apz.min_skate_speed", "10.0");
 // 0 = free, 1 = standard, 2 = sticky
-pref("apz.axis_lock_mode", 2);
+pref("apz.axis_lock.mode", 2);
 pref("apz.cross_slide.enabled", true);
 pref("apz.subframe.enabled", true);
 
@@ -625,6 +625,9 @@ pref("urlclassifier.alternate_error_page", "blocked");
 
 // The number of random entries to send with a gethash request.
 pref("urlclassifier.gethashnoise", 4);
+
+// Gethash timeout for Safebrowsing.
+pref("urlclassifier.gethash.timeout_ms", 5000);
 
 // If an urlclassifier table has not been updated in this number of seconds,
 // a gethash request will be forced to check that the result is still in

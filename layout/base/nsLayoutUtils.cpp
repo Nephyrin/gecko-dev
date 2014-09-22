@@ -2389,6 +2389,37 @@ nsLayoutUtils::TransformRect(nsIFrame* aFromFrame, nsIFrame* aToFrame,
   return TRANSFORM_SUCCEEDED;
 }
 
+nsRect
+nsLayoutUtils::GetRectRelativeToFrame(Element* aElement, nsIFrame* aFrame)
+{
+  if (!aElement || !aFrame) {
+    return nsRect();
+  }
+
+  nsIFrame* frame = aElement->GetPrimaryFrame();
+  if (!frame) {
+    return nsRect();
+  }
+
+  nsRect rect = frame->GetRectRelativeToSelf();
+  nsLayoutUtils::TransformResult rv =
+    nsLayoutUtils::TransformRect(frame, aFrame, rect);
+  if (rv != nsLayoutUtils::TRANSFORM_SUCCEEDED) {
+    return nsRect();
+  }
+
+  return rect;
+}
+
+bool
+nsLayoutUtils::ContainsPoint(const nsRect& aRect, const nsPoint& aPoint,
+                             nscoord aInflateSize)
+{
+  nsRect rect = aRect;
+  rect.Inflate(aInflateSize);
+  return rect.Contains(aPoint);
+}
+
 bool
 nsLayoutUtils::GetLayerTransformForFrame(nsIFrame* aFrame,
                                          Matrix4x4* aTransform)
@@ -2632,7 +2663,6 @@ nsLayoutUtils::GetFramesForArea(nsIFrame* aFrame, const nsRect& aRect,
   nsDisplayListBuilder builder(aFrame, nsDisplayListBuilder::EVENT_DELIVERY,
                                false);
   nsDisplayList list;
-  nsRect target(aRect);
 
   if (aFlags & IGNORE_PAINT_SUPPRESSION) {
     builder.IgnorePaintSuppression();
@@ -2649,9 +2679,9 @@ nsLayoutUtils::GetFramesForArea(nsIFrame* aFrame, const nsRect& aRect,
     builder.SetDescendIntoSubdocuments(false);
   }
 
-  builder.EnterPresShell(aFrame, target);
-  aFrame->BuildDisplayListForStackingContext(&builder, target, &list);
-  builder.LeavePresShell(aFrame, target);
+  builder.EnterPresShell(aFrame);
+  aFrame->BuildDisplayListForStackingContext(&builder, aRect, &list);
+  builder.LeavePresShell(aFrame);
 
 #ifdef MOZ_DUMP_PAINTING
   if (gDumpEventList) {
@@ -2664,7 +2694,7 @@ nsLayoutUtils::GetFramesForArea(nsIFrame* aFrame, const nsRect& aRect,
 #endif
 
   nsDisplayItem::HitTestState hitTestState;
-  list.HitTest(&builder, target, &hitTestState, &aOutFrames);
+  list.HitTest(&builder, aRect, &hitTestState, &aOutFrames);
   list.DeleteAll();
   return NS_OK;
 }
@@ -2866,7 +2896,11 @@ nsLayoutUtils::PaintFrame(nsRenderingContext* aRenderingContext, nsIFrame* aFram
       nsPoint pos = rootScrollableFrame->GetScrollPosition();
       visibleRegion.MoveBy(-pos);
       if (aRenderingContext) {
-        aRenderingContext->Translate(pos);
+        gfxPoint devPixelOffset =
+          nsLayoutUtils::PointToGfxPoint(pos,
+                                         presContext->AppUnitsPerDevPixel());
+        aRenderingContext->ThebesContext()->SetMatrix(
+          aRenderingContext->ThebesContext()->CurrentMatrix().Translate(devPixelOffset));
       }
     }
     builder.SetIgnoreScrollFrame(rootScrollFrame);
@@ -2881,8 +2915,8 @@ nsLayoutUtils::PaintFrame(nsRenderingContext* aRenderingContext, nsIFrame* aFram
     }
   }
 
+  builder.EnterPresShell(aFrame);
   nsRect dirtyRect = visibleRegion.GetBounds();
-  builder.EnterPresShell(aFrame, dirtyRect);
   {
     // If a scrollable container layer is created in nsDisplayList::PaintForFrame,
     // it will be the scroll parent for display items that are built in the
@@ -2929,6 +2963,8 @@ nsLayoutUtils::PaintFrame(nsRenderingContext* aRenderingContext, nsIFrame* aFram
       nsLayoutUtils::NeedsPrintPreviewBackground(presContext)) {
     nsRect bounds = nsRect(builder.ToReferenceFrame(aFrame),
                            aFrame->GetSize());
+    nsDisplayListBuilder::AutoBuildingDisplayList
+      buildingDisplayList(&builder, aFrame, bounds, false);
     presShell->AddPrintPreviewBackgroundItem(builder, list, aFrame, bounds);
   } else if (frameType != nsGkAtoms::pageFrame) {
     // For printing, this function is first called on an nsPageFrame, which
@@ -2941,6 +2977,8 @@ nsLayoutUtils::PaintFrame(nsRenderingContext* aRenderingContext, nsIFrame* aFram
     // happens after we've built the list so that AddCanvasBackgroundColorItem
     // can monkey with the contents if necessary.
     canvasArea.IntersectRect(canvasArea, visibleRegion.GetBounds());
+    nsDisplayListBuilder::AutoBuildingDisplayList
+      buildingDisplayList(&builder, aFrame, canvasArea, false);
     presShell->AddCanvasBackgroundColorItem(
            builder, list, aFrame, canvasArea, aBackstop);
 
@@ -2961,7 +2999,7 @@ nsLayoutUtils::PaintFrame(nsRenderingContext* aRenderingContext, nsIFrame* aFram
     }
   }
 
-  builder.LeavePresShell(aFrame, dirtyRect);
+  builder.LeavePresShell(aFrame);
 
   if (builder.GetHadToIgnorePaintSuppression()) {
     willFlushRetainedLayers = true;
@@ -3057,15 +3095,20 @@ nsLayoutUtils::PaintFrame(nsRenderingContext* aRenderingContext, nsIFrame* aFram
 #endif
 
   // Update the widget's opaque region information. This sets
-  // glass boundaries on Windows. Also set up plugin clip regions and bounds.
+  // glass boundaries on Windows. Also set up the window dragging region
+  // and plugin clip regions and bounds.
   if ((aFlags & PAINT_WIDGET_LAYERS) &&
       !willFlushRetainedLayers &&
       !(aFlags & PAINT_DOCUMENT_RELATIVE)) {
     nsIWidget *widget = aFrame->GetNearestWidget();
     if (widget) {
-      nsRegion excludedRegion = builder.GetWindowOpaqueRegion();
-      nsIntRegion windowRegion(excludedRegion.ToNearestPixels(presContext->AppUnitsPerDevPixel()));
-      widget->UpdateOpaqueRegion(windowRegion);
+      nsRegion opaqueRegion = builder.GetWindowOpaqueRegion();
+      widget->UpdateOpaqueRegion(
+        opaqueRegion.ToNearestPixels(presContext->AppUnitsPerDevPixel()));
+
+      nsRegion draggingRegion = builder.GetWindowDraggingRegion();
+      widget->UpdateWindowDraggingRegion(
+        draggingRegion.ToNearestPixels(presContext->AppUnitsPerDevPixel()));
     }
   }
 
@@ -5053,6 +5096,10 @@ ComputeSnappedImageDrawingParameters(gfxContext*     aCtx,
                       NSAppUnitsToIntPixels(dest.height * destScale.height,
                                             aAppUnitsPerDevPixel));
 
+  if (snappedDest.IsEmpty()) {
+    return SnappedImageDrawingParameters();
+  }
+
   nsIntSize intImageSize =
     aImage->OptimalImageSizeForDest(snappedDest,
                                     imgIContainer::FRAME_CURRENT,
@@ -5593,6 +5640,41 @@ nsLayoutUtils::GetTextRunFlagsForStyle(nsStyleContext* aStyleContext,
     break;
   default:
     break;
+  }
+  WritingMode wm(aStyleContext->StyleVisibility());
+  if (wm.IsVertical()) {
+    switch (aStyleText->mTextOrientation) {
+    case NS_STYLE_TEXT_ORIENTATION_MIXED:
+      result |= gfxTextRunFactory::TEXT_ORIENT_VERTICAL_MIXED;
+      break;
+    case NS_STYLE_TEXT_ORIENTATION_UPRIGHT:
+      result |= gfxTextRunFactory::TEXT_ORIENT_VERTICAL_UPRIGHT;
+      break;
+    case NS_STYLE_TEXT_ORIENTATION_SIDEWAYS:
+      // This should depend on writing mode vertical-lr vs vertical-rl,
+      // but until we support SIDEWAYS_LEFT, we'll treat this the same
+      // as SIDEWAYS_RIGHT and simply fall through.
+      /*
+      if (wm.IsVerticalLR()) {
+        result |= gfxTextRunFactory::TEXT_ORIENT_VERTICAL_SIDEWAYS_LEFT;
+      } else {
+        result |= gfxTextRunFactory::TEXT_ORIENT_VERTICAL_SIDEWAYS_RIGHT;
+      }
+      break;
+      */
+    case NS_STYLE_TEXT_ORIENTATION_SIDEWAYS_RIGHT:
+      result |= gfxTextRunFactory::TEXT_ORIENT_VERTICAL_SIDEWAYS_RIGHT;
+      break;
+    case NS_STYLE_TEXT_ORIENTATION_SIDEWAYS_LEFT:
+      // Not yet supported, so fall through to the default (error) case.
+      /*
+      result |= gfxTextRunFactory::TEXT_ORIENT_VERTICAL_SIDEWAYS_LEFT;
+      break;
+      */
+    default:
+      NS_NOTREACHED("unknown text-orientation");
+      break;
+    }
   }
   return result;
 }

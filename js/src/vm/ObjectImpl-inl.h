@@ -10,8 +10,8 @@
 #include "vm/ObjectImpl.h"
 
 #include "jscntxt.h"
-#include "jsproxy.h"
 
+#include "proxy/Proxy.h"
 #include "vm/ProxyObject.h"
 #include "vm/TypedArrayObject.h"
 
@@ -36,9 +36,10 @@ inline bool
 ClassCanHaveFixedData(const Class *clasp)
 {
     // Normally, the number of fixed slots given an object is the maximum
-    // permitted for its size class. For array buffers and typed arrays we only
-    // use enough to cover the class reserved slots, so that the remaining
-    // space in the object's allocation is available for the buffer's data.
+    // permitted for its size class. For array buffers and non-shared typed
+    // arrays we only use enough to cover the class reserved slots, so that
+    // the remaining space in the object's allocation is available for the
+    // buffer's data.
     return clasp == &ArrayBufferObject::class_ || IsTypedArrayClass(clasp);
 }
 

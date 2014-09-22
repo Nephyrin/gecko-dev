@@ -11,9 +11,11 @@ var loop = loop || {};
 loop.panel = (function(_, mozL10n) {
   "use strict";
 
-  var sharedViews = loop.shared.views,
-      // aliasing translation function as __ for concision
-      __ = mozL10n.get;
+  var sharedViews = loop.shared.views;
+  var sharedModels = loop.shared.models;
+  var sharedMixins = loop.shared.mixins;
+  var ContactsList = loop.contacts.ContactsList;
+  var __ = mozL10n.get; // aliasing translation function as __ for concision
 
   /**
    * Panel router.
@@ -21,41 +23,62 @@ loop.panel = (function(_, mozL10n) {
    */
   var router;
 
-  /**
-   * Dropdown menu mixin.
-   * @type {Object}
-   */
-  var DropdownMenuMixin = {
+  var TabView = React.createClass({displayName: 'TabView',
     getInitialState: function() {
-      return {showMenu: false};
+      return {
+        selectedTab: "call"
+      };
     },
 
-    _onBodyClick: function() {
-      this.setState({showMenu: false});
+    handleSelectTab: function(event) {
+      var tabName = event.target.dataset.tabName;
+      this.setState({selectedTab: tabName});
+
+      if (this.props.onSelect) {
+        this.props.onSelect(tabName);
+      }
     },
 
-    componentDidMount: function() {
-      document.body.addEventListener("click", this._onBodyClick);
-    },
-
-    componentWillUnmount: function() {
-      document.body.removeEventListener("click", this._onBodyClick);
-    },
-
-    showDropdownMenu: function() {
-      this.setState({showMenu: true});
-    },
-
-    hideDropdownMenu: function() {
-      this.setState({showMenu: false});
+    render: function() {
+      var cx = React.addons.classSet;
+      var tabButtons = [];
+      var tabs = [];
+      React.Children.forEach(this.props.children, function(tab, i) {
+        var tabName = tab.props.name;
+        var isSelected = (this.state.selectedTab == tabName);
+        tabButtons.push(
+          React.DOM.li({className: cx({selected: isSelected}), 
+              key: i, 
+              'data-tab-name': tabName, 
+              onClick: this.handleSelectTab}
+          )
+        );
+        tabs.push(
+          React.DOM.div({key: i, className: cx({tab: true, selected: isSelected})}, 
+            tab.props.children
+          )
+        );
+      }, this);
+      return (
+        React.DOM.div({className: "tab-view-container"}, 
+          React.DOM.ul({className: "tab-view"}, tabButtons), 
+          tabs
+        )
+      );
     }
-  };
+  });
+
+  var Tab = React.createClass({displayName: 'Tab',
+    render: function() {
+      return null;
+    }
+  });
 
   /**
    * Availability drop down menu subview.
    */
   var AvailabilityDropdown = React.createClass({displayName: 'AvailabilityDropdown',
-    mixins: [DropdownMenuMixin],
+    mixins: [sharedMixins.DropdownMenuMixin],
 
     getInitialState: function() {
       return {
@@ -187,7 +210,7 @@ loop.panel = (function(_, mozL10n) {
    * Panel settings (gear) menu.
    */
   var SettingsDropdown = React.createClass({displayName: 'SettingsDropdown',
-    mixins: [DropdownMenuMixin],
+    mixins: [sharedMixins.DropdownMenuMixin],
 
     handleClickSettingsEntry: function() {
       // XXX to be implemented
@@ -199,7 +222,6 @@ loop.panel = (function(_, mozL10n) {
 
     handleClickAuthEntry: function() {
       if (this._isSignedIn()) {
-        // XXX to be implemented - bug 979845
         navigator.mozLoop.logOutFromFxA();
       } else {
         navigator.mozLoop.logInToFxA();
@@ -207,8 +229,7 @@ loop.panel = (function(_, mozL10n) {
     },
 
     _isSignedIn: function() {
-      // XXX to be implemented - bug 979845
-      return !!navigator.mozLoop.loggedInToFxA;
+      return !!navigator.mozLoop.userProfile;
     },
 
     render: function() {
@@ -257,11 +278,16 @@ loop.panel = (function(_, mozL10n) {
     }
   });
 
+  /**
+   * Call url result view.
+   */
   var CallUrlResult = React.createClass({displayName: 'CallUrlResult',
+    mixins: [sharedMixins.DocumentVisibilityMixin],
+
     propTypes: {
       callUrl:        React.PropTypes.string,
       callUrlExpiry:  React.PropTypes.number,
-      notifier:       React.PropTypes.object.isRequired,
+      notifications:  React.PropTypes.object.isRequired,
       client:         React.PropTypes.object.isRequired
     },
 
@@ -272,6 +298,14 @@ loop.panel = (function(_, mozL10n) {
         callUrl: this.props.callUrl || "",
         callUrlExpiry: 0
       };
+    },
+
+    /**
+     * Provided by DocumentVisibilityMixin. Schedules retrieval of a new call
+     * URL everytime the panel is reopened.
+     */
+    onDocumentVisible: function() {
+      this._fetchCallUrl();
     },
 
     /**
@@ -290,16 +324,23 @@ loop.panel = (function(_, mozL10n) {
         return;
       }
 
+      this._fetchCallUrl();
+    },
+
+    /**
+     * Fetches a call URL.
+     */
+    _fetchCallUrl: function() {
       this.setState({pending: true});
       this.props.client.requestCallUrl(this.conversationIdentifier(),
                                        this._onCallUrlReceived);
     },
 
     _onCallUrlReceived: function(err, callUrlData) {
-      this.props.notifier.clear();
+      this.props.notifications.reset();
 
       if (err) {
-        this.props.notifier.errorL10n("unable_retrieve_url");
+        this.props.notifications.errorL10n("unable_retrieve_url");
         this.setState(this.getInitialState());
       } else {
         try {
@@ -314,23 +355,17 @@ loop.panel = (function(_, mozL10n) {
                          callUrlExpiry: callUrlData.expiresAt});
         } catch(e) {
           console.log(e);
-          this.props.notifier.errorL10n("unable_retrieve_url");
+          this.props.notifications.errorL10n("unable_retrieve_url");
           this.setState(this.getInitialState());
         }
       }
     },
 
-    _generateMailTo: function() {
-      return encodeURI([
-        "mailto:?subject=" + __("share_email_subject3") + "&",
-        "body=" + __("share_email_body3", {callUrl: this.state.callUrl})
-      ].join(""));
-    },
-
     handleEmailButtonClick: function(event) {
       this.handleLinkExfiltration(event);
-      // Note: side effect
-      document.location = event.target.dataset.mailto;
+
+      navigator.mozLoop.composeEmail(__("share_email_subject3"),
+        __("share_email_body3", { callUrl: this.state.callUrl }));
     },
 
     handleCopyButtonClick: function(event) {
@@ -368,8 +403,7 @@ loop.panel = (function(_, mozL10n) {
                    className: inputCSSClass}), 
             React.DOM.p({className: "btn-group url-actions"}, 
               React.DOM.button({className: "btn btn-email", disabled: !this.state.callUrl, 
-                onClick: this.handleEmailButtonClick, 
-                'data-mailto': this._generateMailTo()}, 
+                onClick: this.handleEmailButtonClick}, 
                 __("share_button")
               ), 
               React.DOM.button({className: "btn btn-copy", disabled: !this.state.callUrl, 
@@ -407,96 +441,77 @@ loop.panel = (function(_, mozL10n) {
   });
 
   /**
-   * Panel view.
+   * FxA user identity (guest/authenticated) component.
    */
-  var PanelView = React.createClass({displayName: 'PanelView',
-    propTypes: {
-      notifier: React.PropTypes.object.isRequired,
-      client: React.PropTypes.object.isRequired,
-      // Mostly used for UI components showcase and unit tests
-      callUrl: React.PropTypes.string
-    },
-
+  var UserIdentity = React.createClass({displayName: 'UserIdentity',
     render: function() {
       return (
-        React.DOM.div(null, 
-          CallUrlResult({client: this.props.client, 
-                         notifier: this.props.notifier, 
-                         callUrl: this.props.callUrl}), 
-          ToSView(null), 
-          React.DOM.div({className: "footer"}, 
-            AvailabilityDropdown(null), 
-            AuthLink(null), 
-            SettingsDropdown(null)
-          )
+        React.DOM.p({className: "user-identity"}, 
+          this.props.displayName
         )
       );
     }
   });
 
-  var PanelRouter = loop.desktopRouter.DesktopRouter.extend({
-    /**
-     * DOM document object.
-     * @type {HTMLDocument}
-     */
-    document: undefined,
-
-    routes: {
-      "": "home"
+  /**
+   * Panel view.
+   */
+  var PanelView = React.createClass({displayName: 'PanelView',
+    propTypes: {
+      notifications: React.PropTypes.object.isRequired,
+      client: React.PropTypes.object.isRequired,
+      // Mostly used for UI components showcase and unit tests
+      callUrl: React.PropTypes.string,
+      userProfile: React.PropTypes.object,
     },
 
-    initialize: function(options) {
-      options = options || {};
-      if (!options.document) {
-        throw new Error("missing required document");
-      }
-      this.document = options.document;
-
-      this._registerVisibilityChangeEvent();
-
-      this.on("panel:open panel:closed", this.clearNotifications, this);
-      this.on("panel:open", this.reset, this);
+    getInitialState: function() {
+      return {
+        userProfile: this.props.userProfile || navigator.mozLoop.userProfile,
+      };
     },
 
-    /**
-     * Register the DOM visibility API event for the whole document, and trigger
-     * appropriate events accordingly:
-     *
-     * - `panel:opened` when the panel is open
-     * - `panel:closed` when the panel is closed
-     *
-     * @link  http://www.w3.org/TR/page-visibility/
-     */
-    _registerVisibilityChangeEvent: function() {
-      // XXX pass in the visibility status to detect when to generate a new
-      // panel view
-      this.document.addEventListener("visibilitychange", function(event) {
-        this.trigger(event.currentTarget.hidden ? "panel:closed"
-                                                : "panel:open");
-      }.bind(this));
+    _onAuthStatusChange: function() {
+      this.setState({userProfile: navigator.mozLoop.userProfile});
     },
 
-    /**
-     * Default entry point.
-     */
-    home: function() {
-      this.reset();
+    componentDidMount: function() {
+      window.addEventListener("LoopStatusChanged", this._onAuthStatusChange);
     },
 
-    clearNotifications: function() {
-      this._notifier.clear();
+    componentWillUnmount: function() {
+      window.removeEventListener("LoopStatusChanged", this._onAuthStatusChange);
     },
 
-    /**
-     * Resets this router to its initial state.
-     */
-    reset: function() {
-      this._notifier.clear();
-      var client = new loop.Client({
-        baseServerUrl: navigator.mozLoop.serverUrl
-      });
-      this.loadReactComponent(PanelView({client: client, 
-                                         notifier: this._notifier}));
+    render: function() {
+      var NotificationListView = sharedViews.NotificationListView;
+      var displayName = this.state.userProfile && this.state.userProfile.email ||
+                        __("display_name_guest");
+      return (
+        React.DOM.div(null, 
+          NotificationListView({notifications: this.props.notifications, 
+                                clearOnDocumentHidden: true}), 
+          TabView({onSelect: this.selectTab}, 
+            Tab({name: "call"}, 
+              CallUrlResult({client: this.props.client, 
+                             notifications: this.props.notifications, 
+                             callUrl: this.props.callUrl}), 
+              ToSView(null)
+            ), 
+            Tab({name: "contacts"}, 
+              ContactsList(null)
+            )
+          ), 
+          React.DOM.div({className: "footer"}, 
+            React.DOM.div({className: "user-details"}, 
+              UserIdentity({displayName: displayName}), 
+              AvailabilityDropdown(null)
+            ), 
+            AuthLink(null), 
+            SettingsDropdown(null)
+          )
+        )
+      );
     }
   });
 
@@ -508,11 +523,12 @@ loop.panel = (function(_, mozL10n) {
     // else to ensure the L10n environment is setup correctly.
     mozL10n.initialize(navigator.mozLoop);
 
-    router = new PanelRouter({
-      document: document,
-      notifier: new sharedViews.NotificationListView({el: "#messages"})
-    });
-    Backbone.history.start();
+    var client = new loop.Client();
+    var notifications = new sharedModels.NotificationCollection()
+
+    React.renderComponent(PanelView({
+      client: client, 
+      notifications: notifications}), document.querySelector("#main"));
 
     document.body.classList.add(loop.shared.utils.getTargetPlatform());
     document.body.setAttribute("dir", mozL10n.getDirection());
@@ -525,11 +541,13 @@ loop.panel = (function(_, mozL10n) {
 
   return {
     init: init,
+    UserIdentity: UserIdentity,
     AvailabilityDropdown: AvailabilityDropdown,
     CallUrlResult: CallUrlResult,
     PanelView: PanelView,
-    PanelRouter: PanelRouter,
     SettingsDropdown: SettingsDropdown,
     ToSView: ToSView
   };
 })(_, document.mozL10n);
+
+document.addEventListener('DOMContentLoaded', loop.panel.init);

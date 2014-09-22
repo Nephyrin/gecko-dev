@@ -567,6 +567,10 @@ interface TestInterface {
   void passUnion20(optional (sequence<object> or long) arg = []);
   void passUnion21((MozMap<long> or long) arg);
   void passUnion22((MozMap<object> or long) arg);
+  void passUnion23((sequence<ImageData> or long) arg);
+  void passUnion24((sequence<ImageData?> or long) arg);
+  void passUnion25((sequence<sequence<ImageData>> or long) arg);
+  void passUnion26((sequence<sequence<ImageData?>> or long) arg);
   void passUnionWithCallback((EventHandler or long) arg);
   void passUnionWithByteString((ByteString or long) arg);
   void passUnionWithMozMap((MozMap<DOMString> or DOMString) arg);
@@ -652,9 +656,13 @@ interface TestInterface {
 
   // binaryNames tests
   void methodRenamedFrom();
+  [BinaryName="otherMethodRenamedTo"]
+  void otherMethodRenamedFrom();
   void methodRenamedFrom(byte argument);
   readonly attribute byte attributeGetterRenamedFrom;
   attribute byte attributeRenamedFrom;
+  [BinaryName="otherAttributeRenamedTo"]
+  attribute byte otherAttributeRenamedFrom;
 
   void passDictionary(optional Dict x);
   [Cached, Pure]
@@ -682,6 +690,7 @@ interface TestInterface {
   void passDictContainingDict(optional DictContainingDict arg);
   void passDictContainingSequence(optional DictContainingSequence arg);
   DictContainingSequence receiveDictContainingSequence();
+  void passVariadicDictionary(Dict... arg);
 
   // EnforceRange/Clamp tests
   void dontEnforceRangeOrClamp(byte arg);
@@ -824,6 +833,9 @@ interface TestInterface {
   attribute TestParentInterface jsonifierShouldSkipThis2;
   attribute TestCallbackInterface jsonifierShouldSkipThis3;
   jsonifier;
+
+  attribute byte dashed-attribute;
+  void dashed-method();
 
   // If you add things here, add them to TestExampleGen and TestJSImplGen as well
 };

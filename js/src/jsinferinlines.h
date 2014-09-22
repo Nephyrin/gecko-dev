@@ -18,6 +18,7 @@
 #include "vm/BooleanObject.h"
 #include "vm/NumberObject.h"
 #include "vm/SharedArrayObject.h"
+#include "vm/SharedTypedArrayObject.h"
 #include "vm/StringObject.h"
 #include "vm/TypedArrayObject.h"
 
@@ -137,10 +138,13 @@ GetValueType(const Value &val)
 }
 
 inline Type
-GetMaybeOptimizedOutValueType(const Value &val)
+GetMaybeUntrackedValueType(const Value &val)
 {
-    if (val.isMagic() && val.whyMagic() == JS_OPTIMIZED_OUT)
+    if (val.isMagic() && (val.whyMagic() == JS_OPTIMIZED_OUT ||
+                          val.whyMagic() == JS_UNINITIALIZED_LEXICAL))
+    {
         return Type::UnknownType();
+    }
     return GetValueType(val);
 }
 
@@ -195,28 +199,6 @@ TypeFlagPrimitive(TypeFlags flags)
 }
 
 /*
- * Check for numeric strings, as in js_StringIsIndex, but allow negative
- * and overflowing integers.
- */
-template <class Range>
-inline bool
-IdIsNumericTypeId(Range cp)
-{
-    if (cp.length() == 0)
-        return false;
-
-    if (!JS7_ISDEC(cp[0]) && cp[0] != '-')
-        return false;
-
-    for (size_t i = 1; i < cp.length(); ++i) {
-        if (!JS7_ISDEC(cp[i]))
-            return false;
-    }
-
-    return true;
-}
-
-/*
  * Get the canonical representation of an id to use when doing inference.  This
  * maintains the constraint that if two different jsids map to the same property
  * in JS (e.g. 3 and "3"), they have the same type representation.
@@ -226,23 +208,9 @@ IdToTypeId(jsid id)
 {
     JS_ASSERT(!JSID_IS_EMPTY(id));
 
-    /*
-     * All integers must map to the aggregate property for index types, including
-     * negative integers.
-     */
-    if (JSID_IS_INT(id))
-        return JSID_VOID;
-
-    if (JSID_IS_STRING(id)) {
-        JSAtom *atom = JSID_TO_ATOM(id);
-        JS::AutoCheckCannotGC nogc;
-        bool isNumeric = atom->hasLatin1Chars()
-                         ? IdIsNumericTypeId(atom->latin1Range(nogc))
-                         : IdIsNumericTypeId(atom->twoByteRange(nogc));
-        return isNumeric ? JSID_VOID : id;
-    }
-
-    return JSID_VOID;
+    // All properties which can be stored in an object's dense elements must
+    // map to the aggregate property for index types.
+    return JSID_IS_INT(id) ? JSID_VOID : id;
 }
 
 const char * TypeIdStringImpl(jsid id);
@@ -348,6 +316,17 @@ GetClassForProtoKey(JSProtoKey key)
       case JSProto_Float64Array:
       case JSProto_Uint8ClampedArray:
         return &TypedArrayObject::classes[key - JSProto_Int8Array];
+
+      case JSProto_SharedInt8Array:
+      case JSProto_SharedUint8Array:
+      case JSProto_SharedInt16Array:
+      case JSProto_SharedUint16Array:
+      case JSProto_SharedInt32Array:
+      case JSProto_SharedUint32Array:
+      case JSProto_SharedFloat32Array:
+      case JSProto_SharedFloat64Array:
+      case JSProto_SharedUint8ClampedArray:
+        return &SharedTypedArrayObject::classes[key - JSProto_SharedInt8Array];
 
       case JSProto_ArrayBuffer:
         return &ArrayBufferObject::class_;
@@ -709,10 +688,9 @@ TypeScript::InitObject(JSContext *cx, JSScript *script, jsbytecode *pc, JSProtoK
 {
     JS_ASSERT(!UseNewTypeForInitializer(script, pc, kind));
 
-    /* :XXX: Limit script->length so we don't need to check the offset up front? */
     uint32_t offset = script->pcToOffset(pc);
 
-    if (!script->compileAndGo() || offset >= AllocationSiteKey::OFFSET_LIMIT)
+    if (offset >= AllocationSiteKey::OFFSET_LIMIT)
         return GetTypeNewObject(cx, kind);
 
     AllocationSiteKey key;
@@ -1229,7 +1207,7 @@ TypeObject::getProperty(ExclusiveContext *cx, jsid id)
 {
     JS_ASSERT(cx->compartment()->activeAnalysis);
 
-    JS_ASSERT(JSID_IS_VOID(id) || JSID_IS_EMPTY(id) || JSID_IS_STRING(id));
+    JS_ASSERT(JSID_IS_VOID(id) || JSID_IS_EMPTY(id) || JSID_IS_STRING(id) || JSID_IS_SYMBOL(id));
     JS_ASSERT_IF(!JSID_IS_EMPTY(id), id == IdToTypeId(id));
     JS_ASSERT(!unknownProperties());
 
@@ -1270,7 +1248,7 @@ TypeObject::getProperty(ExclusiveContext *cx, jsid id)
 inline HeapTypeSet *
 TypeObject::maybeGetProperty(jsid id)
 {
-    JS_ASSERT(JSID_IS_VOID(id) || JSID_IS_EMPTY(id) || JSID_IS_STRING(id));
+    JS_ASSERT(JSID_IS_VOID(id) || JSID_IS_EMPTY(id) || JSID_IS_STRING(id) || JSID_IS_SYMBOL(id));
     JS_ASSERT_IF(!JSID_IS_EMPTY(id), id == IdToTypeId(id));
     JS_ASSERT(!unknownProperties());
 
@@ -1344,9 +1322,5 @@ struct GCMethods<types::Type>
 };
 
 } // namespace js
-
-namespace JS {
-template<> class AnchorPermitted<js::types::TypeObject *> { };
-}  // namespace JS
 
 #endif /* jsinferinlines_h */

@@ -291,7 +291,8 @@ TextureClient::CreateForDrawing(ISurfaceAllocator* aAllocator,
   }
 
   if (!texture && aFormat == SurfaceFormat::B8G8R8X8 &&
-      aAllocator->IsSameProcess()) {
+      aAllocator->IsSameProcess() &&
+      aMoz2DBackend == gfx::BackendType::CAIRO) {
     texture = new DIBTextureClient(aFormat, aTextureFlags);
   }
 
@@ -687,6 +688,9 @@ BufferTextureClient::BorrowDrawTarget()
 {
   MOZ_ASSERT(IsValid());
   MOZ_ASSERT(mLocked, "BorrowDrawTarget should be called on locked textures only");
+  if (!mLocked) {
+    return nullptr;
+  }
 
   if (mDrawTarget) {
     mDrawTarget->SetTransform(Matrix());

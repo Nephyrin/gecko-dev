@@ -414,7 +414,7 @@ class Descriptor(DescriptorProvider):
         if self.interface.isJSImplemented():
             addExtendedAttribute('implicitJSContext', ['constructor'])
         else:
-            for attribute in ['implicitJSContext', 'resultNotAddRefed']:
+            for attribute in ['implicitJSContext']:
                 addExtendedAttribute(attribute, desc.get(attribute, {}))
 
         self._binaryNames = desc.get('binaryNames', {})
@@ -469,6 +469,16 @@ class Descriptor(DescriptorProvider):
                     if (m.getExtendedAttribute("CheckPermissions") or
                         m.getExtendedAttribute("AvailableIn") == "PrivilegedApps"):
                         self.featureDetectibleThings.add("%s.%s" % (self.interface.identifier.name, m.identifier.name))
+
+            for member in self.interface.members:
+                if not member.isAttr() and not member.isMethod():
+                    continue
+                binaryName = member.getExtendedAttribute("BinaryName")
+                if binaryName:
+                    assert isinstance(binaryName, list)
+                    assert len(binaryName) == 1
+                    self._binaryNames.setdefault(member.identifier.name,
+                                                 binaryName[0])
 
         # Build the prototype chain.
         self.prototypeChain = []
