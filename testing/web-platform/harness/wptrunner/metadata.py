@@ -15,6 +15,7 @@ from mozlog.structured import structuredlog
 
 import expected
 import manifestupdate
+import testloader
 import wptmanifest
 import wpttest
 from vcs import git
@@ -23,55 +24,51 @@ manifest = None  # Module that will be imported relative to test_root
 logger = structuredlog.StructuredLogger("web-platform-tests")
 
 
-def manifest_path(metadata_root):
-    return os.path.join(metadata_root, "MANIFEST.json")
+def load_test_manifests(serve_root, test_paths):
+    do_delayed_imports(serve_root)
+    manifest_loader = testloader.ManifestLoader(test_paths, False)
+    return manifest_loader.load()
 
 
-def load_test_manifest(test_root, metadata_root):
-    do_test_relative_imports(test_root)
-    return manifest.load(manifest_path(metadata_root))
 
-
-def update_manifest(git_root, metadata_root):
-    manifest.setup_git(git_root)
-    # Create an entirely new manifest
-    new_manifest = manifest.Manifest(None)
-    manifest.update(new_manifest)
-    manifest.write(new_manifest, manifest_path(metadata_root))
-    return new_manifest
-
-
-def update_expected(test_root, metadata_root, log_file_names, rev_old=None, rev_new="HEAD",
-                    ignore_existing=False):
+def update_expected(test_paths, serve_root, log_file_names,
+                    rev_old=None, rev_new="HEAD", ignore_existing=False,
+                    sync_root=None):
     """Update the metadata files for web-platform-tests based on
     the results obtained in a previous run"""
 
-    manifest = load_test_manifest(test_root, metadata_root)
+    manifests = load_test_manifests(serve_root, test_paths)
 
-    if rev_old is not None:
-        rev_old = git("rev-parse", rev_old, repo=test_root).strip()
-    rev_new = git("rev-parse", rev_new, repo=test_root).strip()
+    change_data = {}
 
-    if rev_old is not None:
-        change_data = load_change_data(rev_old, rev_new, repo=test_root)
-    else:
-        change_data = {}
+    if sync_root is not None:
+        if rev_old is not None:
+            rev_old = git("rev-parse", rev_old, repo=sync_root).strip()
+        rev_new = git("rev-parse", rev_new, repo=sync_root).strip()
 
-    expected_map = update_from_logs(metadata_root, manifest, *log_file_names,
-                                    ignore_existing=ignore_existing)
+        if rev_old is not None:
+            change_data = load_change_data(rev_old, rev_new, repo=sync_root)
 
-    write_changes(metadata_root, expected_map)
+
+    expected_map_by_manifest = update_from_logs(manifests,
+                                                *log_file_names,
+                                                ignore_existing=ignore_existing)
+
+    for test_manifest, expected_map in expected_map_by_manifest.iteritems():
+        url_base = manifests[test_manifest]["url_base"]
+        metadata_path = test_paths[url_base]["metadata_path"]
+        write_changes(metadata_path, expected_map)
 
     results_changed = [item.test_path for item in expected_map.itervalues() if item.modified]
 
-    return unexpected_changes(change_data, results_changed)
+    return unexpected_changes(manifests, change_data, results_changed)
 
 
-def do_test_relative_imports(test_root):
+def do_delayed_imports(serve_root):
     global manifest
 
-    sys.path.insert(0, os.path.join(test_root))
-    sys.path.insert(0, os.path.join(test_root, "tools", "scripts"))
+    sys.path.insert(0, os.path.join(serve_root))
+    sys.path.insert(0, os.path.join(serve_root, "tools", "scripts"))
     import manifest
 
 
@@ -104,8 +101,21 @@ def load_change_data(rev_old, rev_new, repo):
     return rv
 
 
-def unexpected_changes(change_data, files_changed):
-    return [fn for fn in files_changed if change_data.get(fn) != "M"]
+def unexpected_changes(manifests, change_data, files_changed):
+    files_changed = set(files_changed)
+
+    root_manifest = None
+    for manifest, paths in manifests.iteritems():
+        if paths["url_base"] == "/":
+            root_manifest = manifest
+            break
+
+    if root_manifest is None:
+        return []
+
+    rv = []
+
+    return [fn for fn, tests in manifest if fn in files_changed and change_data.get(fn) != "M"]
 
 # For each testrun
 # Load all files and scan for the suite_start entry
@@ -121,10 +131,20 @@ def unexpected_changes(change_data, files_changed):
 #   Check if all the RHS values are the same; if so collapse the conditionals
 
 
-def update_from_logs(metadata_path, manifest, *log_filenames, **kwargs):
+def update_from_logs(manifests, *log_filenames, **kwargs):
     ignore_existing = kwargs.pop("ignore_existing", False)
 
-    expected_map, id_path_map = create_test_tree(metadata_path, manifest)
+    expected_map_by_manifest = {}
+    expected_map = {}
+    id_path_map = {}
+
+    for test_manifest, paths in manifests.iteritems():
+        expected_map_manifest, id_path_map_manifest = create_test_tree(paths["metadata_path"],
+                                                                       test_manifest)
+        expected_map_by_manifest[test_manifest] = expected_map_manifest
+        expected_map.update(expected_map_manifest)
+        id_path_map.update(id_path_map_manifest)
+
     updater = ExpectedUpdater(expected_map, id_path_map, ignore_existing=ignore_existing)
     for log_filename in log_filenames:
         with open(log_filename) as f:
@@ -136,7 +156,7 @@ def update_from_logs(metadata_path, manifest, *log_filenames, **kwargs):
                 subtest.coalesce_expected()
             test.coalesce_expected()
 
-    return expected_map
+    return expected_map_by_manifest
 
 
 def write_changes(metadata_path, expected_map):
@@ -243,12 +263,12 @@ class ExpectedUpdater(object):
         del self.test_cache[test_id]
 
 
-def create_test_tree(metadata_path, manifest):
+def create_test_tree(metadata_path, test_manifest):
     expected_map = {}
     test_id_path_map = {}
     exclude_types = frozenset(["stub", "helper", "manual"])
     include_types = set(manifest.item_types) ^ exclude_types
-    for test_path, tests in manifest.itertypes(*include_types):
+    for test_path, tests in test_manifest.itertypes(*include_types):
 
         expected_data = load_expected(metadata_path, test_path, tests)
         if expected_data is None:
@@ -257,7 +277,7 @@ def create_test_tree(metadata_path, manifest):
         expected_map[test_path] = expected_data
 
         for test in tests:
-            test_id_path_map[test.id] = test_path
+            test_id_path_map[test.id] = test.path
 
     return expected_map, test_id_path_map
 
