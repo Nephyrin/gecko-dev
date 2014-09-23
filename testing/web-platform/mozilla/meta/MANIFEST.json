@@ -1,5 +1,70 @@
 {
-  "items": {},
+  "items": {
+    "helper": [
+      {
+        "url": "/_mozilla/editing/conformancetest/data.js"
+      },
+      {
+        "url": "/_mozilla/editing/selecttest/common.js"
+      },
+      {
+        "url": "/_mozilla/editing/css/reset.css"
+      },
+      {
+        "url": "/_mozilla/editing/mochitest.ini"
+      },
+      {
+        "url": "/_mozilla/editing/tests.js"
+      },
+      {
+        "url": "/_mozilla/editing/implementation.js"
+      }
+    ],
+    "testharness": [
+      {
+        "url": "/_mozilla/editing/selecttest/test_removeAllRanges.html"
+      },
+      {
+        "url": "/_mozilla/editing/selecttest/test_collapseToStartEnd.html"
+      },
+      {
+        "url": "/_mozilla/editing/selecttest/test_selectAllChildren.html"
+      },
+      {
+        "url": "/_mozilla/editing/selecttest/test_getRangeAt.html"
+      },
+      {
+        "url": "/_mozilla/editing/selecttest/test_collapse.html"
+      },
+      {
+        "url": "/_mozilla/editing/selecttest/test_isCollapsed.html"
+      },
+      {
+        "url": "/_mozilla/editing/selecttest/test_interfaces.html"
+      },
+      {
+        "url": "/_mozilla/editing/selecttest/test_Document-open.html"
+      },
+      {
+        "url": "/_mozilla/editing/conformancetest/test_event.sub.html"
+      },
+      {
+        "url": "/_mozilla/editing/selecttest/test_getSelection.html"
+      },
+      {
+        "url": "/_mozilla/editing/selecttest/test_addRange.html"
+      },
+      {
+        "url": "/_mozilla/editing/conformancetest/test_runtest.html"
+      },
+      {
+        "url": "/_mozilla/editing/selecttest/test_deleteFromDocument.html"
+      },
+      {
+        "url": "/_mozilla/editing/selecttest/test_extend.html"
+      }
+    ]
+  },
   "local_changes": {
     "deleted": [],
     "items": {}
