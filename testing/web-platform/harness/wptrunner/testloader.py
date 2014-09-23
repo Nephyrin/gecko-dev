@@ -8,6 +8,7 @@ from multiprocessing import Queue
 import manifestinclude
 import manifestexpected
 import wpttest
+from mozlog import structured
 
 manifest = None
 
@@ -217,6 +218,7 @@ class ManifestLoader(object):
         do_delayed_imports()
         self.test_paths = test_paths
         self.force_manifest_update = force_manifest_update
+        self.logger = structured.get_default_logger()
 
     def load(self):
         rv = {}
@@ -229,7 +231,7 @@ class ManifestLoader(object):
         return rv
 
     def create_manifest(self, manifest_path, tests_path, url_base="/"):
-        logger.info("Creating test manifest %s" % manifest_path)
+        self.logger.info("Creating test manifest %s" % manifest_path)
         manifest_file = manifest.Manifest(None, url_base)
         manifest.update(tests_path, url_base, manifest_file)
         manifest.write(manifest_file, manifest_path)
@@ -241,8 +243,8 @@ class ManifestLoader(object):
             self.create_manifest(manifest_path, tests_path, url_base)
         manifest_file = manifest.load(manifest_path)
         if manifest_file.url_base != url_base:
-            logger.info("Updating url_base in manifest from %s to %s" % (manifest_file.url_base,
-                                                                         url_base))
+            self.logger.info("Updating url_base in manifest from %s to %s" % (manifest_file.url_base,
+                                                                              url_base))
             manifest_file.url_base = url_base
             manifest.write(manifest_file, manifest_path)
 
