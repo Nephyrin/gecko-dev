@@ -43,6 +43,9 @@
 #include "mozilla/Atomics.h"
 #include "mozilla/Attributes.h"
 #include "AccessCheck.h"
+#ifdef _WIN64
+#include "AsmJSSignalHandlers.h"
+#endif
 #include "nsGlobalWindow.h"
 #include "nsAboutProtocolUtils.h"
 
@@ -3240,6 +3243,9 @@ XPCJSRuntime::XPCJSRuntime(nsXPConnect* aXPConnect)
     js::SetPreserveWrapperCallback(runtime, PreserveWrapper);
 #ifdef MOZ_CRASHREPORTER
     JS_EnumerateDiagnosticMemoryRegions(DiagnosticMemoryCallback);
+#ifdef _WIN64
+    CrashReporter::RegisterExceptionHandledFlag(&AsmJSHandledException);
+#endif // _WIN64
 #endif
 #ifdef MOZ_ENABLE_PROFILER_SPS
     if (PseudoStack *stack = mozilla_get_pseudo_stack())
