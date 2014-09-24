@@ -228,6 +228,10 @@ void AddLibraryMapping(const char* library_name,
                        size_t      file_offset);
 
 #endif
+
+#if defined(_WIN64)
+void RegisterExceptionHandledFlag(bool* flagptr);
+#endif
 }
 
 #endif /* nsExceptionHandler_h__ */

@@ -21,6 +21,10 @@
 
 struct JSRuntime;
 
+#ifdef _WIN64
+#include "jstypes.h"
+#endif
+
 #ifdef XP_MACOSX
 # include <mach/mach.h>
 # include "jslock.h"
@@ -37,6 +41,38 @@ EnsureAsmJSSignalHandlersInstalled(JSRuntime *rt);
 // js::HandleExecutionInterrupt.
 extern void
 RequestInterruptForAsmJSCode(JSRuntime *rt, int interruptMode);
+
+// The exception handling situation on Win64 is slightly goofy. There are three
+// major phases of exception handling:
+//
+// - vectored exception handlers;
+// - structured exception handling, used for e.g. C++ exceptions; and
+// - vectored continue handlers.
+//
+// If any vectored exception handler indicates execution may continue, the
+// structured exception handling phase is skipped.  If all vectored exception
+// handlers indicate that the search for a proper exception handler should
+// continue, then the structured exception handling mechanisms, which unwind
+// the stack via platform-mandated unwind information, are invoked.  In both
+// cases, the vectored continue handlers are invoked after the other phases.
+//
+// asm.js uses a vectored exception handler to catch access violations and
+// resume execution if the access violations occurred within asm.js code.
+//
+// The Gecko crashreporter uses vectored continue handlers as a last-chance
+// point at which to dump crash reports. However, note that, given the above
+// description, the crashreporter's handler will execute even if asm.js's
+// vectored exception handler fixes things up nicely.  Therefore, we need
+// some method of communicating to the Gecko crashreporter (or any other
+// JS engine client on Win64 that uses vectored continue handlers, really)
+// that asm.js has successfully handled this exception and no other action
+// is necessary.
+//
+// Please note: the client is responsible for resetting this value to false
+// after examining it!
+#ifdef _WIN64
+extern JS_PUBLIC_DATA(bool) AsmJSHandledException;
+#endif
 
 // On OSX we are forced to use the lower-level Mach exception mechanism instead
 // of Unix signals. Mach exceptions are not handled on the victim's stack but
