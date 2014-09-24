@@ -148,6 +148,9 @@ void ExceptionHandler::Initialize(const wstring& dump_path,
   assertion_ = NULL;
   handler_return_value_ = false;
   handle_debug_exceptions_ = false;
+#ifdef _WIN64
+  exception_handled_flagptr_ = NULL;
+#endif
 
   // Attempt to use out-of-process if user has specified a pipe.
   if (pipe_name != NULL || pipe_handle != NULL) {
@@ -253,8 +256,12 @@ void ExceptionHandler::Initialize(const wstring& dump_path,
     }
     handler_stack_->push_back(this);
 
-    if (handler_types & HANDLER_EXCEPTION)
+    if (handler_types & HANDLER_EXCEPTION) {
+#ifdef _WIN64
+      AddVectoredContinueHandler(/*first=*/0, HandleVectoredContinue);
+#endif
       previous_filter_ = SetUnhandledExceptionFilter(HandleException);
+    }
 
 #if _MSC_VER >= 1400  // MSVC 2005/8
     if (handler_types & HANDLER_INVALID_PARAMETER)
@@ -280,8 +287,12 @@ ExceptionHandler::~ExceptionHandler() {
   if (handler_types_ != HANDLER_NONE) {
     EnterCriticalSection(&handler_stack_critical_section_);
 
-    if (handler_types_ & HANDLER_EXCEPTION)
+    if (handler_types_ & HANDLER_EXCEPTION) {
+#ifdef _WIN64
+      RemoveVectoredContinueHandler(HandleVectoredContinue);
+#endif
       SetUnhandledExceptionFilter(previous_filter_);
+    }
 
 #if _MSC_VER >= 1400  // MSVC 2005/8
     if (handler_types_ & HANDLER_INVALID_PARAMETER)
@@ -443,40 +454,46 @@ class AutoExceptionHandler {
   ExceptionHandler* handler_;
 };
 
-// static
-LONG ExceptionHandler::HandleException(EXCEPTION_POINTERS* exinfo) {
-  AutoExceptionHandler auto_exception_handler;
-  ExceptionHandler* current_handler = auto_exception_handler.get_handler();
-
+bool ExceptionHandler::AttemptToWriteCrashReport(EXCEPTION_POINTERS* exinfo) {
   // Ignore EXCEPTION_BREAKPOINT and EXCEPTION_SINGLE_STEP exceptions.  This
   // logic will short-circuit before calling WriteMinidumpOnHandlerThread,
   // allowing something else to handle the breakpoint without incurring the
   // overhead transitioning to and from the handler thread.  This behavior
   // can be overridden by calling ExceptionHandler::set_handle_debug_exceptions.
   DWORD code = exinfo->ExceptionRecord->ExceptionCode;
-  LONG action;
   bool is_debug_exception = (code == EXCEPTION_BREAKPOINT) ||
                             (code == EXCEPTION_SINGLE_STEP);
 
   bool success = false;
 
   if (!is_debug_exception ||
-      current_handler->get_handle_debug_exceptions()) {
+      get_handle_debug_exceptions()) {
     // If out-of-proc crash handler client is available, we have to use that
     // to generate dump and we cannot fall back on in-proc dump generation
     // because we never prepared for an in-proc dump generation
 
     // In case of out-of-process dump generation, directly call
     // WriteMinidumpWithException since there is no separate thread running.
-    if (current_handler->IsOutOfProcess()) {
-      success = current_handler->WriteMinidumpWithException(
+    if (IsOutOfProcess()) {
+      success = WriteMinidumpWithException(
           GetCurrentThreadId(),
           exinfo,
           NULL);
     } else {
-      success = current_handler->WriteMinidumpOnHandlerThread(exinfo, NULL);
+      success = WriteMinidumpOnHandlerThread(exinfo, NULL);
     }
   }
+
+  return success;
+}
+
+// static
+LONG ExceptionHandler::HandleException(EXCEPTION_POINTERS* exinfo) {
+  AutoExceptionHandler auto_exception_handler;
+  ExceptionHandler* current_handler = auto_exception_handler.get_handler();
+
+  LONG action;
+  bool success = current_handler->AttemptToWriteCrashReport(exinfo);
 
   // The handler fully handled the exception.  Returning
   // EXCEPTION_EXECUTE_HANDLER indicates this to the system, and usually
@@ -505,6 +522,36 @@ LONG ExceptionHandler::HandleException(EXCEPTION_POINTERS* exinfo) {
 
   return action;
 }
+
+#ifdef _WIN64
+// static
+LONG ExceptionHandler::HandleVectoredContinue(EXCEPTION_POINTERS* exinfo) {
+  AutoExceptionHandler auto_exception_handler;
+  ExceptionHandler* current_handler = auto_exception_handler.get_handler();
+
+  // Vectored continue handlers can be called even if an earlier vectored
+  // exception handler returned EXCEPTION_CONTINUE_EXECUTION. (Fortunately,
+  // vectored continue handlers are not called if regular structured
+  // exception handling succeeds in handling the exception.) Therefore,
+  // we check to see whether a previous vectored exception handler has
+  // taken care of this exception. It is our responsibility to flip the
+  // flag back to false once we are done.
+  if (current_handler->exception_handled_flagptr_ &&
+      *current_handler->exception_handled_flagptr_) {
+    *current_handler->exception_handled_flagptr_ = false;
+    // Nothing to do here.
+    return EXCEPTION_CONTINUE_SEARCH;
+  }
+
+  // Nothing handled this exception. Attempt to write out a crash report.
+  // This write might fail, because we have a debug exception or because
+  // the filesystem rejects our write requests, for instance. Whatever the
+  // failure mode, we cannot usefully recover from that failure here, so
+  // ignore the return value.
+  (void) current_handler->AttemptToWriteCrashReport(exinfo);
+  return EXCEPTION_CONTINUE_SEARCH;
+}
+#endif // _WIN64
 
 #if _MSC_VER >= 1400  // MSVC 2005/8
 // static

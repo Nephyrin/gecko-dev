@@ -3303,4 +3303,13 @@ void AddLibraryMapping(const char* library_name,
 }
 #endif
 
+#if defined(_WIN64)
+void RegisterExceptionHandledFlag(bool* flagptr)
+{
+  if (gExceptionHandler) {
+    gExceptionHandler->set_exception_handled_flag(flagptr);
+  }
+}
+#endif
+
 } // namespace CrashReporter
