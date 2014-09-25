@@ -157,10 +157,6 @@ using mozilla::DebugOnly;
 # error "Don't know how to read/write to the thread state via the mcontext_t."
 #endif
 
-#if defined(_WIN64)
-bool js::AsmJSHandledException = false;
-#endif
-
 // For platforms where the signal/exception handler runs on the same
 // thread/stack as the victim (Unix and Windows), we can use TLS to find any
 // currently executing asm.js code.
@@ -518,13 +514,8 @@ HandleException(PEXCEPTION_POINTERS exception)
 static LONG WINAPI
 AsmJSExceptionHandler(LPEXCEPTION_POINTERS exception)
 {
-    if (HandleException(exception)) {
-        // We need to inform other places, notably the crash reporter, that
-        // this exception has been handled.  These other places are
-        // responsible for clearing this flag when they are done.
-        AsmJSHandledException = true;
+    if (HandleException(exception))
         return EXCEPTION_CONTINUE_EXECUTION;
-    }
 
     // No need to worry about calling other handlers, the OS does this for us.
     return EXCEPTION_CONTINUE_SEARCH;

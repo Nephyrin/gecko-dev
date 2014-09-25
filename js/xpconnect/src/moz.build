@@ -79,7 +79,6 @@ LOCAL_INCLUDES += [
     '/dom/base',
     '/dom/workers',
     '/js/ipc',
-    '/js/src/asmjs',
     '/layout/base',
     '/layout/style',
     '/xpcom/reflect/xptinfo',
