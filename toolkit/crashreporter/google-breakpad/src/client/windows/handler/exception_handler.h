@@ -244,12 +244,6 @@ class ExceptionHandler {
     handle_debug_exceptions_ = handle_debug_exceptions;
   }
 
-#ifdef _WIN64
-  void set_exception_handled_flag(bool* flagptr) {
-    exception_handled_flagptr_ = flagptr;
-  }
-#endif
-
   // Returns whether out-of-process dump generation is used or not.
   bool IsOutOfProcess() const { return crash_generation_client_.get() != NULL; }
 
@@ -292,14 +286,6 @@ class ExceptionHandler {
   // Called on the exception thread when an unhandled exception occurs.
   // Signals the exception handler thread to handle the exception.
   static LONG WINAPI HandleException(EXCEPTION_POINTERS* exinfo);
-
-  bool AttemptToWriteCrashReport(EXCEPTION_POINTERS* exinfo);
-
-#ifdef _WIN64
-  static LONG WINAPI HandleVectoredContinue(EXCEPTION_POINTERS* exinfo);
-
-  bool* exception_handled_flagptr_;
-#endif
 
 #if _MSC_VER >= 1400  // MSVC 2005/8
   // This function will be called by some CRT functions when they detect
