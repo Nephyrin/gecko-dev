@@ -141,6 +141,10 @@ var gMainPane = {
         for (let prefToChange of prefsToChange) {
           prefToChange.value = e10sCheckbox.checked;
         }
+        if (!e10sCheckbox.checked) {
+          Services.prefs.setBoolPref("browser.requestE10sFeedback", true);
+          Services.prompt.alert(window, brandName, "After restart, a tab will open to input.mozilla.org where you can provide us feedback about your e10s experience.");
+        }
         Services.startup.quit(Ci.nsIAppStartup.eAttemptQuit |  Ci.nsIAppStartup.eRestart);
       }
     }
@@ -644,7 +648,12 @@ var gMainPane = {
     let shellSvc = getShellService();
     if (!shellSvc)
       return;
-    shellSvc.setDefaultBrowser(true, false);
+    try {
+      shellSvc.setDefaultBrowser(true, false);
+    } catch (ex) {
+      Cu.reportError(ex);
+      return;
+    }
     let selectedIndex =
       shellSvc.isDefaultBrowser(false, true) ? 1 : 0;
     document.getElementById("setDefaultPane").selectedIndex = selectedIndex;

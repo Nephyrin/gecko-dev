@@ -127,11 +127,6 @@ const RIL_IPC_ICCMANAGER_MSG_NAMES = [
   "RIL:MatchMvno"
 ];
 
-const RIL_IPC_VOICEMAIL_MSG_NAMES = [
-  "RIL:RegisterVoicemailMsg",
-  "RIL:GetVoicemailInfo"
-];
-
 const RIL_IPC_CELLBROADCAST_MSG_NAMES = [
   "RIL:RegisterCellBroadcastMsg"
 ];
@@ -250,9 +245,6 @@ XPCOMUtils.defineLazyGetter(this, "gMessageManager", function() {
       for (let msgName of RIL_IPC_ICCMANAGER_MSG_NAMES) {
         ppmm.addMessageListener(msgName, this);
       }
-      for (let msgname of RIL_IPC_VOICEMAIL_MSG_NAMES) {
-        ppmm.addMessageListener(msgname, this);
-      }
       for (let msgname of RIL_IPC_CELLBROADCAST_MSG_NAMES) {
         ppmm.addMessageListener(msgname, this);
       }
@@ -262,9 +254,6 @@ XPCOMUtils.defineLazyGetter(this, "gMessageManager", function() {
       ppmm.removeMessageListener("child-process-shutdown", this);
       for (let msgName of RIL_IPC_ICCMANAGER_MSG_NAMES) {
         ppmm.removeMessageListener(msgName, this);
-      }
-      for (let msgname of RIL_IPC_VOICEMAIL_MSG_NAMES) {
-        ppmm.removeMessageListener(msgname, this);
       }
       for (let msgname of RIL_IPC_CELLBROADCAST_MSG_NAMES) {
         ppmm.removeMessageListener(msgname, this);
@@ -384,14 +373,6 @@ XPCOMUtils.defineLazyGetter(this, "gMessageManager", function() {
           }
           return null;
         }
-      } else if (RIL_IPC_VOICEMAIL_MSG_NAMES.indexOf(msg.name) != -1) {
-        if (!msg.target.assertPermission("voicemail")) {
-          if (DEBUG) {
-            debug("Voicemail message " + msg.name +
-                  " from a content process with no 'voicemail' privileges.");
-          }
-          return null;
-        }
       } else if (RIL_IPC_CELLBROADCAST_MSG_NAMES.indexOf(msg.name) != -1) {
         if (!msg.target.assertPermission("cellbroadcast")) {
           if (DEBUG) {
@@ -408,9 +389,6 @@ XPCOMUtils.defineLazyGetter(this, "gMessageManager", function() {
       switch (msg.name) {
         case "RIL:RegisterIccMsg":
           this._registerMessageTarget("icc", msg.target);
-          return null;
-        case "RIL:RegisterVoicemailMsg":
-          this._registerMessageTarget("voicemail", msg.target);
           return null;
         case "RIL:RegisterCellBroadcastMsg":
           this._registerMessageTarget("cellbroadcast", msg.target);
@@ -445,13 +423,6 @@ XPCOMUtils.defineLazyGetter(this, "gMessageManager", function() {
 
     sendMobileConnectionMessage: function(message, clientId, data) {
       this._sendTargetMessage("mobileconnection", message, {
-        clientId: clientId,
-        data: data
-      });
-    },
-
-    sendVoicemailMessage: function(message, clientId, data) {
-      this._sendTargetMessage("voicemail", message, {
         clientId: clientId,
         data: data
       });
@@ -960,8 +931,10 @@ XPCOMUtils.defineLazyGetter(this, "gDataConnectionManager", function () {
     observe: function(subject, topic, data) {
       switch (topic) {
         case kMozSettingsChangedObserverTopic:
-          let setting = JSON.parse(data);
-          this.handle(setting.key, setting.value);
+          if ("wrappedJSObject" in subject) {
+            subject = subject.wrappedJSObject;
+          }
+          this.handle(subject.key, subject.value);
           break;
         case NS_XPCOM_SHUTDOWN_OBSERVER_ID:
           this._shutdown();
@@ -1881,11 +1854,6 @@ function RadioInterface(aClientId, aWorkerMessenger) {
     imsi:           null
   };
 
-  this.voicemailInfo = {
-    number: null,
-    displayName: null
-  };
-
   this.operatorInfo = {};
 
   let lock = gSettingsService.createLock();
@@ -2065,9 +2033,6 @@ RadioInterface.prototype = {
       case "RIL:MatchMvno":
         this.matchMvno(msg.target, msg.json.data);
         break;
-      case "RIL:GetVoicemailInfo":
-        // This message is sync.
-        return this.voicemailInfo;
     }
     return null;
   },
@@ -2181,8 +2146,7 @@ RadioInterface.prototype = {
         this.handleIccMbdn(message);
         break;
       case "iccmwis":
-        gMessageManager.sendVoicemailMessage("RIL:VoicemailNotification",
-                                             this.clientId, message.mwi);
+        this.handleIccMwis(message.mwi);
         break;
       case "stkcommand":
         this.handleStkProactiveCommand(message);
@@ -2761,8 +2725,7 @@ RadioInterface.prototype = {
 
       mwi.returnNumber = message.sender;
       mwi.returnMessage = message.fullBody;
-      gMessageManager.sendVoicemailMessage("RIL:VoicemailNotification",
-                                           this.clientId, mwi);
+      this.handleIccMwis(mwi);
 
       // Dicarded MWI comes without text body.
       // Hence, we discard it here after notifying the MWI status.
@@ -2966,13 +2929,16 @@ RadioInterface.prototype = {
   },
 
   handleIccMbdn: function(message) {
-    let voicemailInfo = this.voicemailInfo;
+    let service = Cc["@mozilla.org/voicemail/voicemailservice;1"]
+                  .getService(Ci.nsIGonkVoicemailService);
+    service.notifyInfoChanged(this.clientId, message.number, message.alphaId);
+  },
 
-    voicemailInfo.number = message.number;
-    voicemailInfo.displayName = message.alphaId;
-
-    gMessageManager.sendVoicemailMessage("RIL:VoicemailInfoChanged",
-                                         this.clientId, voicemailInfo);
+  handleIccMwis: function(mwi) {
+    let service = Cc["@mozilla.org/voicemail/voicemailservice;1"]
+                  .getService(Ci.nsIGonkVoicemailService);
+    service.notifyStatusChanged(this.clientId, mwi.active, mwi.msgCount,
+                                mwi.returnNumber, mwi.returnMessage);
   },
 
   handleIccInfoChange: function(message) {
@@ -3052,8 +3018,10 @@ RadioInterface.prototype = {
   observe: function(subject, topic, data) {
     switch (topic) {
       case kMozSettingsChangedObserverTopic:
-        let setting = JSON.parse(data);
-        this.handleSettingsChange(setting.key, setting.value, setting.isInternalChange);
+        if ("wrappedJSObject" in subject) {
+          subject = subject.wrappedJSObject;
+        }
+        this.handleSettingsChange(subject.key, subject.value, subject.isInternalChange);
         break;
       case kSysClockChangeObserverTopic:
         let offset = parseInt(data, 10);
@@ -4201,7 +4169,15 @@ DataCall.prototype = {
       return;
     }
     if (this.state == RIL.GECKO_NETWORK_STATE_CONNECTED) {
-      networkInterface.notifyRILNetworkInterface();
+      // This needs to run asynchronously, to behave the same way as the case of
+      // non-shared apn, see bug 1059110.
+      Services.tm.currentThread.dispatch(function(state) {
+        // Do not notify if state changed while this event was being dispatched,
+        // the state probably was notified already or need not to be notified.
+        if (networkInterface.state == state) {
+          networkInterface.notifyRILNetworkInterface();
+        }
+      }.bind(null, RIL.GECKO_NETWORK_STATE_CONNECTED), Ci.nsIEventTarget.DISPATCH_NORMAL);
       return;
     }
 
@@ -4313,7 +4289,13 @@ DataCall.prototype = {
       // Notify the DISCONNECTED event immediately after network interface is
       // removed from requestedNetworkIfaces, to make the DataCall, shared or
       // not, to have the same behavior.
-      networkInterface.notifyRILNetworkInterface();
+      Services.tm.currentThread.dispatch(function(state) {
+        // Do not notify if state changed while this event was being dispatched,
+        // the state probably was notified already or need not to be notified.
+        if (networkInterface.state == state) {
+          networkInterface.notifyRILNetworkInterface();
+        }
+      }.bind(null, RIL.GECKO_NETWORK_STATE_DISCONNECTED), Ci.nsIEventTarget.DISPATCH_NORMAL);
     }
 
     // Only deactivate data call if no more network interface needs this

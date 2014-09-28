@@ -750,26 +750,32 @@ class TreeMetadataEmitter(LoggingMixin):
         # Keys are variable prefixes and values are tuples describing how these
         # manifests should be handled:
         #
-        #    (flavor, install_prefix, active)
+        #    (flavor, install_prefix, active, package_tests)
         #
         # flavor identifies the flavor of this test.
         # install_prefix is the path prefix of where to install the files in
         #     the tests directory.
         # active indicates whether to filter out inactive tests from the
         #     manifest.
+        # package_tests indicates whether to package test files into the test
+        #     package; suites that compile the test files should not install
+        #     them into the test package.
         #
         # We ideally don't filter out inactive tests. However, not every test
         # harness can yet deal with test filtering. Once all harnesses can do
         # this, this feature can be dropped.
         test_manifests = dict(
-            A11Y=('a11y', 'testing/mochitest', 'a11y', True),
-            BROWSER_CHROME=('browser-chrome', 'testing/mochitest', 'browser', True),
-            METRO_CHROME=('metro-chrome', 'testing/mochitest', 'metro', True),
-            MOCHITEST=('mochitest', 'testing/mochitest', 'tests', True),
-            MOCHITEST_CHROME=('chrome', 'testing/mochitest', 'chrome', True),
-            MOCHITEST_WEBAPPRT_CHROME=('webapprt-chrome', 'testing/mochitest', 'webapprtChrome', True),
-            WEBRTC_SIGNALLING_TEST=('steeplechase', 'steeplechase', '.', True),
-            XPCSHELL_TESTS=('xpcshell', 'xpcshell', '.', False),
+            A11Y=('a11y', 'testing/mochitest', 'a11y', True, True),
+            BROWSER_CHROME=('browser-chrome', 'testing/mochitest', 'browser', True, True),
+            ANDROID_INSTRUMENTATION=('instrumentation', 'instrumentation', '.', False, False),
+            JETPACK_PACKAGE=('jetpack-package', 'testing/mochitest', 'jetpack-package', True, True),
+            JETPACK_ADDON=('jetpack-addon', 'testing/mochitest', 'jetpack-addon', True, False),
+            METRO_CHROME=('metro-chrome', 'testing/mochitest', 'metro', True, True),
+            MOCHITEST=('mochitest', 'testing/mochitest', 'tests', True, True),
+            MOCHITEST_CHROME=('chrome', 'testing/mochitest', 'chrome', True, True),
+            MOCHITEST_WEBAPPRT_CHROME=('webapprt-chrome', 'testing/mochitest', 'webapprtChrome', True, True),
+            WEBRTC_SIGNALLING_TEST=('steeplechase', 'steeplechase', '.', True, True),
+            XPCSHELL_TESTS=('xpcshell', 'xpcshell', '.', False, True),
         )
 
         for prefix, info in test_manifests.items():
@@ -821,7 +827,7 @@ class TreeMetadataEmitter(LoggingMixin):
         return sub
 
     def _process_test_manifest(self, context, info, manifest_path):
-        flavor, install_root, install_subdir, filter_inactive = info
+        flavor, install_root, install_subdir, filter_inactive, package_tests = info
 
         manifest_path = mozpath.normpath(manifest_path)
         path = mozpath.normpath(mozpath.join(context.srcdir, manifest_path))
@@ -850,11 +856,14 @@ class TreeMetadataEmitter(LoggingMixin):
                 filtered = m.active_tests(exists=False, disabled=True,
                     **self.info)
 
-            missing = [t['name'] for t in filtered if not os.path.exists(t['path'])]
-            if missing:
-                raise SandboxValidationError('Test manifest (%s) lists '
-                    'test that does not exist: %s' % (
-                    path, ', '.join(missing)), context)
+            # Jetpack add-on tests are expected to be generated during the
+            # build process so they won't exist here.
+            if flavor != 'jetpack-addon':
+                missing = [t['name'] for t in filtered if not os.path.exists(t['path'])]
+                if missing:
+                    raise SandboxValidationError('Test manifest (%s) lists '
+                        'test that does not exist: %s' % (
+                        path, ', '.join(missing)), context)
 
             out_dir = mozpath.join(install_prefix, manifest_reldir)
             if 'install-to-subdir' in defaults:
@@ -925,8 +934,11 @@ class TreeMetadataEmitter(LoggingMixin):
             for test in filtered:
                 obj.tests.append(test)
 
-                obj.installs[mozpath.normpath(test['path'])] = \
-                    (mozpath.join(out_dir, test['relpath']), True)
+                # Some test files are compiled and should not be copied into the
+                # test package. They function as identifiers rather than files.
+                if package_tests:
+                    obj.installs[mozpath.normpath(test['path'])] = \
+                        (mozpath.join(out_dir, test['relpath']), True)
 
                 process_support_files(test)
 

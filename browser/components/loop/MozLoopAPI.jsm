@@ -458,6 +458,14 @@ function injectLoopAPI(targetWindow) {
       }
     },
 
+    openFxASettings: {
+      enumerable: true,
+      writable: true,
+      value: function() {
+        return MozLoopService.openFxASettings();
+      },
+    },
+
     /**
      * Copies passed string onto the system clipboard.
      *
@@ -532,6 +540,17 @@ function injectLoopAPI(targetWindow) {
       writable: true,
       value: function(histogramId, value) {
         Services.telemetry.getHistogramById(histogramId).add(value);
+      }
+    },
+
+    /**
+     * Returns a new GUID (UUID) in curly braces format.
+     */
+    generateUUID: {
+      enumerable: true,
+      writable: true,
+      value: function() {
+        return MozLoopService.generateUUID();
       }
     },
 

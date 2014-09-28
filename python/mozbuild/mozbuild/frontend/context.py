@@ -807,10 +807,22 @@ VARIABLES = {
         """List of manifest files defining browser chrome tests.
         """, None),
 
+    'JETPACK_PACKAGE_MANIFESTS': (StrictOrderingOnAppendList, list,
+        """List of manifest files defining jetpack package tests.
+        """, None),
+
+    'JETPACK_ADDON_MANIFESTS': (StrictOrderingOnAppendList, list,
+        """List of manifest files defining jetpack addon tests.
+        """, None),
+
     'CRASHTEST_MANIFESTS': (StrictOrderingOnAppendList, list,
         """List of manifest files defining crashtests.
 
         These are commonly named crashtests.list.
+        """, None),
+
+    'ANDROID_INSTRUMENTATION_MANIFESTS': (StrictOrderingOnAppendList, list,
+        """List of manifest files defining Android instrumentation tests.
         """, None),
 
     'METRO_CHROME_MANIFESTS': (StrictOrderingOnAppendList, list,

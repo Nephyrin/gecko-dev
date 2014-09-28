@@ -25,33 +25,25 @@ this.EXPORTED_SYMBOLS = [
 , "PlacesUntagURITransaction"
 ];
 
-const Ci = Components.interfaces;
-const Cc = Components.classes;
-const Cr = Components.results;
-const Cu = Components.utils;
+const { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
 
 Cu.import("resource://gre/modules/XPCOMUtils.jsm");
-
 XPCOMUtils.defineLazyModuleGetter(this, "Services",
                                   "resource://gre/modules/Services.jsm");
-
 XPCOMUtils.defineLazyModuleGetter(this, "NetUtil",
                                   "resource://gre/modules/NetUtil.jsm");
-
 XPCOMUtils.defineLazyModuleGetter(this, "OS",
                                   "resource://gre/modules/osfile.jsm");
-
 XPCOMUtils.defineLazyModuleGetter(this, "Sqlite",
                                   "resource://gre/modules/Sqlite.jsm");
-
 XPCOMUtils.defineLazyModuleGetter(this, "Task",
                                   "resource://gre/modules/Task.jsm");
-
 XPCOMUtils.defineLazyModuleGetter(this, "Promise",
                                   "resource://gre/modules/Promise.jsm");
-
 XPCOMUtils.defineLazyModuleGetter(this, "Deprecated",
                                   "resource://gre/modules/Deprecated.jsm");
+XPCOMUtils.defineLazyModuleGetter(this, "Bookmarks",
+                                  "resource://gre/modules/Bookmarks.jsm");
 
 // The minimum amount of transactions before starting a batch. Usually we do
 // do incremental updates, a batch will cause views to completely
@@ -1522,6 +1514,29 @@ this.PlacesUtils = {
   },
 
   /**
+   * Gets the favicon link url (moz-anno:) for a given page url.
+   *
+   * @param aPageURL url of the page to lookup the favicon for.
+   * @resolves to the nsIURL of the favicon link
+   * @rejects if the given url has no associated favicon.
+   */
+  promiseFaviconLinkUrl: function (aPageUrl) {
+    let deferred = Promise.defer();
+    if (!(aPageUrl instanceof Ci.nsIURI))
+      aPageUrl = NetUtil.newURI(aPageUrl);
+
+    PlacesUtils.favicons.getFaviconURLForPage(aPageUrl, uri => {
+      if (uri) {
+        uri = PlacesUtils.favicons.getFaviconLinkForIcon(uri);
+        deferred.resolve(uri);
+      } else {
+        deferred.reject();
+      }
+    });
+    return deferred.promise;
+  },
+
+  /**
    * Returns the passed URL with a #-moz-resolution fragment
    * for the specified dimensions and devicePixelRatio.
    *
@@ -1834,9 +1849,14 @@ XPCOMUtils.defineLazyServiceGetter(PlacesUtils, "favicons",
                                    "@mozilla.org/browser/favicon-service;1",
                                    "mozIAsyncFavicons");
 
-XPCOMUtils.defineLazyServiceGetter(PlacesUtils, "bookmarks",
-                                   "@mozilla.org/browser/nav-bookmarks-service;1",
-                                   "nsINavBookmarksService");
+XPCOMUtils.defineLazyGetter(PlacesUtils, "bookmarks", () => {
+  let bm = Cc["@mozilla.org/browser/nav-bookmarks-service;1"]
+             .getService(Ci.nsINavBookmarksService);
+  return Object.freeze(new Proxy(bm, {
+    get: (target, name) => target.hasOwnProperty(name) ? target[name]
+                                                       : Bookmarks[name]
+  }));
+});
 
 XPCOMUtils.defineLazyServiceGetter(PlacesUtils, "annotations",
                                    "@mozilla.org/browser/annotation-service;1",

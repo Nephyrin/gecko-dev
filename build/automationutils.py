@@ -207,12 +207,14 @@ def processSingleLeakFile(leakLogFileName, processType, leakThreshold):
                       r"(?P<size>-?\d+)\s+(?P<bytesLeaked>-?\d+)\s+"
                       r"-?\d+\s+(?P<numLeaked>-?\d+)")
 
-  processString = " %s process:" % processType
+  processString = "%s process:" % processType
   crashedOnPurpose = False
   totalBytesLeaked = None
   logAsWarning = False
   leakAnalysis = []
+  leakedObjectAnalysis = []
   leakedObjectNames = []
+  recordLeakedObjects = False
   with open(leakLogFileName, "r") as leaks:
     for line in leaks:
       if line.find("purposefully crash") > -1:
@@ -232,16 +234,33 @@ def processSingleLeakFile(leakLogFileName, processType, leakThreshold):
         log.info(line.rstrip())
       # Analyse the leak log, but output later or it will interrupt the leak table
       if name == "TOTAL":
-        totalBytesLeaked = bytesLeaked
+        # Multiple default processes can end up writing their bloat views into a single
+        # log, particularly on B2G. Eventually, these should be split into multiple
+        # logs (bug 1068869), but for now, we report the largest leak.
+        if totalBytesLeaked != None:
+          leakAnalysis.append("WARNING | leakcheck | %s multiple BloatView byte totals found"
+                              % processString)
+        else:
+          totalBytesLeaked = 0
+        if bytesLeaked > totalBytesLeaked:
+          totalBytesLeaked = bytesLeaked
+          # Throw out the information we had about the previous bloat view.
+          leakedObjectNames = []
+          leakedObjectAnalysis = []
+          recordLeakedObjects = True
+        else:
+          recordLeakedObjects = False
       if size < 0 or bytesLeaked < 0 or numLeaked < 0:
-        leakAnalysis.append("TEST-UNEXPECTED-FAIL | leakcheck |%s negative leaks caught!"
+        leakAnalysis.append("TEST-UNEXPECTED-FAIL | leakcheck | %s negative leaks caught!"
                             % processString)
         logAsWarning = True
         continue
-      if name != "TOTAL" and numLeaked != 0:
+      if name != "TOTAL" and numLeaked != 0 and recordLeakedObjects:
         leakedObjectNames.append(name)
-        leakAnalysis.append("TEST-INFO | leakcheck |%s leaked %d %s (%s bytes)"
-                            % (processString, numLeaked, name, bytesLeaked))
+        leakedObjectAnalysis.append("TEST-INFO | leakcheck | %s leaked %d %s (%s bytes)"
+                                    % (processString, numLeaked, name, bytesLeaked))
+
+  leakAnalysis.extend(leakedObjectAnalysis)
   if logAsWarning:
     log.warning('\n'.join(leakAnalysis))
   else:
@@ -252,17 +271,17 @@ def processSingleLeakFile(leakLogFileName, processType, leakThreshold):
   if totalBytesLeaked is None:
     # We didn't see a line with name 'TOTAL'
     if crashedOnPurpose:
-      log.info("TEST-INFO | leakcheck |%s deliberate crash and thus no leak log"
+      log.info("TEST-INFO | leakcheck | %s deliberate crash and thus no leak log"
                % processString)
     else:
       # TODO: This should be a TEST-UNEXPECTED-FAIL, but was changed to a warning
       # due to too many intermittent failures (see bug 831223).
-      log.info("WARNING | leakcheck |%s missing output line for total leaks!"
+      log.info("WARNING | leakcheck | %s missing output line for total leaks!"
                % processString)
     return
 
   if totalBytesLeaked == 0:
-    log.info("TEST-PASS | leakcheck |%s no leaks detected!" % processString)
+    log.info("TEST-PASS | leakcheck | %s no leaks detected!" % processString)
     return
 
   # totalBytesLeaked was seen and is non-zero.
@@ -286,10 +305,10 @@ def processSingleLeakFile(leakLogFileName, processType, leakThreshold):
     leakedObjectSummary += ', ...'
 
   if logAsWarning:
-    log.warning("%s | leakcheck |%s %d bytes leaked (%s)"
+    log.warning("%s | leakcheck | %s %d bytes leaked (%s)"
                 % (prefix, processString, totalBytesLeaked, leakedObjectSummary))
   else:
-    log.info("%s | leakcheck |%s %d bytes leaked (%s)"
+    log.info("%s | leakcheck | %s %d bytes leaked (%s)"
              % (prefix, processString, totalBytesLeaked, leakedObjectSummary))
 
 def processLeakLog(leakLogFile, leakThreshold = 0):
@@ -413,8 +432,11 @@ def environment(xrePath, env=None, crashreporter=True, debugger=False, dmdPath=N
   else:
     env['MOZ_CRASHREPORTER_DISABLE'] = '1'
 
-  # Crash on non-local network connections.
-  env['MOZ_DISABLE_NONLOCAL_CONNECTIONS'] = '1'
+  # Crash on non-local network connections by default.
+  # MOZ_DISABLE_NONLOCAL_CONNECTIONS can be set to "0" to temporarily
+  # enable non-local connections for the purposes of local testing.  Don't
+  # override the user's choice here.  See bug 1049688.
+  env.setdefault('MOZ_DISABLE_NONLOCAL_CONNECTIONS', '1')
 
   # Set WebRTC logging in case it is not set yet
   env.setdefault('NSPR_LOG_MODULES', 'signaling:5,mtransport:5,datachannel:5')
