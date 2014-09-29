@@ -12,7 +12,7 @@ import org.mozilla.gecko.util.HardwareUtils;
 
 public class NewTabletUI {
     // This value should be in sync with preferences_display.xml.
-    private static final boolean DEFAULT = false;
+    private static final boolean DEFAULT = true;
 
     private static Boolean sNewTabletUI;
 
