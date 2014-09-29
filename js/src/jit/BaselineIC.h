@@ -18,6 +18,9 @@
 #include "jit/BaselineRegisters.h"
 
 namespace js {
+
+class TypedArrayLayout;
+
 namespace jit {
 
 //
@@ -374,6 +377,7 @@ class ICEntry
     _(Call_ScriptedApplyArray)  \
     _(Call_ScriptedApplyArguments) \
     _(Call_ScriptedFunCall)     \
+    _(Call_StringSplit)         \
                                 \
     _(GetElem_Fallback)         \
     _(GetElem_NativeSlot)       \
@@ -435,8 +439,6 @@ class ICEntry
     _(IteratorNew_Fallback)     \
     _(IteratorMore_Fallback)    \
     _(IteratorMore_Native)      \
-    _(IteratorNext_Fallback)    \
-    _(IteratorNext_Native)      \
     _(IteratorClose_Fallback)   \
                                 \
     _(InstanceOf_Fallback)      \
@@ -790,6 +792,7 @@ class ICStub
           case Call_ScriptedApplyArray:
           case Call_ScriptedApplyArguments:
           case Call_ScriptedFunCall:
+          case Call_StringSplit:
           case WarmUpCounter_Fallback:
           case GetElem_NativeSlot:
           case GetElem_NativePrototypeSlot:
@@ -6046,6 +6049,91 @@ class ICCall_ScriptedFunCall : public ICMonitoredStub
     };
 };
 
+class ICCall_StringSplit : public ICMonitoredStub
+{
+    friend class ICStubSpace;
+
+  protected:
+    uint32_t pcOffset_;
+    HeapPtrString expectedThis_;
+    HeapPtrString expectedArg_;
+    HeapPtrObject templateObject_;
+
+    ICCall_StringSplit(JitCode *stubCode, ICStub *firstMonitorStub, uint32_t pcOffset, HandleString thisString,
+                       HandleString argString, HandleObject templateObject)
+      : ICMonitoredStub(ICStub::Call_StringSplit, stubCode, firstMonitorStub),
+        pcOffset_(pcOffset), expectedThis_(thisString), expectedArg_(argString),
+        templateObject_(templateObject)
+    { }
+
+  public:
+    static inline ICCall_StringSplit *New(ICStubSpace *space, JitCode *code,
+                                          ICStub *firstMonitorStub, uint32_t pcOffset, HandleString thisString,
+                                          HandleString argString, HandleObject templateObject)
+    {
+        if (!code)
+            return nullptr;
+        return space->allocate<ICCall_StringSplit>(code, firstMonitorStub, pcOffset, thisString,
+                                                   argString, templateObject);
+    }
+
+    static size_t offsetOfExpectedThis() {
+        return offsetof(ICCall_StringSplit, expectedThis_);
+    }
+
+    static size_t offsetOfExpectedArg() {
+        return offsetof(ICCall_StringSplit, expectedArg_);
+    }
+
+    static size_t offsetOfTemplateObject() {
+        return offsetof(ICCall_StringSplit, templateObject_);
+    }
+
+    HeapPtrString &expectedThis() {
+        return expectedThis_;
+    }
+
+    HeapPtrString &expectedArg() {
+        return expectedArg_;
+    }
+
+    HeapPtrObject &templateObject() {
+        return templateObject_;
+    }
+
+    class Compiler : public ICCallStubCompiler {
+      protected:
+        ICStub *firstMonitorStub_;
+        uint32_t pcOffset_;
+        RootedString expectedThis_;
+        RootedString expectedArg_;
+        RootedObject templateObject_;
+
+        bool generateStubCode(MacroAssembler &masm);
+
+        virtual int32_t getKey() const {
+            return static_cast<int32_t>(kind);
+        }
+
+      public:
+        Compiler(JSContext *cx, ICStub *firstMonitorStub, uint32_t pcOffset, HandleString thisString,
+                 HandleString argString, HandleValue templateObject)
+          : ICCallStubCompiler(cx, ICStub::Call_StringSplit),
+            firstMonitorStub_(firstMonitorStub),
+            pcOffset_(pcOffset),
+            expectedThis_(cx, thisString),
+            expectedArg_(cx, argString),
+            templateObject_(cx, &templateObject.toObject())
+        { }
+
+        ICStub *getStub(ICStubSpace *space) {
+            return ICCall_StringSplit::New(space, getStubCode(), firstMonitorStub_,
+                                           pcOffset_, expectedThis_, expectedArg_,
+                                           templateObject_);
+        }
+   };
+};
+
 // Stub for performing a TableSwitch, updating the IC's return address to jump
 // to whatever point the switch is branching to.
 class ICTableSwitch : public ICStub
@@ -6135,6 +6223,14 @@ class ICIteratorMore_Fallback : public ICFallbackStub
         return space->allocate<ICIteratorMore_Fallback>(code);
     }
 
+    void setHasNonStringResult() {
+        extra_ = 1;
+    }
+    bool hasNonStringResult() const {
+        MOZ_ASSERT(extra_ <= 1);
+        return extra_;
+    }
+
     class Compiler : public ICStubCompiler {
       protected:
         bool generateStubCode(MacroAssembler &masm);
@@ -6177,76 +6273,6 @@ class ICIteratorMore_Native : public ICStub
 
         ICStub *getStub(ICStubSpace *space) {
             return ICIteratorMore_Native::New(space, getStubCode());
-        }
-    };
-};
-
-// IC for getting the next value in an iterator.
-class ICIteratorNext_Fallback : public ICFallbackStub
-{
-    friend class ICStubSpace;
-
-    explicit ICIteratorNext_Fallback(JitCode *stubCode)
-      : ICFallbackStub(ICStub::IteratorNext_Fallback, stubCode)
-    { }
-
-  public:
-    static inline ICIteratorNext_Fallback *New(ICStubSpace *space, JitCode *code) {
-        if (!code)
-            return nullptr;
-        return space->allocate<ICIteratorNext_Fallback>(code);
-    }
-
-    void setHasNonStringResult() {
-        JS_ASSERT(extra_ == 0);
-        extra_ = 1;
-    }
-    bool hasNonStringResult() const {
-        return extra_;
-    }
-
-    class Compiler : public ICStubCompiler {
-      protected:
-        bool generateStubCode(MacroAssembler &masm);
-
-      public:
-        explicit Compiler(JSContext *cx)
-          : ICStubCompiler(cx, ICStub::IteratorNext_Fallback)
-        { }
-
-        ICStub *getStub(ICStubSpace *space) {
-            return ICIteratorNext_Fallback::New(space, getStubCode());
-        }
-    };
-};
-
-// IC for getting the next value in a native iterator.
-class ICIteratorNext_Native : public ICStub
-{
-    friend class ICStubSpace;
-
-    explicit ICIteratorNext_Native(JitCode *stubCode)
-      : ICStub(ICStub::IteratorNext_Native, stubCode)
-    { }
-
-  public:
-    static inline ICIteratorNext_Native *New(ICStubSpace *space, JitCode *code) {
-        if (!code)
-            return nullptr;
-        return space->allocate<ICIteratorNext_Native>(code);
-    }
-
-    class Compiler : public ICStubCompiler {
-      protected:
-        bool generateStubCode(MacroAssembler &masm);
-
-      public:
-        explicit Compiler(JSContext *cx)
-          : ICStubCompiler(cx, ICStub::IteratorNext_Native)
-        { }
-
-        ICStub *getStub(ICStubSpace *space) {
-            return ICIteratorNext_Native::New(space, getStubCode());
         }
     };
 };

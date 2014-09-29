@@ -187,7 +187,6 @@
 #include "mozilla/dom/MessagePort.h"
 #include "mozilla/dom/MessagePortBinding.h"
 #include "mozilla/dom/indexedDB/IDBFactory.h"
-#include "mozilla/dom/quota/QuotaManager.h"
 
 #include "mozilla/dom/StructuredCloneTags.h"
 
@@ -642,6 +641,12 @@ public:
                      JS::Handle<jsid> id, JS::Handle<JSObject*> callable) const MOZ_OVERRIDE;
   virtual bool unwatch(JSContext *cx, JS::Handle<JSObject*> proxy,
                        JS::Handle<jsid> id) const MOZ_OVERRIDE;
+  virtual bool isCallable(JSObject *obj) const MOZ_OVERRIDE {
+    return false;
+  }
+  virtual bool isConstructor(JSObject *obj) const MOZ_OVERRIDE {
+    return false;
+  }
 
   // Derived traps
   virtual bool has(JSContext *cx, JS::Handle<JSObject*> proxy,
@@ -663,10 +668,12 @@ public:
                        unsigned flags,
                        JS::MutableHandle<JS::Value> vp) const MOZ_OVERRIDE;
 
+  static void ObjectMoved(JSObject *obj, const JSObject *old);
+
   static const nsOuterWindowProxy singleton;
 
 protected:
-  nsGlobalWindow* GetWindow(JSObject *proxy) const
+  static nsGlobalWindow* GetWindow(JSObject *proxy)
   {
     return nsGlobalWindow::FromSupports(
       static_cast<nsISupports*>(js::GetProxyExtra(proxy, 0).toPrivate()));
@@ -694,13 +701,12 @@ const js::Class OuterWindowProxyClass =
         "Proxy",
         0, /* additional slots */
         0, /* additional class flags */
-        nullptr, /* call */
-        nullptr, /* construct */
         PROXY_MAKE_EXT(
             nullptr, /* outerObject */
             js::proxy_innerObject,
             nullptr, /* iteratorObject */
-            false   /* isWrappedNative */
+            false,   /* isWrappedNative */
+            nsOuterWindowProxy::ObjectMoved
         ));
 
 bool
@@ -1020,6 +1026,15 @@ nsOuterWindowProxy::unwatch(JSContext *cx, JS::Handle<JSObject*> proxy,
   return js::UnwatchGuts(cx, proxy, id);
 }
 
+void
+nsOuterWindowProxy::ObjectMoved(JSObject *obj, const JSObject *old)
+{
+  nsGlobalWindow* global = GetWindow(obj);
+  if (global) {
+    global->UpdateWrapper(obj, old);
+  }
+}
+
 const nsOuterWindowProxy
 nsOuterWindowProxy::singleton;
 
@@ -1055,7 +1070,7 @@ NewOuterWindowProxy(JSContext *cx, JS::Handle<JSObject*> parent, bool isChrome)
   JSObject *obj = js::Wrapper::New(cx, parent, parent,
                                    isChrome ? &nsChromeOuterWindowProxy::singleton
                                             : &nsOuterWindowProxy::singleton,
-                                   &options);
+                                   options);
 
   NS_ASSERTION(js::GetObjectClass(obj)->ext.innerObject, "bad class");
   return obj;
@@ -1557,12 +1572,6 @@ nsGlobalWindow::FreeInnerObjects()
 
   // Kill all of the workers for this window.
   mozilla::dom::workers::CancelWorkersForWindow(this);
-
-  // Close all offline storages for this window.
-  quota::QuotaManager* quotaManager = quota::QuotaManager::Get();
-  if (quotaManager) {
-    quotaManager->AbortCloseStoragesForWindow(this);
-  }
 
   ClearAllTimeouts();
 
@@ -5258,7 +5267,7 @@ nsGlobalWindow::RequestAnimationFrame(JS::Handle<JS::Value> aCallback,
                                       JSContext* cx,
                                       int32_t* aHandle)
 {
-  if (!aCallback.isObject() || !JS_ObjectIsCallable(cx, &aCallback.toObject())) {
+  if (!aCallback.isObject() || !JS::IsCallable(&aCallback.toObject())) {
     return NS_ERROR_INVALID_ARG;
   }
 
@@ -10577,9 +10586,11 @@ GetIndexedDBEnabledForAboutURI(nsIURI *aURI)
   return flags & nsIAboutModule::ENABLE_INDEXED_DB;
 }
 
-indexedDB::IDBFactory*
+mozilla::dom::indexedDB::IDBFactory*
 nsGlobalWindow::GetIndexedDB(ErrorResult& aError)
 {
+  using mozilla::dom::indexedDB::IDBFactory;
+
   if (!mIndexedDB) {
     // If the document has the sandboxed origin flag set
     // don't allow access to indexedDB.
@@ -10626,8 +10637,7 @@ nsGlobalWindow::GetIndexedDB(ErrorResult& aError)
     }
 
     // This may be null if being created from a file.
-    aError = indexedDB::IDBFactory::Create(this, nullptr,
-                                           getter_AddRefs(mIndexedDB));
+    aError = IDBFactory::CreateForWindow(this, getter_AddRefs(mIndexedDB));
   }
 
   return mIndexedDB;
@@ -11495,7 +11505,13 @@ nsGlobalWindow::Observe(nsISupports* aSubject, const char* aTopic,
     // very likely situation where an event handler will try to read its value.
 
     if (mNavigator) {
+      NavigatorBinding::ClearCachedLanguageValue(mNavigator);
       NavigatorBinding::ClearCachedLanguagesValue(mNavigator);
+    }
+
+    // The event has to be dispatched only to the current inner window.
+    if (!IsCurrentInnerWindow()) {
+      return NS_OK;
     }
 
     nsCOMPtr<nsIDOMEvent> event;

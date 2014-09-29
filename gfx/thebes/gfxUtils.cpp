@@ -450,7 +450,7 @@ struct MOZ_STACK_CLASS AutoCairoPixmanBugWorkaround
         // Clip the rounded-out-to-device-pixels bounds of the
         // transformed fill area. This is the area for the group we
         // want to push.
-        mContext->IdentityMatrix();
+        mContext->SetMatrix(gfxMatrix());
         gfxRect bounds = currentMatrix.TransformBounds(aFill);
         bounds.RoundOut();
         mContext->Clip(bounds);
@@ -593,6 +593,12 @@ gfxUtils::DrawPixelSnapped(gfxContext*         aContext,
                                      imageRect.Width(), imageRect.Height(),
                                      region.Width(), region.Height());
 
+    if (aRegion.IsRestricted() &&
+        drawable->DrawWithSamplingRect(aContext, aRegion.Rect(), aRegion.Restriction(),
+                                       doTile, aFilter, aOpacity)) {
+      return;
+    }
+
     // On Mobile, we don't ever want to do this; it has the potential for
     // allocating very large temporary surfaces, especially since we'll
     // do full-page snapshots often (see bug 749426).
@@ -703,6 +709,12 @@ static void
 ClipToRegionInternal(DrawTarget* aTarget, const nsIntRegion& aRegion,
                      bool aSnap)
 {
+  if (!aRegion.IsComplex()) {
+    nsIntRect rect = aRegion.GetBounds();
+    aTarget->PushClipRect(Rect(rect.x, rect.y, rect.width, rect.height));
+    return;
+  }
+
   RefPtr<Path> path = PathFromRegionInternal(aTarget, aRegion, aSnap);
   aTarget->PushClip(path);
 }

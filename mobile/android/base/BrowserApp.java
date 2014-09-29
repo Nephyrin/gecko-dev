@@ -27,6 +27,7 @@ import org.mozilla.gecko.db.BrowserContract.Combined;
 import org.mozilla.gecko.db.BrowserContract.ReadingListItems;
 import org.mozilla.gecko.db.BrowserContract.SearchHistory;
 import org.mozilla.gecko.db.BrowserDB;
+import org.mozilla.gecko.db.DBUtils;
 import org.mozilla.gecko.db.SuggestedSites;
 import org.mozilla.gecko.distribution.Distribution;
 import org.mozilla.gecko.favicons.Favicons;
@@ -78,6 +79,7 @@ import org.mozilla.gecko.widget.GeckoActionProvider;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.BroadcastReceiver;
+import android.app.KeyguardManager;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.DialogInterface;
@@ -119,11 +121,14 @@ import android.view.ViewGroup;
 import android.view.ViewStub;
 import android.view.ViewTreeObserver;
 import android.view.Window;
+import android.view.WindowManager;
 import android.view.animation.Interpolator;
 import android.widget.ListView;
 import android.widget.RelativeLayout;
 import android.widget.Toast;
 import android.widget.ViewFlipper;
+
+import com.readystatesoftware.systembartint.SystemBarTintManager;
 
 public class BrowserApp extends GeckoApp
                         implements TabsPanel.TabsLayoutChangeListener,
@@ -185,7 +190,7 @@ public class BrowserApp extends GeckoApp
     }
 
     // The types of guest mdoe dialogs we show
-    private static enum GuestModeDialog {
+    public static enum GuestModeDialog {
         ENTERING,
         LEAVING
     }
@@ -513,11 +518,17 @@ public class BrowserApp extends GeckoApp
         mAboutHomeStartupTimer = new Telemetry.UptimeTimer("FENNEC_STARTUP_TIME_ABOUTHOME");
 
         final Intent intent = getIntent();
+        final String args = intent.getStringExtra("args");
 
-        String args = intent.getStringExtra("args");
-        if (args != null && args.contains(GUEST_BROWSING_ARG)) {
+        if (GuestSession.shouldUse(this, args)) {
+            GuestSession.configureWindow(getWindow());
             mProfile = GeckoProfile.createGuestProfile(this);
         } else {
+            // We also allow non-guest sessions if the keyguard isn't a secure one.
+            final KeyguardManager manager = (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
+            if (Versions.feature16Plus && !manager.isKeyguardSecure()) {
+                GuestSession.configureWindow(getWindow());
+            }
             GeckoProfile.maybeCleanupGuestProfile(this);
         }
 
@@ -529,6 +540,8 @@ public class BrowserApp extends GeckoApp
 
         final Context appContext = getApplicationContext();
 
+        setupSystemUITinting();
+
         mBrowserChrome = (ViewGroup) findViewById(R.id.browser_chrome);
         mActionBarFlipper = (ViewFlipper) findViewById(R.id.browser_actionbar);
         mActionBar = (ActionModeCompatView) findViewById(R.id.actionbar);
@@ -536,11 +549,15 @@ public class BrowserApp extends GeckoApp
         mBrowserToolbar = (BrowserToolbar) findViewById(R.id.browser_toolbar);
         mProgressView = (ToolbarProgressView) findViewById(R.id.progress);
         mBrowserToolbar.setProgressBar(mProgressView);
-        if (Intent.ACTION_VIEW.equals(intent.getAction())) {
+
+        final String action = intent.getAction();
+        if (Intent.ACTION_VIEW.equals(action)) {
             // Show the target URL immediately in the toolbar.
             mBrowserToolbar.setTitle(intent.getDataString());
 
             Telemetry.sendUIEvent(TelemetryContract.Event.LOAD_URL, TelemetryContract.Method.INTENT);
+        } else if (GuestSession.NOTIFICATION_INTENT.equals(action)) {
+            GuestSession.handleIntent(this, intent);
         }
 
         if (NewTabletUI.isEnabled(this)) {
@@ -660,6 +677,25 @@ public class BrowserApp extends GeckoApp
                 Log.e(LOGTAG, "Error initializing media manager", ex);
             }
         }
+
+        if (getProfile().inGuestMode()) {
+            GuestSession.showNotification(this);
+        } else {
+            // If we're restarting, we won't destroy the activity. Make sure we remove any guest notifications that might have been shown.
+            GuestSession.hideNotification(this);
+        }
+    }
+
+    private void setupSystemUITinting() {
+        if (!Versions.feature19Plus) {
+            return;
+        }
+
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS);
+
+        SystemBarTintManager tintManager = new SystemBarTintManager(this);
+        tintManager.setTintColor(getResources().getColor(R.color.background_tabs));
+        tintManager.setStatusBarTintEnabled(true);
     }
 
     private void registerOnboardingReceiver(Context context) {
@@ -717,12 +753,20 @@ public class BrowserApp extends GeckoApp
     @Override
     public void onResume() {
         super.onResume();
+
+        final String args = getIntent().getStringExtra("args");
+        // If an external intent tries to start Fennec in guest mode, and it's not already
+        // in guest mode, this will change modes before opening the url.
+        final boolean enableGuestSession = GuestSession.shouldUse(this, args);
+        final boolean inGuestSession = GeckoProfile.get(this).inGuestMode();
+        if (enableGuestSession != inGuestSession) {
+            doRestart(getIntent());
+            GeckoAppShell.systemExit();
+            return;
+        }
+
         EventDispatcher.getInstance().unregisterGeckoThreadListener((GeckoEventListener)this,
             "Prompt:ShowTop");
-        if (AppConstants.MOZ_STUMBLER_BUILD_TIME_ENABLED) {
-            // Starts or pings the stumbler lib, see also usage in handleMessage(): Gecko:DelayedStartup.
-            GeckoPreferences.broadcastStumblerPref(this);
-        }
     }
 
     @Override
@@ -734,6 +778,25 @@ public class BrowserApp extends GeckoApp
 
         final LocalBroadcastManager lbm = LocalBroadcastManager.getInstance(this);
         lbm.unregisterReceiver(mOnboardingReceiver);
+    }
+
+    @Override
+    public void onWindowFocusChanged(boolean hasFocus) {
+        super.onWindowFocusChanged(hasFocus);
+        // If Home Page is visible, the layerView surface has to be visible
+        // to avoid a surface issue in Gingerbread phones.
+        // We need to do this on the next iteration.
+        // See bugs: 1058027 and 1003123
+        if (mInitialized && hasFocus &&
+            Versions.preHC && isHomePagerVisible() &&
+            mLayerView.getVisibility() != View.VISIBLE){
+            ThreadUtils.postToUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    mLayerView.showSurface();
+                }
+            });
+        }
     }
 
     private void setBrowserToolbarListeners() {
@@ -1014,6 +1077,8 @@ public class BrowserApp extends GeckoApp
             mBrowserHealthReporter = null;
         }
 
+        GuestSession.onDestroy(this);
+
         EventDispatcher.getInstance().unregisterGeckoThreadListener((GeckoEventListener)this,
             "Menu:Update",
             "Reader:Added",
@@ -1274,7 +1339,7 @@ public class BrowserApp extends GeckoApp
         if (mMainLayoutAnimator != null)
             mMainLayoutAnimator.stop();
 
-        boolean isSideBar = (HardwareUtils.isTablet() && getOrientation() == Configuration.ORIENTATION_LANDSCAPE);
+        boolean isSideBar = !NewTabletUI.isEnabled(this) && (HardwareUtils.isTablet() && getOrientation() == Configuration.ORIENTATION_LANDSCAPE);
         final int sidebarWidth = getResources().getDimensionPixelSize(R.dimen.tabs_sidebar_width);
 
         ViewGroup.MarginLayoutParams lp = (ViewGroup.MarginLayoutParams) mTabsPanel.getLayoutParams();
@@ -1477,7 +1542,14 @@ public class BrowserApp extends GeckoApp
                 if (AppConstants.MOZ_STUMBLER_BUILD_TIME_ENABLED) {
                     // Start (this acts as ping if started already) the stumbler lib; if the stumbler has queued data it will upload it.
                     // Stumbler operates on its own thread, and startup impact is further minimized by delaying work (such as upload) a few seconds.
-                    GeckoPreferences.broadcastStumblerPref(this);
+                    // Avoid any potential startup CPU/thread contention by delaying the pref broadcast.
+                    final long oneSecondInMillis = 1000;
+                    ThreadUtils.getBackgroundHandler().postDelayed(new Runnable() {
+                        @Override
+                        public void run() {
+                             GeckoPreferences.broadcastStumblerPref(BrowserApp.this);
+                        }
+                    }, oneSecondInMillis);
                 }
                 super.handleMessage(event, message);
             } else if (event.equals("Gecko:Ready")) {
@@ -1794,11 +1866,11 @@ public class BrowserApp extends GeckoApp
 
         final Tab tab = Tabs.getInstance().getSelectedTab();
         if (tab != null) {
-            final String userSearch = tab.getUserSearch();
+            final String userRequested = tab.getUserRequested();
 
             // Check to see if there's a user-entered search term,
             // which we save whenever the user performs a search.
-            url = (TextUtils.isEmpty(userSearch) ? tab.getURL() : userSearch);
+            url = (TextUtils.isEmpty(userRequested) ? tab.getURL() : userRequested);
         }
 
         enterEditingMode(url);
@@ -2454,6 +2526,11 @@ public class BrowserApp extends GeckoApp
 
     @Override
     public void openOptionsMenu() {
+        // Disable menu access (for hardware buttons) when the software menu button is inaccessible.
+        if (mBrowserToolbar.isEditing()) {
+            return;
+        }
+
         if (areTabsShown()) {
             mTabsPanel.showMenu();
             return;
@@ -2652,10 +2729,11 @@ public class BrowserApp extends GeckoApp
 
         charEncoding.setVisible(GeckoPreferences.getCharEncodingState());
 
-        if (mProfile.inGuestMode())
+        if (mProfile.inGuestMode()) {
             exitGuestMode.setVisible(true);
-        else
+        } else {
             enterGuestMode.setVisible(true);
+        }
 
         return true;
     }
@@ -2807,7 +2885,7 @@ public class BrowserApp extends GeckoApp
         return super.onOptionsItemSelected(item);
     }
 
-    private void showGuestModeDialog(final GuestModeDialog type) {
+    public void showGuestModeDialog(final GuestModeDialog type) {
         final Prompt ps = new Prompt(this, new Prompt.PromptCallback() {
             @Override
             public void onPromptFinished(String result) {
@@ -2820,7 +2898,14 @@ public class BrowserApp extends GeckoApp
                         } else {
                             GeckoProfile.leaveGuestSession(BrowserApp.this);
                         }
-                        doRestart(args);
+
+                        if (!GuestSession.isSecureKeyguardLocked(BrowserApp.this)) {
+                            doRestart(args);
+                        } else {
+                            // If the secure keyguard is up, we don't want to restart.
+                            // Just clear the guest profile data.
+                            GeckoProfile.maybeCleanupGuestProfile(BrowserApp.this);
+                        }
                         GeckoAppShell.systemExit();
                     }
                 } catch(JSONException ex) {
@@ -2892,12 +2977,12 @@ public class BrowserApp extends GeckoApp
             GeckoAppShell.sendEventToGecko(GeckoEvent.createURILoadEvent(uri));
         }
 
-        if (!mInitialized) {
-            return;
+        // Only solicit feedback when the app has been launched from the icon shortcut.
+        if (GuestSession.NOTIFICATION_INTENT.equals(action)) {
+            GuestSession.handleIntent(this, intent);
         }
 
-        // Only solicit feedback when the app has been launched from the icon shortcut.
-        if (!Intent.ACTION_MAIN.equals(action)) {
+        if (!mInitialized || !Intent.ACTION_MAIN.equals(action)) {
             return;
         }
 

@@ -22,7 +22,7 @@
  * limitations under the License.
  */
 
-#include "nssgtest.h"
+#include "gtest/gtest.h"
 #include "pkix/pkix.h"
 #include "pkixder.h"
 #include "pkixtestutil.h"
@@ -53,7 +53,7 @@ private:
     return Result::FATAL_ERROR_LIBRARY_FAILURE;
   }
 
-  virtual Result IsChainValid(const DERArray&)
+  virtual Result IsChainValid(const DERArray&, Time)
   {
     ADD_FAILURE();
     return Result::FATAL_ERROR_LIBRARY_FAILURE;
@@ -79,7 +79,7 @@ private:
   }
 };
 
-class pkixocsp_CreateEncodedOCSPRequest : public NSSTest
+class pkixocsp_CreateEncodedOCSPRequest : public ::testing::Test
 {
 protected:
   void MakeIssuerCertIDComponents(const char* issuerASCII,

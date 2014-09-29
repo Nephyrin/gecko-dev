@@ -16,6 +16,7 @@ PREPROCESSED_WEBIDL_FILES = [
 ]
 
 WEBIDL_FILES = [
+    'AbortablePromise.webidl',
     'AbstractWorker.webidl',
     'ActivityRequestHandler.webidl',
     'AlarmsManager.webidl',
@@ -117,6 +118,7 @@ WEBIDL_FILES = [
     'DummyBinding.webidl',
     'DynamicsCompressorNode.webidl',
     'Element.webidl',
+    'EngineeringMode.webidl',
     'Event.webidl',
     'EventHandler.webidl',
     'EventListener.webidl',
@@ -236,6 +238,7 @@ WEBIDL_FILES = [
     'InterAppConnection.webidl',
     'InterAppConnectionRequest.webidl',
     'InterAppMessagePort.webidl',
+    'KeyAlgorithm.webidl',
     'KeyboardEvent.webidl',
     'KeyEvent.webidl',
     'LegacyQueryInterface.webidl',
@@ -273,6 +276,8 @@ WEBIDL_FILES = [
     'MozSelfSupport.webidl',
     'MozTetheringManager.webidl',
     'MozTimeManager.webidl',
+    'MozVoicemail.webidl',
+    'MozVoicemailStatus.webidl',
     'MozWakeLock.webidl',
     'MutationEvent.webidl',
     'MutationObserver.webidl',
@@ -336,6 +341,7 @@ WEBIDL_FILES = [
     'ServiceWorkerContainer.webidl',
     'ServiceWorkerGlobalScope.webidl',
     'ServiceWorkerRegistration.webidl',
+    'SettingChangeNotification.webidl',
     'SettingsManager.webidl',
     'ShadowRoot.webidl',
     'SharedWorker.webidl',
@@ -602,8 +608,6 @@ if CONFIG['MOZ_B2G_RIL']:
         'MozCellBroadcast.webidl',
         'MozIcc.webidl',
         'MozIccManager.webidl',
-        'MozVoicemail.webidl',
-        'MozVoicemailStatus.webidl'
     ]
 
 if CONFIG['MOZ_NFC']:
@@ -669,6 +673,7 @@ GENERATED_EVENTS_WEBIDL_FILES = [
     'MozSettingsTransactionEvent.webidl',
     'MozSmsEvent.webidl',
     'MozStkCommandEvent.webidl',
+    'MozVoicemailEvent.webidl',
     'PageTransitionEvent.webidl',
     'PopStateEvent.webidl',
     'PopupBlockedEvent.webidl',
@@ -678,6 +683,7 @@ GENERATED_EVENTS_WEBIDL_FILES = [
     'RTCPeerConnectionIceEvent.webidl',
     'RTCPeerConnectionIdentityErrorEvent.webidl',
     'RTCPeerConnectionIdentityEvent.webidl',
+    'ScrollViewChangeEvent.webidl',
     'SelectionChangeEvent.webidl',
     'StyleRuleChangeEvent.webidl',
     'StyleSheetApplicableStateChangeEvent.webidl',
@@ -721,7 +727,6 @@ if CONFIG['MOZ_B2G_BT']:
 if CONFIG['MOZ_B2G_RIL']:
     GENERATED_EVENTS_WEBIDL_FILES += [
         'MozCellBroadcastEvent.webidl',
-        'MozVoicemailEvent.webidl',
     ]
 
 if CONFIG['MOZ_WIDGET_TOOLKIT'] == 'gonk':

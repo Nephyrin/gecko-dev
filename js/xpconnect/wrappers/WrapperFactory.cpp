@@ -596,13 +596,6 @@ WrapperFactory::WaiveXrayAndWrap(JSContext *cx, MutableHandleObject argObj)
     return true;
 }
 
-bool
-WrapperFactory::XrayWrapperNotShadowing(JSObject *wrapper, jsid id)
-{
-    ResolvingId *rid = ResolvingId::getResolvingIdFromWrapper(wrapper);
-    return rid->isXrayShadowing(id);
-}
-
 /*
  * Calls to JS_TransplantObject* should go through these helpers here so that
  * waivers get fixed up properly.
@@ -651,9 +644,9 @@ TransplantObject(JSContext *cx, JS::HandleObject origobj, JS::HandleObject targe
 }
 
 nsIGlobalObject *
-GetNativeForGlobal(JSObject *obj)
+NativeGlobal(JSObject *obj)
 {
-    MOZ_ASSERT(JS_IsGlobalObject(obj));
+    obj = js::GetGlobalForObjectCrossCompartment(obj);
 
     // Every global needs to hold a native as its private or be a
     // WebIDL object with an nsISupports DOM object.

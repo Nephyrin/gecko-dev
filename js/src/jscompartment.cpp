@@ -59,6 +59,7 @@ JSCompartment::JSCompartment(Zone *zone, const JS::CompartmentOptions &options =
     selfHostingScriptSource(nullptr),
     gcIncomingGrayPointers(nullptr),
     gcWeakMapList(nullptr),
+    gcPreserveJitCode(options.preserveJitCode()),
     debugModeBits(0),
     rngState(0),
     watchpointMap(nullptr),
@@ -307,13 +308,13 @@ CopyStringPure(JSContext *cx, JSString *str)
 }
 
 bool
-JSCompartment::wrap(JSContext *cx, JSString **strp)
+JSCompartment::wrap(JSContext *cx, MutableHandleString strp)
 {
     JS_ASSERT(!cx->runtime()->isAtomsCompartment(this));
     JS_ASSERT(cx->compartment() == this);
 
     /* If the string is already in this compartment, we are done. */
-    JSString *str = *strp;
+    JSString *str = strp;
     if (str->zoneFromAnyThread() == zone())
         return true;
 
@@ -327,7 +328,7 @@ JSCompartment::wrap(JSContext *cx, JSString **strp)
     /* Check the cache. */
     RootedValue key(cx, StringValue(str));
     if (WrapperMap::Ptr p = crossCompartmentWrappers.lookup(CrossCompartmentKey(key))) {
-        *strp = p->value().get().toString();
+        strp.set(p->value().get().toString());
         return true;
     }
 
@@ -338,17 +339,7 @@ JSCompartment::wrap(JSContext *cx, JSString **strp)
     if (!putWrapper(cx, CrossCompartmentKey(key), StringValue(copy)))
         return false;
 
-    *strp = copy;
-    return true;
-}
-
-bool
-JSCompartment::wrap(JSContext *cx, HeapPtrString *strp)
-{
-    RootedString str(cx, *strp);
-    if (!wrap(cx, str.address()))
-        return false;
-    *strp = str;
+    strp.set(copy);
     return true;
 }
 
@@ -435,8 +426,8 @@ JSCompartment::wrap(JSContext *cx, MutableHandleObject obj, HandleObject existin
     if (existing) {
         // Is it possible to reuse |existing|?
         if (!existing->getTaggedProto().isLazy() ||
-            // Note: don't use is<ObjectProxyObject>() here -- it also matches subclasses!
-            existing->getClass() != &ProxyObject::uncallableClass_ ||
+            // Note: Class asserted above, so all that's left to check is callability
+            existing->isCallable() ||
             existing->getParent() != global ||
             obj->isCallable())
         {
@@ -456,37 +447,17 @@ JSCompartment::wrap(JSContext *cx, MutableHandleObject obj, HandleObject existin
 }
 
 bool
-JSCompartment::wrap(JSContext *cx, PropertyOp *propp)
-{
-    RootedValue value(cx, CastAsObjectJsval(*propp));
-    if (!wrap(cx, &value))
-        return false;
-    *propp = CastAsPropertyOp(value.toObjectOrNull());
-    return true;
-}
-
-bool
-JSCompartment::wrap(JSContext *cx, StrictPropertyOp *propp)
-{
-    RootedValue value(cx, CastAsObjectJsval(*propp));
-    if (!wrap(cx, &value))
-        return false;
-    *propp = CastAsStrictPropertyOp(value.toObjectOrNull());
-    return true;
-}
-
-bool
 JSCompartment::wrap(JSContext *cx, MutableHandle<PropertyDescriptor> desc)
 {
     if (!wrap(cx, desc.object()))
         return false;
 
     if (desc.hasGetterObject()) {
-        if (!wrap(cx, &desc.getter()))
+        if (!wrap(cx, desc.getterObject()))
             return false;
     }
     if (desc.hasSetterObject()) {
-        if (!wrap(cx, &desc.setter()))
+        if (!wrap(cx, desc.setterObject()))
             return false;
     }
 
@@ -575,6 +546,12 @@ JSCompartment::sweep(FreeOp *fop, bool releaseTypes)
 {
     JS_ASSERT(!activeAnalysis);
     JSRuntime *rt = runtimeFromMainThread();
+
+    {
+        gcstats::MaybeAutoPhase ap(rt->gc.stats, !rt->isHeapCompacting(),
+                                   gcstats::PHASE_SWEEP_TABLES_INNER_VIEWS);
+        innerViews.sweep(rt);
+    }
 
     {
         gcstats::MaybeAutoPhase ap(rt->gc.stats, !rt->isHeapCompacting(),
@@ -912,6 +889,7 @@ JSCompartment::addSizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf,
                                       size_t *tiObjectTypeTables,
                                       size_t *compartmentObject,
                                       size_t *compartmentTables,
+                                      size_t *innerViewsArg,
                                       size_t *crossCompartmentWrappersArg,
                                       size_t *regexpCompartment,
                                       size_t *savedStacksSet)
@@ -923,6 +901,7 @@ JSCompartment::addSizeOfIncludingThis(mozilla::MallocSizeOf mallocSizeOf,
                         + initialShapes.sizeOfExcludingThis(mallocSizeOf)
                         + newTypeObjects.sizeOfExcludingThis(mallocSizeOf)
                         + lazyTypeObjects.sizeOfExcludingThis(mallocSizeOf);
+    *innerViewsArg += innerViews.sizeOfExcludingThis(mallocSizeOf);
     *crossCompartmentWrappersArg += crossCompartmentWrappers.sizeOfExcludingThis(mallocSizeOf);
     *regexpCompartment += regExps.sizeOfExcludingThis(mallocSizeOf);
     *savedStacksSet += savedStacks_.sizeOfExcludingThis(mallocSizeOf);

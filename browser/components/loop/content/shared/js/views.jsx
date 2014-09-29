@@ -12,84 +12,9 @@ loop.shared.views = (function(_, OT, l10n) {
   "use strict";
 
   var sharedModels = loop.shared.models;
+  var sharedMixins = loop.shared.mixins;
+
   var WINDOW_AUTOCLOSE_TIMEOUT_IN_SECONDS = 5;
-
-  /**
-   * L10n view. Translates resulting view DOM fragment once rendered.
-   */
-  var L10nView = (function() {
-    var L10nViewImpl   = Backbone.View.extend(), // Original View constructor
-        originalExtend = L10nViewImpl.extend;    // Original static extend fn
-
-    /**
-     * Patches View extend() method so we can hook and patch any declared render
-     * method.
-     *
-     * @return {Backbone.View} Extended view with patched render() method.
-     */
-    L10nViewImpl.extend = function() {
-      var ExtendedView   = originalExtend.apply(this, arguments),
-          originalRender = ExtendedView.prototype.render;
-
-      /**
-       * Wraps original render() method to translate contents once they're
-       * rendered.
-       *
-       * @return {Backbone.View} Extended view instance.
-       */
-      ExtendedView.prototype.render = function() {
-        if (originalRender) {
-          originalRender.apply(this, arguments);
-          l10n.translate(this.el);
-        }
-        return this;
-      };
-
-      return ExtendedView;
-    };
-
-    return L10nViewImpl;
-  })();
-
-  /**
-   * Base view.
-   */
-  var BaseView = L10nView.extend({
-    /**
-     * Hides view element.
-     *
-     * @return {BaseView}
-     */
-    hide: function() {
-      this.$el.hide();
-      return this;
-    },
-
-    /**
-     * Shows view element.
-     *
-     * @return {BaseView}
-     */
-    show: function() {
-      this.$el.show();
-      return this;
-    },
-
-    /**
-     * Base render implementation: renders an attached template if available.
-     *
-     * Note: You need to override this if you want to do fancier stuff, eg.
-     *       rendering the template using model data.
-     *
-     * @return {BaseView}
-     */
-    render: function() {
-      if (this.template) {
-        this.$el.html(this.template());
-      }
-      return this;
-    }
-  });
 
   /**
    * Media control button.
@@ -105,11 +30,12 @@ loop.shared.views = (function(_, OT, l10n) {
       scope: React.PropTypes.string.isRequired,
       type: React.PropTypes.string.isRequired,
       action: React.PropTypes.func.isRequired,
-      enabled: React.PropTypes.bool.isRequired
+      enabled: React.PropTypes.bool.isRequired,
+      visible: React.PropTypes.bool.isRequired
     },
 
     getDefaultProps: function() {
-      return {enabled: true};
+      return {enabled: true, visible: true};
     },
 
     handleClick: function() {
@@ -123,7 +49,8 @@ loop.shared.views = (function(_, OT, l10n) {
         "btn": true,
         "media-control": true,
         "local-media": this.props.scope === "local",
-        "muted": !this.props.enabled
+        "muted": !this.props.enabled,
+        "hide": !this.props.visible
       };
       classesObj["btn-mute-" + this.props.type] = true;
       return cx(classesObj);
@@ -153,8 +80,8 @@ loop.shared.views = (function(_, OT, l10n) {
   var ConversationToolbar = React.createClass({
     getDefaultProps: function() {
       return {
-        video: {enabled: true},
-        audio: {enabled: true}
+        video: {enabled: true, visible: true},
+        audio: {enabled: true, visible: true}
       };
     },
 
@@ -178,7 +105,7 @@ loop.shared.views = (function(_, OT, l10n) {
     },
 
     render: function() {
-      /* jshint ignore:start */
+      var cx = React.addons.classSet;
       return (
         <ul className="conversation-toolbar">
           <li className="conversation-toolbar-btn-box">
@@ -190,25 +117,31 @@ loop.shared.views = (function(_, OT, l10n) {
           <li className="conversation-toolbar-btn-box">
             <MediaControlButton action={this.handleToggleVideo}
                                 enabled={this.props.video.enabled}
+                                visible={this.props.video.visible}
                                 scope="local" type="video" />
           </li>
           <li className="conversation-toolbar-btn-box">
             <MediaControlButton action={this.handleToggleAudio}
                                 enabled={this.props.audio.enabled}
+                                visible={this.props.audio.visible}
                                 scope="local" type="audio" />
           </li>
         </ul>
       );
-      /* jshint ignore:end */
     }
   });
 
+  /**
+   * Conversation view.
+   */
   var ConversationView = React.createClass({
     mixins: [Backbone.Events],
 
     propTypes: {
       sdk: React.PropTypes.object.isRequired,
-      model: React.PropTypes.object.isRequired
+      video: React.PropTypes.object,
+      audio: React.PropTypes.object,
+      initiate: React.PropTypes.bool
     },
 
     // height set to 100%" to fix video layout on Google Chrome
@@ -224,10 +157,11 @@ loop.shared.views = (function(_, OT, l10n) {
       }
     },
 
-    getInitialProps: function() {
+    getDefaultProps: function() {
       return {
-        video: {enabled: true},
-        audio: {enabled: true}
+        initiate: true,
+        video: {enabled: true, visible: true},
+        audio: {enabled: true, visible: true}
       };
     },
 
@@ -239,26 +173,30 @@ loop.shared.views = (function(_, OT, l10n) {
     },
 
     componentWillMount: function() {
-      this.publisherConfig.publishVideo = this.props.video.enabled;
+      if (this.props.initiate) {
+        this.publisherConfig.publishVideo = this.props.video.enabled;
+      }
     },
 
     componentDidMount: function() {
-      this.listenTo(this.props.model, "session:connected",
-                                      this.startPublishing);
-      this.listenTo(this.props.model, "session:stream-created",
-                                      this._streamCreated);
-      this.listenTo(this.props.model, ["session:peer-hungup",
-                                       "session:network-disconnected",
-                                       "session:ended"].join(" "),
-                                       this.stopPublishing);
-
-      this.props.model.startSession();
+      if (this.props.initiate) {
+        this.listenTo(this.props.model, "session:connected",
+                                        this.startPublishing);
+        this.listenTo(this.props.model, "session:stream-created",
+                                        this._streamCreated);
+        this.listenTo(this.props.model, ["session:peer-hungup",
+                                         "session:network-disconnected",
+                                         "session:ended"].join(" "),
+                                         this.stopPublishing);
+        this.props.model.startSession();
+      }
 
       /**
        * OT inserts inline styles into the markup. Using a listener for
        * resize events helps us trigger a full width/height on the element
        * so that they update to the correct dimensions.
-       * */
+       * XXX: this should be factored as a mixin.
+       */
       window.addEventListener('orientationchange', this.updateVideoContainer);
       window.addEventListener('resize', this.updateVideoContainer);
     },
@@ -357,10 +295,12 @@ loop.shared.views = (function(_, OT, l10n) {
      * Unpublishes local stream.
      */
     stopPublishing: function() {
-      // Unregister listeners for publisher events
-      this.stopListening(this.publisher);
+      if (this.publisher) {
+        // Unregister listeners for publisher events
+        this.stopListening(this.publisher);
 
-      this.props.model.session.unpublish(this.publisher);
+        this.props.model.session.unpublish(this.publisher);
+      }
     },
 
     render: function() {
@@ -437,7 +377,7 @@ loop.shared.views = (function(_, OT, l10n) {
       return {category: "", description: ""};
     },
 
-    getInitialProps: function() {
+    getDefaultProps: function() {
       return {pending: false};
     },
 
@@ -542,8 +482,16 @@ loop.shared.views = (function(_, OT, l10n) {
 
   /**
    * Feedback received view.
+   *
+   * Props:
+   * - {Function} onAfterFeedbackReceived Function to execute after the
+   *   WINDOW_AUTOCLOSE_TIMEOUT_IN_SECONDS timeout has elapsed
    */
   var FeedbackReceived = React.createClass({
+    propTypes: {
+      onAfterFeedbackReceived: React.PropTypes.func
+    },
+
     getInitialState: function() {
       return {countdown: WINDOW_AUTOCLOSE_TIMEOUT_IN_SECONDS};
     },
@@ -563,7 +511,9 @@ loop.shared.views = (function(_, OT, l10n) {
     render: function() {
       if (this.state.countdown < 1) {
         clearInterval(this._timer);
-        window.close();
+        if (this.props.onAfterFeedbackReceived) {
+          this.props.onAfterFeedbackReceived();
+        }
       }
       return (
         <FeedbackLayout title={l10n.get("feedback_thank_you_heading")}>
@@ -584,6 +534,7 @@ loop.shared.views = (function(_, OT, l10n) {
     propTypes: {
       // A loop.FeedbackAPIClient instance
       feedbackApiClient: React.PropTypes.object.isRequired,
+      onAfterFeedbackReceived: React.PropTypes.func,
       // The current feedback submission flow step name
       step: React.PropTypes.oneOf(["start", "form", "finished"])
     },
@@ -592,7 +543,7 @@ loop.shared.views = (function(_, OT, l10n) {
       return {pending: false, step: this.props.step || "start"};
     },
 
-    getInitialProps: function() {
+    getDefaultProps: function() {
       return {step: "start"};
     },
 
@@ -627,7 +578,10 @@ loop.shared.views = (function(_, OT, l10n) {
     render: function() {
       switch(this.state.step) {
         case "finished":
-          return <FeedbackReceived />;
+          return (
+            <FeedbackReceived
+              onAfterFeedbackReceived={this.props.onAfterFeedbackReceived} />
+          );
         case "form":
           return <FeedbackForm feedbackApiClient={this.props.feedbackApiClient}
                                sendFeedback={this.sendFeedback}
@@ -653,7 +607,6 @@ loop.shared.views = (function(_, OT, l10n) {
    * Notification view.
    */
   var NotificationView = React.createClass({
-    displayName: 'NotificationView',
     mixins: [Backbone.Events],
 
     propTypes: {
@@ -676,10 +629,15 @@ loop.shared.views = (function(_, OT, l10n) {
    * Notification list view.
    */
   var NotificationListView = React.createClass({
-    mixins: [Backbone.Events],
+    mixins: [Backbone.Events, sharedMixins.DocumentVisibilityMixin],
 
     propTypes: {
-      notifications: React.PropTypes.object.isRequired
+      notifications: React.PropTypes.object.isRequired,
+      clearOnDocumentHidden: React.PropTypes.bool
+    },
+
+    getDefaultProps: function() {
+      return {clearOnDocumentHidden: false};
     },
 
     componentDidMount: function() {
@@ -692,9 +650,25 @@ loop.shared.views = (function(_, OT, l10n) {
       this.stopListening(this.props.notifications);
     },
 
+    /**
+     * Provided by DocumentVisibilityMixin. Clears notifications stack when the
+     * current document is hidden if the clearOnDocumentHidden prop is set to
+     * true and the collection isn't empty.
+     */
+    onDocumentHidden: function() {
+      if (this.props.clearOnDocumentHidden &&
+          this.props.notifications.length > 0) {
+        // Note: The `silent` option prevents the `reset` event to be triggered
+        // here, preventing the UI to "jump" a little because of the event
+        // callback being processed in another tick (I think).
+        this.props.notifications.reset([], {silent: true});
+        this.forceUpdate();
+      }
+    },
+
     render: function() {
       return (
-        <div id="messages">{
+        <div className="messages">{
           this.props.notifications.map(function(notification, key) {
             return <NotificationView key={key} notification={notification}/>;
           })
@@ -704,43 +678,69 @@ loop.shared.views = (function(_, OT, l10n) {
     }
   });
 
-  /**
-   * Unsupported Browsers view.
-   */
-  var UnsupportedBrowserView = BaseView.extend({
-    template: _.template([
-      '<div>',
-      '  <h2 data-l10n-id="incompatible_browser"></h2>',
-      '  <p data-l10n-id="powered_by_webrtc"></p>',
-      '  <p data-l10n-id="use_latest_firefox" ',
-      '    data-l10n-args=\'{"ff_url": "https://www.mozilla.org/firefox/"}\'>',
-      '  </p>',
-      '</div>'
-    ].join(""))
+  var Button = React.createClass({
+    propTypes: {
+      caption: React.PropTypes.string.isRequired,
+      onClick: React.PropTypes.func.isRequired,
+      disabled: React.PropTypes.bool,
+      additionalClass: React.PropTypes.string,
+    },
+
+    getDefaultProps: function() {
+      return {
+        disabled: false,
+        additionalClass: "",
+      };
+    },
+
+    render: function() {
+      var cx = React.addons.classSet;
+      var classObject = { button: true, disabled: this.props.disabled };
+      if (this.props.additionalClass) {
+        classObject[this.props.additionalClass] = true;
+      }
+      return (
+        <button onClick={this.props.onClick}
+                disabled={this.props.disabled}
+                className={cx(classObject)}>
+          {this.props.caption}
+        </button>
+      )
+    }
   });
 
-  /**
-   * Unsupported Browsers view.
-   */
-  var UnsupportedDeviceView = BaseView.extend({
-    template: _.template([
-      '<div>',
-      '  <h2 data-l10n-id="incompatible_device"></h2>',
-      '  <p data-l10n-id="sorry_device_unsupported"></p>',
-      '  <p data-l10n-id="use_firefox_windows_mac_linux"></p>',
-      '</div>'
-    ].join(""))
+  var ButtonGroup = React.createClass({
+    PropTypes: {
+      additionalClass: React.PropTypes.string
+    },
+
+    getDefaultProps: function() {
+      return {
+        additionalClass: "",
+      };
+    },
+
+    render: function() {
+      var cx = React.addons.classSet;
+      var classObject = { "button-group": true };
+      if (this.props.additionalClass) {
+        classObject[this.props.additionalClass] = true;
+      }
+      return (
+        <div className={cx(classObject)}>
+          {this.props.children}
+        </div>
+      )
+    }
   });
 
   return {
-    L10nView: L10nView,
-    BaseView: BaseView,
+    Button: Button,
+    ButtonGroup: ButtonGroup,
     ConversationView: ConversationView,
     ConversationToolbar: ConversationToolbar,
     FeedbackView: FeedbackView,
     MediaControlButton: MediaControlButton,
-    NotificationListView: NotificationListView,
-    UnsupportedBrowserView: UnsupportedBrowserView,
-    UnsupportedDeviceView: UnsupportedDeviceView
+    NotificationListView: NotificationListView
   };
 })(_, window.OT, navigator.mozL10n || document.mozL10n);

@@ -398,7 +398,7 @@ InterpreterFrame::markValues(JSTracer *trc, Value *sp, jsbytecode *pc)
         StaticBlockObject &blockObj = staticScope->as<StaticBlockObject>();
         nlivefixed = blockObj.localOffset() + blockObj.numVariables();
     } else {
-        nlivefixed = script()->nfixedvars();
+        nlivefixed = script()->nbodyfixed();
     }
 
     if (nfixed == nlivefixed) {
@@ -408,9 +408,9 @@ InterpreterFrame::markValues(JSTracer *trc, Value *sp, jsbytecode *pc)
         // Mark operand stack.
         markValues(trc, nfixed, sp - slots());
 
-        // Clear dead locals.
+        // Clear dead block-scoped locals.
         while (nfixed > nlivefixed)
-            unaliasedLocal(--nfixed, DONT_CHECK_ALIASING).setUndefined();
+            unaliasedLocal(--nfixed, DONT_CHECK_ALIASING).setMagic(JS_UNINITIALIZED_LEXICAL);
 
         // Mark live locals.
         markValues(trc, 0, nlivefixed);
@@ -495,7 +495,7 @@ InterpreterStack::pushExecuteFrame(JSContext *cx, HandleScript script, const Val
     InterpreterFrame *fp = reinterpret_cast<InterpreterFrame *>(buffer + 2 * sizeof(Value));
     fp->mark_ = mark;
     fp->initExecuteFrame(cx, script, evalInFrame, thisv, *scopeChain, type);
-    fp->initVarsToUndefined();
+    fp->initLocals();
 
     return fp;
 }
@@ -1230,15 +1230,17 @@ FrameIter::computedThisValue() const
 }
 
 Value
-FrameIter::thisv() const
+FrameIter::thisv(JSContext *cx)
 {
     switch (data_.state_) {
       case DONE:
       case ASMJS:
         break;
       case JIT:
-        if (data_.jitFrames_.isIonJS())
-            return ionInlineFrames_.thisValue();
+        if (data_.jitFrames_.isIonJS()) {
+            jit::MaybeReadFallback recover(cx, activation()->asJit(), &data_.jitFrames_);
+            return ionInlineFrames_.thisValue(recover);
+        }
         return data_.jitFrames_.baselineFrame()->thisValue();
       case INTERP:
         return interpFrame()->thisValue();
@@ -1401,7 +1403,8 @@ js::CheckLocalUnaliased(MaybeCheckAliasing checkAliasing, JSScript *script, uint
 jit::JitActivation::JitActivation(JSContext *cx, bool active)
   : Activation(cx, Jit),
     active_(active),
-    rematerializedFrames_(nullptr)
+    rematerializedFrames_(nullptr),
+    ionRecovery_(cx)
 {
     if (active) {
         prevJitTop_ = cx->mainThread().jitTop;
@@ -1416,7 +1419,8 @@ jit::JitActivation::JitActivation(JSContext *cx, bool active)
 jit::JitActivation::JitActivation(ForkJoinContext *cx)
   : Activation(cx, Jit),
     active_(true),
-    rematerializedFrames_(nullptr)
+    rematerializedFrames_(nullptr),
+    ionRecovery_(cx)
 {
     prevJitTop_ = cx->perThreadData->jitTop;
     prevJitJSContext_ = cx->perThreadData->jitJSContext;
@@ -1431,6 +1435,8 @@ jit::JitActivation::~JitActivation()
     }
 
     clearRematerializedFrames();
+    // All reocvered value are taken from activation during the bailout.
+    MOZ_ASSERT(ionRecovery_.empty());
     js_delete(rematerializedFrames_);
 }
 
@@ -1543,6 +1549,50 @@ jit::JitActivation::markRematerializedFrames(JSTracer *trc)
         return;
     for (RematerializedFrameTable::Enum e(*rematerializedFrames_); !e.empty(); e.popFront())
         RematerializedFrame::MarkInVector(trc, e.front().value());
+}
+
+bool
+jit::JitActivation::registerIonFrameRecovery(IonJSFrameLayout *fp, RInstructionResults&& results)
+{
+#ifdef DEBUG
+    // Check that there is no entry in the vector yet.
+    RInstructionResults *tmp = maybeIonFrameRecovery(fp);
+    MOZ_ASSERT_IF(tmp, tmp->isInitialized());
+#endif
+
+    if (!ionRecovery_.append(mozilla::Move(results)))
+        return false;
+
+    return true;
+}
+
+jit::RInstructionResults *
+jit::JitActivation::maybeIonFrameRecovery(IonJSFrameLayout *fp)
+{
+    for (RInstructionResults *it = ionRecovery_.begin(); it != ionRecovery_.end(); ) {
+        if (it->frame() == fp)
+            return it;
+    }
+
+    return nullptr;
+}
+
+void
+jit::JitActivation::maybeTakeIonFrameRecovery(IonJSFrameLayout *fp, RInstructionResults *results)
+{
+    RInstructionResults *elem = maybeIonFrameRecovery(fp);
+    if (!elem)
+        return;
+
+    *results = mozilla::Move(*elem);
+    ionRecovery_.erase(elem);
+}
+
+void
+jit::JitActivation::markIonRecovery(JSTracer *trc)
+{
+    for (RInstructionResults *it = ionRecovery_.begin(); it != ionRecovery_.end(); it++)
+        it->trace(trc);
 }
 
 AsmJSActivation::AsmJSActivation(JSContext *cx, AsmJSModule &module)

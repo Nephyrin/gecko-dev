@@ -2,6 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this file,
  * You can obtain one at http://mozilla.org/MPL/2.0/. */
 
+/*jshint newcap:false*/
 /*global loop, sinon */
 
 var expect = chai.expect;
@@ -11,13 +12,6 @@ describe("loop.panel", function() {
   "use strict";
 
   var sandbox, notifications, fakeXHR, requests = [];
-
-  function createTestRouter(fakeDocument) {
-    return new loop.panel.PanelRouter({
-      notifications: notifications,
-      document: fakeDocument
-    });
-  }
 
   beforeEach(function() {
     sandbox = sinon.sandbox.create();
@@ -31,9 +25,6 @@ describe("loop.panel", function() {
 
     navigator.mozLoop = {
       doNotDisturb: true,
-      get serverUrl() {
-        return "http://example.com";
-      },
       getStrings: function() {
         return JSON.stringify({textContent: "fakeText"});
       },
@@ -43,7 +34,14 @@ describe("loop.panel", function() {
       setLoopCharPref: sandbox.stub(),
       getLoopCharPref: sandbox.stub().returns("unseen"),
       copyString: sandbox.stub(),
-      noteCallUrlExpiry: sinon.spy()
+      noteCallUrlExpiry: sinon.spy(),
+      composeEmail: sinon.spy(),
+      contacts: {
+        getAll: function(callback) {
+          callback(null, []);
+        },
+        on: sandbox.stub()
+      }
     };
 
     document.mozL10n.initialize(navigator.mozLoop);
@@ -54,108 +52,42 @@ describe("loop.panel", function() {
     sandbox.restore();
   });
 
-  describe("loop.panel.PanelRouter", function() {
-    describe("#constructor", function() {
-      it("should require a notifications collection", function() {
-        expect(function() {
-          new loop.panel.PanelRouter();
-        }).to.Throw(Error, /missing required notifications/);
-      });
-
-      it("should require a document", function() {
-        expect(function() {
-          new loop.panel.PanelRouter({notifications: notifications});
-        }).to.Throw(Error, /missing required document/);
-      });
+  describe("#init", function() {
+    beforeEach(function() {
+      sandbox.stub(React, "renderComponent");
+      sandbox.stub(document.mozL10n, "initialize");
+      sandbox.stub(document.mozL10n, "get").returns("Fake title");
     });
 
-    describe("constructed", function() {
-      var router;
+    it("should initalize L10n", function() {
+      loop.panel.init();
 
-      beforeEach(function() {
-        router = createTestRouter({
-          hidden: true,
-          addEventListener: sandbox.spy()
-        });
-
-        sandbox.stub(router, "loadView");
-        sandbox.stub(router, "loadReactComponent");
-      });
-
-      describe("#home", function() {
-        it("should reset the PanelView", function() {
-          sandbox.stub(router, "reset");
-
-          router.home();
-
-          sinon.assert.calledOnce(router.reset);
-        });
-      });
-
-      describe("#reset", function() {
-        it("should clear all pending notifications", function() {
-          sandbox.stub(notifications, "reset");
-          router.reset();
-
-          sinon.assert.calledOnce(notifications.reset);
-        });
-
-        it("should load the home view", function() {
-          router.reset();
-
-          sinon.assert.calledOnce(router.loadReactComponent);
-          sinon.assert.calledWithExactly(router.loadReactComponent,
-            sinon.match(function(value) {
-              return React.addons.TestUtils.isDescriptorOfType(
-                value, loop.panel.PanelView);
-            }));
-        });
-      });
+      sinon.assert.calledOnce(document.mozL10n.initialize);
+      sinon.assert.calledWithExactly(document.mozL10n.initialize,
+        navigator.mozLoop);
     });
 
-    describe("Events", function() {
-      beforeEach(function() {
-        sandbox.stub(loop.panel.PanelRouter.prototype, "trigger");
-      });
+    it("should render the panel view", function() {
+      loop.panel.init();
 
-      it("should listen to document visibility changes", function() {
-        var fakeDocument = {
-          hidden: true,
-          addEventListener: sandbox.spy()
-        };
+      sinon.assert.calledOnce(React.renderComponent);
+      sinon.assert.calledWith(React.renderComponent,
+        sinon.match(function(value) {
+          return TestUtils.isDescriptorOfType(value,
+            loop.panel.PanelView);
+      }));
+    });
 
-        var router = createTestRouter(fakeDocument);
+    it("should dispatch an loopPanelInitialized", function(done) {
+      function listener() {
+        done();
+      }
 
-        sinon.assert.calledOnce(fakeDocument.addEventListener);
-        sinon.assert.calledWith(fakeDocument.addEventListener,
-                                "visibilitychange");
-      });
+      window.addEventListener("loopPanelInitialized", listener);
 
-      it("should trigger panel:open when the panel document is visible",
-        function() {
-          var router = createTestRouter({
-            hidden: false,
-            addEventListener: function(name, cb) {
-              cb({currentTarget: {hidden: false}});
-            }
-          });
+      loop.panel.init();
 
-          sinon.assert.calledOnce(router.trigger);
-          sinon.assert.calledWith(router.trigger, "panel:open");
-        });
-
-      it("should trigger panel:closed when the panel document is hidden",
-        function() {
-          var router = createTestRouter({
-            hidden: true,
-            addEventListener: function(name, cb) {
-              cb({currentTarget: {hidden: true}});
-            }
-          });
-
-          sinon.assert.calledOnce(router.trigger);
-          sinon.assert.calledWith(router.trigger, "panel:closed");
-        });
+      window.removeEventListener("loopPanelInitialized", listener);
     });
   });
 
@@ -192,7 +124,7 @@ describe("loop.panel", function() {
   });
 
   describe("loop.panel.PanelView", function() {
-    var fakeClient, callUrlData, view;
+    var fakeClient, callUrlData, view, callTab, contactsTab;
 
     beforeEach(function() {
       callUrlData = {
@@ -210,6 +142,27 @@ describe("loop.panel", function() {
         notifications: notifications,
         client: fakeClient
       }));
+
+      [callTab, contactsTab] =
+        TestUtils.scryRenderedDOMComponentsWithClass(view, "tab");
+    });
+
+    describe('TabView', function() {
+      it("should select contacts tab when clicking tab button", function() {
+        TestUtils.Simulate.click(
+          view.getDOMNode().querySelector('li[data-tab-name="contacts"]'));
+
+        expect(contactsTab.getDOMNode().classList.contains("selected"))
+          .to.be.true;
+      });
+
+      it("should select call tab when clicking tab button", function() {
+        TestUtils.Simulate.click(
+          view.getDOMNode().querySelector('li[data-tab-name="call"]'));
+
+        expect(callTab.getDOMNode().classList.contains("selected"))
+          .to.be.true;
+      });
     });
 
     describe("AuthLink", function() {
@@ -231,6 +184,7 @@ describe("loop.panel", function() {
       beforeEach(function() {
         navigator.mozLoop.logInToFxA = sandbox.stub();
         navigator.mozLoop.logOutFromFxA = sandbox.stub();
+        navigator.mozLoop.openFxASettings = sandbox.stub();
       });
 
       it("should show a signin entry when user is not authenticated",
@@ -246,7 +200,7 @@ describe("loop.panel", function() {
         });
 
       it("should show a signout entry when user is authenticated", function() {
-        navigator.mozLoop.loggedInToFxA = true;
+        navigator.mozLoop.userProfile = {email: "test@example.com"};
 
         var view = TestUtils.renderIntoDocument(loop.panel.SettingsDropdown());
 
@@ -257,12 +211,23 @@ describe("loop.panel", function() {
       });
 
       it("should show an account entry when user is authenticated", function() {
-        navigator.mozLoop.loggedInToFxA = true;
+        navigator.mozLoop.userProfile = {email: "test@example.com"};
 
         var view = TestUtils.renderIntoDocument(loop.panel.SettingsDropdown());
 
         expect(view.getDOMNode().querySelectorAll(".icon-account"))
           .to.have.length.of(1);
+      });
+
+      it("should open the FxA settings when the account entry is clicked", function() {
+        navigator.mozLoop.userProfile = {email: "test@example.com"};
+
+        var view = TestUtils.renderIntoDocument(loop.panel.SettingsDropdown());
+
+        TestUtils.Simulate.click(
+          view.getDOMNode().querySelector(".icon-account"));
+
+        sinon.assert.calledOnce(navigator.mozLoop.openFxASettings);
       });
 
       it("should hide any account entry when user is not authenticated",
@@ -286,7 +251,7 @@ describe("loop.panel", function() {
       });
 
       it("should sign out the user on click when authenticated", function() {
-        navigator.mozLoop.loggedInToFxA = true;
+        navigator.mozLoop.userProfile = {email: "test@example.com"};
         var view = TestUtils.renderIntoDocument(loop.panel.SettingsDropdown());
 
         TestUtils.Simulate.click(
@@ -387,16 +352,15 @@ describe("loop.panel", function() {
 
       it("should display a share button for email", function() {
         fakeClient.requestCallUrl = sandbox.stub();
-        var mailto = 'mailto:?subject=email-subject&body=http://example.com';
         var view = TestUtils.renderIntoDocument(loop.panel.CallUrlResult({
           notifications: notifications,
           client: fakeClient
         }));
         view.setState({pending: false, callUrl: "http://example.com"});
 
-        TestUtils.findRenderedDOMComponentWithClass(view, "btn-email");
-        expect(view.getDOMNode().querySelector(".btn-email").dataset.mailto)
-              .to.equal(encodeURI(mailto));
+        TestUtils.findRenderedDOMComponentWithClass(view, "button-email");
+        TestUtils.Simulate.click(view.getDOMNode().querySelector(".button-email"));
+        sinon.assert.calledOnce(navigator.mozLoop.composeEmail);
       });
 
       it("should feature a copy button capable of copying the call url when clicked", function() {
@@ -412,7 +376,7 @@ describe("loop.panel", function() {
           callUrlExpiry: 6000
         });
 
-        TestUtils.Simulate.click(view.getDOMNode().querySelector(".btn-copy"));
+        TestUtils.Simulate.click(view.getDOMNode().querySelector(".button-copy"));
 
         sinon.assert.calledOnce(navigator.mozLoop.copyString);
         sinon.assert.calledWithExactly(navigator.mozLoop.copyString,
@@ -432,7 +396,7 @@ describe("loop.panel", function() {
             callUrlExpiry: 6000
           });
 
-          TestUtils.Simulate.click(view.getDOMNode().querySelector(".btn-copy"));
+          TestUtils.Simulate.click(view.getDOMNode().querySelector(".button-copy"));
 
           sinon.assert.calledOnce(navigator.mozLoop.noteCallUrlExpiry);
           sinon.assert.calledWithExactly(navigator.mozLoop.noteCallUrlExpiry,
@@ -452,8 +416,7 @@ describe("loop.panel", function() {
             callUrlExpiry: 6000
           });
 
-          view.getDOMNode().querySelector(".btn-email").dataset.mailto = "#";
-          TestUtils.Simulate.click(view.getDOMNode().querySelector(".btn-email"));
+          TestUtils.Simulate.click(view.getDOMNode().querySelector(".button-email"));
 
           sinon.assert.calledOnce(navigator.mozLoop.noteCallUrlExpiry);
           sinon.assert.calledWithExactly(navigator.mozLoop.noteCallUrlExpiry,

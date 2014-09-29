@@ -36,7 +36,6 @@
 #include "nsIObjectFrame.h"
 #include "nsBindingManager.h"
 #include "nsStyleCoord.h"
-#include "SelectionCarets.h"
 
 #include "mozilla/ContentEvents.h"
 #include "mozilla/dom/Element.h"
@@ -1567,11 +1566,6 @@ nsFocusManager::Blur(nsPIDOMWindow* aWindowToClear,
     return true;
   }
 
-  nsRefPtr<SelectionCarets> selectionCarets = presShell->GetSelectionCarets();
-  if (selectionCarets) {
-    selectionCarets->SetVisibility(false);
-  }
-
   bool clearFirstBlurEvent = false;
   if (!mFirstBlurEvent) {
     mFirstBlurEvent = content;
@@ -1618,12 +1612,12 @@ nsFocusManager::Blur(nsPIDOMWindow* aWindowToClear,
             widget->SetFocus(false);
         }
       }
+    }
 
       // if the object being blurred is a remote browser, deactivate remote content
-      if (TabParent* remote = TabParent::GetFrom(content)) {
-        remote->Deactivate();
-        LOGFOCUS(("Remote browser deactivated"));
-      }
+    if (TabParent* remote = TabParent::GetFrom(content)) {
+      remote->Deactivate();
+      LOGFOCUS(("Remote browser deactivated"));
     }
   }
 

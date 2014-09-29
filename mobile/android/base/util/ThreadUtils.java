@@ -10,6 +10,7 @@ import org.mozilla.gecko.mozglue.RobocopTarget;
 import java.util.Map;
 
 import android.os.Handler;
+import android.os.Looper;
 import android.os.MessageQueue;
 import android.util.Log;
 
@@ -25,10 +26,10 @@ public final class ThreadUtils {
         THROW,
     }
 
-    private static volatile Thread sUiThread;
-    private static volatile Thread sBackgroundThread;
+    private static final Thread sUiThread = Looper.getMainLooper().getThread();
+    private static final Handler sUiHandler = new Handler(Looper.getMainLooper());
 
-    private static Handler sUiHandler;
+    private static volatile Thread sBackgroundThread;
 
     // Referenced directly from GeckoAppShell in highly performance-sensitive code (The extra
     // function call of the getter was harming performance. (Bug 897123))
@@ -77,11 +78,6 @@ public final class ThreadUtils {
             }
             Log.w(LOGTAG, "----");
         }
-    }
-
-    public static void setUiThread(Thread thread, Handler handler) {
-        sUiThread = thread;
-        sUiHandler = handler;
     }
 
     public static void setBackgroundThread(Thread thread) {
@@ -180,6 +176,13 @@ public final class ThreadUtils {
         default:
             Log.e(LOGTAG, "Method called on wrong thread!", e);
         }
+    }
+
+    public static boolean isOnGeckoThread() {
+        if (sGeckoThread != null) {
+            return isOnThread(sGeckoThread);
+        }
+        return false;
     }
 
     public static boolean isOnUiThread() {

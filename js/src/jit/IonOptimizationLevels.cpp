@@ -30,7 +30,6 @@ OptimizationInfo::initNormalOptimizationInfo()
     inlineNative_ = true;
     gvn_ = true;
     licm_ = true;
-    uce_ = true;
     rangeAnalysis_ = true;
     loopUnrolling_ = true;
     autoTruncate_ = true;
@@ -144,7 +143,7 @@ OptimizationInfos::levelForScript(JSScript *script, jsbytecode *pc) const
     while (!isLastLevel(prev)) {
         OptimizationLevel level = nextLevel(prev);
         const OptimizationInfo *info = get(level);
-        if (script->getWarmUpCounter() < info->compilerWarmUpThreshold(script, pc))
+        if (script->getWarmUpCount() < info->compilerWarmUpThreshold(script, pc))
             return prev;
 
         prev = level;

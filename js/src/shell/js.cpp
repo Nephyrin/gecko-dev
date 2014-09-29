@@ -1,4 +1,5 @@
-/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*- * vim: set ts=8 sts=4 et sw=4 tw=99:
+/* -*- Mode: C++; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 4 -*-
+ * vim: set ts=8 sts=4 et sw=4 tw=99:
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -21,6 +22,12 @@
 # include <io.h>     /* for isatty() */
 #endif
 #include <locale.h>
+#ifdef HAVE_MALLOC_H /* for malloc_usable_size on Linux, _msize on Windows */
+#include <malloc.h>
+#endif
+#ifdef HAVE_MALLOC_MALLOC_H
+#include <malloc/malloc.h> /* for malloc_size on OSX */
+#endif
 #include <math.h>
 #include <signal.h>
 #include <stdio.h>
@@ -56,11 +63,13 @@
 #include "frontend/Parser.h"
 #include "jit/arm/Simulator-arm.h"
 #include "jit/Ion.h"
+#include "js/Debug.h"
 #include "js/OldDebugAPI.h"
 #include "js/StructuredClone.h"
 #include "perf/jsperf.h"
 #include "shell/jsheaptools.h"
 #include "shell/jsoptparse.h"
+#include "shell/OSObject.h"
 #include "vm/ArgumentsObject.h"
 #include "vm/Debugger.h"
 #include "vm/HelperThreads.h"
@@ -1779,7 +1788,7 @@ LineToPC(JSContext *cx, unsigned argc, jsval *vp)
     if (!ToUint32(cx, args.get(lineArg), &lineno))
          return false;
 
-    jsbytecode *pc = JS_LineNumberToPC(cx, script, lineno);
+    jsbytecode *pc = js_LineNumberToPC(script, lineno);
     if (!pc)
         return false;
     args.rval().setInt32(script->pcToOffset(pc));
@@ -1796,7 +1805,7 @@ PCToLine(JSContext *cx, unsigned argc, jsval *vp)
 
     if (!GetScriptAndPCArgs(cx, args.length(), args.array(), &script, &i))
         return false;
-    lineno = JS_PCToLineNumber(cx, script, script->offsetToPC(i));
+    lineno = PCToLineNumber(script, script->offsetToPC(i));
     if (!lineno)
         return false;
     args.rval().setInt32(lineno);
@@ -2172,7 +2181,7 @@ DisassFile(JSContext *cx, unsigned argc, jsval *vp)
     Sprinter sprinter(cx);
     if (!sprinter.init())
         return false;
-    bool ok = DisassembleScript(cx, script, NullPtr(), p.lines, p.recursive, &sprinter);
+    bool ok = DisassembleScript(cx, script, JS::NullPtr(), p.lines, p.recursive, &sprinter);
     if (ok)
         fprintf(stdout, "%s\n", sprinter.string());
     if (!ok)
@@ -2225,7 +2234,7 @@ DisassWithSrc(JSContext *cx, unsigned argc, jsval *vp)
         }
 
         /* burn the leading lines */
-        line2 = JS_PCToLineNumber(cx, script, pc);
+        line2 = PCToLineNumber(script, pc);
         for (line1 = 0; line1 < line2 - 1; line1++) {
             char *tmp = fgets(linebuf, LINE_BUF_LEN, file);
             if (!tmp) {
@@ -2237,7 +2246,7 @@ DisassWithSrc(JSContext *cx, unsigned argc, jsval *vp)
 
         bupline = 0;
         while (pc < end) {
-            line2 = JS_PCToLineNumber(cx, script, pc);
+            line2 = PCToLineNumber(script, pc);
 
             if (line2 < line1) {
                 if (bupline != line2) {
@@ -2669,7 +2678,7 @@ EvalInFrame(JSContext *cx, unsigned argc, jsval *vp)
     {
         AutoCompartment ac(cx, env);
         ok = EvaluateInEnv(cx, env, thisv, frame, stableChars.twoByteRange(), fpscript->filename(),
-                           JS_PCToLineNumber(cx, fpscript, fi.pc()), args.rval());
+                           PCToLineNumber(fpscript, fi.pc()), args.rval());
     }
     return ok;
 }
@@ -4032,9 +4041,8 @@ WrapWithProto(JSContext *cx, unsigned argc, jsval *vp)
 
     WrapperOptions options(cx);
     options.setProto(proto.toObjectOrNull());
-    options.selectDefaultClass(obj.toObject().isCallable());
     JSObject *wrapped = Wrapper::New(cx, &obj.toObject(), &obj.toObject().global(),
-                                     &Wrapper::singletonWithPrototype, &options);
+                                     &Wrapper::singletonWithPrototype, options);
     if (!wrapped)
         return false;
 
@@ -4948,121 +4956,6 @@ static const JSClass global_class = {
     JS_GlobalObjectTraceHook
 };
 
-static bool
-env_setProperty(JSContext *cx, HandleObject obj, HandleId id, bool strict, MutableHandleValue vp)
-{
-/* XXX porting may be easy, but these don't seem to supply setenv by default */
-#if !defined SOLARIS
-    int rv;
-
-    if (JSID_IS_SYMBOL(id))
-        return true;
-    RootedString idstring(cx, IdToString(cx, id));
-    if (!idstring)
-        return false;
-    JSAutoByteString idstr;
-    if (!idstr.encodeLatin1(cx, idstring))
-        return false;
-
-    RootedString value(cx, ToString(cx, vp));
-    if (!value)
-        return false;
-    JSAutoByteString valstr;
-    if (!valstr.encodeLatin1(cx, value))
-        return false;
-
-#if defined XP_WIN || defined HPUX || defined OSF1
-    {
-        char *waste = JS_smprintf("%s=%s", idstr.ptr(), valstr.ptr());
-        if (!waste) {
-            JS_ReportOutOfMemory(cx);
-            return false;
-        }
-        rv = putenv(waste);
-#ifdef XP_WIN
-        /*
-         * HPUX9 at least still has the bad old non-copying putenv.
-         *
-         * Per mail from <s.shanmuganathan@digital.com>, OSF1 also has a putenv
-         * that will crash if you pass it an auto char array (so it must place
-         * its argument directly in the char *environ[] array).
-         */
-        JS_smprintf_free(waste);
-#endif
-    }
-#else
-    rv = setenv(idstr.ptr(), valstr.ptr(), 1);
-#endif
-    if (rv < 0) {
-        JS_ReportError(cx, "can't set env variable %s to %s", idstr.ptr(), valstr.ptr());
-        return false;
-    }
-    vp.set(StringValue(value));
-#endif /* !defined SOLARIS */
-    return true;
-}
-
-static bool
-env_enumerate(JSContext *cx, HandleObject obj)
-{
-    static bool reflected;
-    char **evp, *name, *value;
-    RootedString valstr(cx);
-    bool ok;
-
-    if (reflected)
-        return true;
-
-    for (evp = (char **)JS_GetPrivate(obj); (name = *evp) != nullptr; evp++) {
-        value = strchr(name, '=');
-        if (!value)
-            continue;
-        *value++ = '\0';
-        valstr = JS_NewStringCopyZ(cx, value);
-        ok = valstr && JS_DefineProperty(cx, obj, name, valstr, JSPROP_ENUMERATE);
-        value[-1] = '=';
-        if (!ok)
-            return false;
-    }
-
-    reflected = true;
-    return true;
-}
-
-static bool
-env_resolve(JSContext *cx, HandleObject obj, HandleId id, MutableHandleObject objp)
-{
-    if (JSID_IS_SYMBOL(id))
-        return true;
-
-    RootedString idstring(cx, IdToString(cx, id));
-    if (!idstring)
-        return false;
-    JSAutoByteString idstr;
-    if (!idstr.encodeLatin1(cx, idstring))
-        return false;
-
-    const char *name = idstr.ptr();
-    const char *value = getenv(name);
-    if (value) {
-        RootedString valstr(cx, JS_NewStringCopyZ(cx, value));
-        if (!valstr)
-            return false;
-        if (!JS_DefineProperty(cx, obj, name, valstr, JSPROP_ENUMERATE))
-            return false;
-        objp.set(obj);
-    }
-    return true;
-}
-
-static const JSClass env_class = {
-    "environment", JSCLASS_HAS_PRIVATE | JSCLASS_NEW_RESOLVE,
-    JS_PropertyStub,  JS_DeletePropertyStub,
-    JS_PropertyStub,  env_setProperty,
-    env_enumerate, (JSResolveOp) env_resolve,
-    JS_ConvertStub
-};
-
 /*
  * Define a FakeDOMObject constructor. It returns an object with a getter,
  * setter and method with attached JitInfo. This object can be used to test
@@ -5559,7 +5452,7 @@ DestroyContext(JSContext *cx, bool withGC)
     // data.
     JSShellContextData *data = (JSShellContextData *) JS_GetContextPrivate(cx);
     JS_SetContextPrivate(cx, nullptr);
-    free(data);
+    js_free(data);
     withGC ? JS_DestroyContext(cx) : JS_DestroyContextNoGC(cx);
 }
 
@@ -5807,13 +5700,13 @@ SetRuntimeOptions(JSRuntime *rt, const OptionParser &op)
             return OptionFailure("ion-limit-script-size", str);
     }
 
-    int32_t warmUpCounter = op.getIntOption("ion-warmup-threshold");
-    if (warmUpCounter >= 0)
-        jit::js_JitOptions.setCompilerWarmUpThreshold(warmUpCounter);
+    int32_t warmUpThreshold = op.getIntOption("ion-warmup-threshold");
+    if (warmUpThreshold >= 0)
+        jit::js_JitOptions.setCompilerWarmUpThreshold(warmUpThreshold);
 
-    warmUpCounter = op.getIntOption("baseline-warmup-threshold");
-    if (warmUpCounter >= 0)
-        jit::js_JitOptions.baselineWarmUpThreshold = warmUpCounter;
+    warmUpThreshold = op.getIntOption("baseline-warmup-threshold");
+    if (warmUpThreshold >= 0)
+        jit::js_JitOptions.baselineWarmUpThreshold = warmUpThreshold;
 
     if (op.getBoolOption("baseline-eager"))
         jit::js_JitOptions.baselineWarmUpThreshold = 0;
@@ -5922,15 +5815,13 @@ Shell(JSContext *cx, OptionParser *op, char **envp)
 
     JSAutoCompartment ac(cx, glob);
 
-    JSObject *envobj = JS_DefineObject(cx, glob, "environment", &env_class);
-    if (!envobj)
+    if (!js::DefineOS(cx, glob))
         return 1;
-    JS_SetPrivate(envobj, envp);
 
     int result = ProcessArgs(cx, glob, op);
 
     if (enableDisassemblyDumps)
-        JS_DumpCompartmentPCCounts(cx);
+        js::DumpCompartmentPCCounts(cx);
 
     if (!op->getBoolOption("no-js-cache-per-process")) {
         if (jsCacheAsmJSPath) {
@@ -5962,6 +5853,26 @@ static bool
 DummyPreserveWrapperCallback(JSContext *cx, JSObject *obj)
 {
     return true;
+}
+
+size_t
+ShellMallocSizeOf(const void *constPtr)
+{
+    // Match the type that all the library functions we might use here expect.
+    void *ptr = (void *) constPtr;
+
+    if (!ptr)
+        return 0;
+
+#if defined(HAVE_MALLOC_USABLE_SIZE)
+    return malloc_usable_size(ptr);
+#elif defined(HAVE_MALLOC_SIZE)
+    return malloc_size(ptr);
+#elif HAVE__MSIZE
+    return _msize(ptr);
+#else
+    return 0;
+#endif
 }
 
 int
@@ -6210,6 +6121,8 @@ main(int argc, char **argv, char **envp)
     JS::SetAsmJSCacheOps(rt, &asmJSCacheOps);
 
     JS_SetNativeStackQuota(rt, gMaxStackSize);
+
+    JS::dbg::SetDebuggerMallocSizeOf(rt, ShellMallocSizeOf);
 
     if (!offThreadState.init())
         return 1;

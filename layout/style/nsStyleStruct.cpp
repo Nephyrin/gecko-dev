@@ -704,9 +704,12 @@ nsChangeHint nsStyleList::CalcDifference(const nsStyleList& aOther) const
   if (mListStylePosition != aOther.mListStylePosition)
     return NS_STYLE_HINT_FRAMECHANGE;
   if (EqualImages(mListStyleImage, aOther.mListStyleImage) &&
-      mListStyleType == aOther.mListStyleType) {
-    if (mImageRegion.IsEqualInterior(aOther.mImageRegion))
+      mCounterStyle == aOther.mCounterStyle) {
+    if (mImageRegion.IsEqualInterior(aOther.mImageRegion)) {
+      if (mListStyleType != aOther.mListStyleType)
+        return nsChangeHint_NeutralChange;
       return NS_STYLE_HINT_NONE;
+    }
     if (mImageRegion.width == aOther.mImageRegion.width &&
         mImageRegion.height == aOther.mImageRegion.height)
       return NS_STYLE_HINT_VISUAL;
@@ -2611,6 +2614,10 @@ nsChangeHint nsStyleDisplay::CalcDifference(const nsStyleDisplay& aOther) const
     }
   }
 
+  if (mMixBlendMode != aOther.mMixBlendMode) {
+    NS_UpdateHint(hint, nsChangeHint_RepaintFrame);
+  }
+
   /* If we've added or removed the transform property, we need to reconstruct the frame to add
    * or remove the view object, and also to handle abs-pos and fixed-pos containers.
    */
@@ -2708,7 +2715,6 @@ nsChangeHint nsStyleDisplay::CalcDifference(const nsStyleDisplay& aOther) const
       (!mClip.IsEqualEdges(aOther.mClip) ||
        mOriginalDisplay != aOther.mOriginalDisplay ||
        mOriginalFloats != aOther.mOriginalFloats ||
-       mMixBlendMode != aOther.mMixBlendMode ||
        mTransitions != aOther.mTransitions ||
        mTransitionTimingFunctionCount !=
          aOther.mTransitionTimingFunctionCount ||
@@ -3206,7 +3212,7 @@ nsStyleText::nsStyleText(void)
   mWordWrap = NS_STYLE_WORDWRAP_NORMAL;
   mHyphens = NS_STYLE_HYPHENS_MANUAL;
   mTextSizeAdjust = NS_STYLE_TEXT_SIZE_ADJUST_AUTO;
-  mTextOrientation = NS_STYLE_TEXT_ORIENTATION_AUTO;
+  mTextOrientation = NS_STYLE_TEXT_ORIENTATION_MIXED;
   mTextCombineUpright = NS_STYLE_TEXT_COMBINE_UPRIGHT_NONE;
   mControlCharacterVisibility = NS_STYLE_CONTROL_CHARACTER_VISIBILITY_HIDDEN;
 
@@ -3325,6 +3331,7 @@ nsStyleUserInterface::nsStyleUserInterface(void)
   mUserInput = NS_STYLE_USER_INPUT_AUTO;
   mUserModify = NS_STYLE_USER_MODIFY_READ_ONLY;
   mUserFocus = NS_STYLE_USER_FOCUS_NONE;
+  mWindowDragging = NS_STYLE_WINDOW_DRAGGING_NO_DRAG;
 
   mCursor = NS_STYLE_CURSOR_AUTO; // fix for bugzilla bug 51113
 
@@ -3336,6 +3343,7 @@ nsStyleUserInterface::nsStyleUserInterface(const nsStyleUserInterface& aSource) 
   mUserInput(aSource.mUserInput),
   mUserModify(aSource.mUserModify),
   mUserFocus(aSource.mUserFocus),
+  mWindowDragging(aSource.mWindowDragging),
   mCursor(aSource.mCursor)
 { 
   MOZ_COUNT_CTOR(nsStyleUserInterface);
@@ -3373,6 +3381,10 @@ nsChangeHint nsStyleUserInterface::CalcDifference(const nsStyleUserInterface& aO
 
   if (mUserFocus != aOther.mUserFocus) {
     NS_UpdateHint(hint, nsChangeHint_NeutralChange);
+  }
+
+  if (mWindowDragging != aOther.mWindowDragging) {
+    NS_UpdateHint(hint, nsChangeHint_SchedulePaint);
   }
 
   return hint;
