@@ -149,27 +149,27 @@
           </Section>
 
           <Section name="IncomingCallView">
-            <Example summary="Default / incoming video call" dashed="true" style={{width: "280px"}}>
+            <Example summary="Default / incoming video call" dashed="true" style={{width: "260px", height: "254px"}}>
               <div className="fx-embedded">
                 <IncomingCallView model={mockConversationModel}
-                                  video={{enabled: true}} />
+                                  video={true} />
               </div>
             </Example>
 
-            <Example summary="Default / incoming audio only call" dashed="true" style={{width: "280px"}}>
+            <Example summary="Default / incoming audio only call" dashed="true" style={{width: "260px", height: "254px"}}>
               <div className="fx-embedded">
                 <IncomingCallView model={mockConversationModel}
-                                  video={{enabled: false}} />
+                                  video={false} />
               </div>
             </Example>
           </Section>
 
           <Section name="IncomingCallView-ActiveState">
-            <Example summary="Default" dashed="true" style={{width: "280px"}}>
+            <Example summary="Default" dashed="true" style={{width: "260px", height: "254px"}}>
               <div className="fx-embedded" >
                 <IncomingCallView  model={mockConversationModel}
                                    showDeclineMenu={true}
-                                   video={{enabled: true}} />
+                                   video={true} />
               </div>
             </Example>
           </Section>
@@ -319,13 +319,13 @@
               <strong>Note:</strong> For the useable demo, you can access submitted data at&nbsp;
               <a href="https://input.allizom.org/">input.allizom.org</a>.
             </p>
-            <Example summary="Default (useable demo)" dashed="true" style={{width: "280px"}}>
+            <Example summary="Default (useable demo)" dashed="true" style={{width: "260px"}}>
               <FeedbackView feedbackApiClient={stageFeedbackApiClient} />
             </Example>
-            <Example summary="Detailed form" dashed="true" style={{width: "280px"}}>
+            <Example summary="Detailed form" dashed="true" style={{width: "260px"}}>
               <FeedbackView feedbackApiClient={stageFeedbackApiClient} step="form" />
             </Example>
-            <Example summary="Thank you!" dashed="true" style={{width: "280px"}}>
+            <Example summary="Thank you!" dashed="true" style={{width: "260px"}}>
               <FeedbackView feedbackApiClient={stageFeedbackApiClient} step="finished" />
             </Example>
           </Section>

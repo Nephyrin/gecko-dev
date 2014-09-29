@@ -76,16 +76,19 @@ MIRType MIRTypeFromValue(const js::Value &vp)
      * points.
      */                                                                         \
     _(Unused)                                                                   \
-    /* Marks if an instruction has fewer uses than the original code.
-     * E.g. UCE can remove code.
-     * Every instruction where an use is/was removed from an instruction and
-     * as a result the number of operands doesn't equal the original code
-     * need to get marked as UseRemoved. This is important for truncation
-     * analysis to know, since if all original uses are still present,
-     * it can ignore resumepoints.
-     * Currently this is done for every pass after IonBuilder and before
-     * Truncate Doubles. So every time removeUse is called, UseRemoved needs
-     * to get set.
+                                                                                \
+    /* When a branch is removed, the uses of multiple instructions are removed.
+     * The removal of branches is based on hypotheses.  These hypotheses might
+     * fail, in which case we need to bailout from the current code.
+     *
+     * When we implement a destructive optimization, we need to consider the
+     * failing cases, and consider the fact that we might resume the execution
+     * into a branch which was removed from the compiler.  As such, a
+     * destructive optimization need to take into acount removed branches.
+     *
+     * In order to let destructive optimizations know about removed branches, we
+     * have to annotate instructions with the UseRemoved flag.  This flag
+     * annotates instruction which were used in removed branches.
      */                                                                         \
     _(UseRemoved)                                                               \
                                                                                 \
@@ -1361,6 +1364,62 @@ class MSimdConstant : public MNullaryInstruction
     }
 };
 
+// Converts all lanes of a given vector into the type of another vector
+class MSimdConvert : public MUnaryInstruction
+{
+    MSimdConvert(MDefinition *obj, MIRType fromType, MIRType toType)
+      : MUnaryInstruction(obj)
+    {
+        MOZ_ASSERT(IsSimdType(obj->type()) && fromType == obj->type());
+        MOZ_ASSERT(IsSimdType(toType));
+        setResultType(toType);
+    }
+
+  public:
+    INSTRUCTION_HEADER(SimdConvert);
+    static MSimdConvert *NewAsmJS(TempAllocator &alloc, MDefinition *obj, MIRType fromType,
+                                  MIRType toType)
+    {
+        return new(alloc) MSimdConvert(obj, fromType, toType);
+    }
+
+    AliasSet getAliasSet() const {
+        return AliasSet::None();
+    }
+    bool congruentTo(const MDefinition *ins) const {
+        return congruentIfOperandsEqual(ins);
+    }
+    ALLOW_CLONE(MSimdConvert)
+};
+
+// Casts bits of a vector input to another SIMD type (doesn't generate code).
+class MSimdReinterpretCast : public MUnaryInstruction
+{
+    MSimdReinterpretCast(MDefinition *obj, MIRType fromType, MIRType toType)
+      : MUnaryInstruction(obj)
+    {
+        MOZ_ASSERT(IsSimdType(obj->type()) && fromType == obj->type());
+        MOZ_ASSERT(IsSimdType(toType));
+        setResultType(toType);
+    }
+
+  public:
+    INSTRUCTION_HEADER(SimdReinterpretCast);
+    static MSimdReinterpretCast* NewAsmJS(TempAllocator &alloc, MDefinition *obj, MIRType fromType,
+                                          MIRType toType)
+    {
+        return new(alloc) MSimdReinterpretCast(obj, fromType, toType);
+    }
+
+    AliasSet getAliasSet() const {
+        return AliasSet::None();
+    }
+    bool congruentTo(const MDefinition *ins) const {
+        return congruentIfOperandsEqual(ins);
+    }
+    ALLOW_CLONE(MSimdReinterpretCast)
+};
+
 // Extracts a lane element from a given vector type, given by its lane symbol.
 class MSimdExtractElement : public MUnaryInstruction
 {
@@ -2525,6 +2584,7 @@ class MArrayState : public MVariadicInstruction
     explicit MArrayState(MDefinition *arr)
     {
         // This instruction is only used as a summary for bailout paths.
+        setResultType(MIRType_Object);
         setRecoveredOnBailout();
         numElements_ = arr->toNewArray()->count();
     }
@@ -3573,31 +3633,30 @@ class MAssertRange
 // Caller-side allocation of |this| for |new|:
 // Given a templateobject, construct |this| for JSOP_NEW
 class MCreateThisWithTemplate
-  : public MNullaryInstruction
+  : public MUnaryInstruction
 {
-    // Template for |this|, provided by TI
-    AlwaysTenuredObject templateObject_;
     gc::InitialHeap initialHeap_;
 
-    MCreateThisWithTemplate(types::CompilerConstraintList *constraints, JSObject *templateObject,
+    MCreateThisWithTemplate(types::CompilerConstraintList *constraints, MConstant *templateConst,
                             gc::InitialHeap initialHeap)
-      : templateObject_(templateObject),
+      : MUnaryInstruction(templateConst),
         initialHeap_(initialHeap)
     {
         setResultType(MIRType_Object);
-        setResultTypeSet(MakeSingletonTypeSet(constraints, templateObject));
+        setResultTypeSet(MakeSingletonTypeSet(constraints, templateObject()));
     }
 
   public:
     INSTRUCTION_HEADER(CreateThisWithTemplate);
     static MCreateThisWithTemplate *New(TempAllocator &alloc, types::CompilerConstraintList *constraints,
-                                        JSObject *templateObject, gc::InitialHeap initialHeap)
+                                        MConstant *templateConst, gc::InitialHeap initialHeap)
     {
-        return new(alloc) MCreateThisWithTemplate(constraints, templateObject, initialHeap);
+        return new(alloc) MCreateThisWithTemplate(constraints, templateConst, initialHeap);
     }
 
+    // Template for |this|, provided by TI.
     JSObject *templateObject() const {
-        return templateObject_;
+        return &getOperand(0)->toConstant()->value().toObject();
     }
 
     gc::InitialHeap initialHeap() const {
@@ -3608,6 +3667,9 @@ class MCreateThisWithTemplate
     AliasSet getAliasSet() const {
         return AliasSet::None();
     }
+
+    bool writeRecoverData(CompactBufferWriter &writer) const;
+    bool canRecoverOnBailout() const;
 };
 
 // Caller-side allocation of |this| for |new|:
@@ -9899,7 +9961,7 @@ class MIteratorMore
 class MIsNoIter
   : public MUnaryInstruction
 {
-    MIsNoIter(MDefinition *def)
+    explicit MIsNoIter(MDefinition *def)
       : MUnaryInstruction(def)
     {
         setResultType(MIRType_Boolean);
@@ -10796,6 +10858,7 @@ class MResumePoint MOZ_FINAL :
 
     bool isObservableOperand(MUse *u) const;
     bool isObservableOperand(size_t index) const;
+    bool isRecoverableOperand(MUse *u) const;
 
     MDefinition *getOperand(size_t index) const {
         return operands_[index].producer();

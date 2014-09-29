@@ -12,6 +12,7 @@
 
 #include "mozilla/ArrayUtils.h"
 #include "mozilla/AutoRestore.h"
+#include "mozilla/BinarySearch.h"
 #include "mozilla/DebugOnly.h"
 #include "mozilla/MemoryReporting.h"
 #include "mozilla/Likely.h"
@@ -153,7 +154,6 @@
 #include "mozAutoDocUpdate.h"
 #include "nsGlobalWindow.h"
 #include "mozilla/dom/EncodingUtils.h"
-#include "mozilla/dom/quota/QuotaManager.h"
 #include "nsDOMNavigationTiming.h"
 
 #include "nsSMILAnimationController.h"
@@ -549,6 +549,26 @@ nsIdentifierMapEntry::FireChangeCallbacks(Element* aOldElement,
   mChangeCallbacks->EnumerateEntries(FireChangeEnumerator, &args);
 }
 
+namespace {
+
+struct PositionComparator
+{
+  Element* const mElement;
+  PositionComparator(Element* const aElement) : mElement(aElement) {}
+
+  int operator()(void* aElement) const {
+    Element* curElement = static_cast<Element*>(aElement);
+    if (mElement == curElement) {
+      return 0;
+    }
+    if (nsContentUtils::PositionIsBefore(mElement, curElement)) {
+      return -1;
+    }
+    return 1;
+  }
+};
+} // namespace
+
 bool
 nsIdentifierMapEntry::AddIdElement(Element* aElement)
 {
@@ -572,33 +592,20 @@ nsIdentifierMapEntry::AddIdElement(Element* aElement)
 
   // We seem to have multiple content nodes for the same id, or XUL is messing
   // with us.  Search for the right place to insert the content.
-  int32_t start = 0;
-  int32_t end = mIdContentList.Count();
-  do {
-    NS_ASSERTION(start < end, "Bogus start/end");
 
-    int32_t cur = (start + end) / 2;
-    NS_ASSERTION(cur >= start && cur < end, "What happened here?");
+  size_t idx;
+  if (BinarySearchIf(mIdContentList, 0, mIdContentList.Count(),
+                     PositionComparator(aElement), &idx)) {
+    // Already in the list, so already in the right spot.  Get out of here.
+    // XXXbz this only happens because XUL does all sorts of random
+    // UpdateIdTableEntry calls.  Hate, hate, hate!
+    return true;
+  }
 
-    Element* curElement = static_cast<Element*>(mIdContentList[cur]);
-    if (curElement == aElement) {
-      // Already in the list, so already in the right spot.  Get out of here.
-      // XXXbz this only happens because XUL does all sorts of random
-      // UpdateIdTableEntry calls.  Hate, hate, hate!
-      return true;
-    }
-
-    if (nsContentUtils::PositionIsBefore(aElement, curElement)) {
-      end = cur;
-    } else {
-      start = cur + 1;
-    }
-  } while (start != end);
-
-  if (!mIdContentList.InsertElementAt(aElement, start))
+  if (!mIdContentList.InsertElementAt(aElement, idx))
     return false;
 
-  if (start == 0) {
+  if (idx == 0) {
     Element* oldElement =
       static_cast<Element*>(mIdContentList.SafeElementAt(1));
     NS_ASSERTION(currentElement == oldElement, "How did that happen?");
@@ -3469,6 +3476,19 @@ nsDocument::SetBaseURI(nsIURI* aURI)
     bool equalBases = false;
     mDocumentBaseURI->Equals(aURI, &equalBases);
     if (equalBases) {
+      return NS_OK;
+    }
+  }
+
+  // Check if CSP allows this base-uri
+  nsCOMPtr<nsIContentSecurityPolicy> csp;
+  nsresult rv = NodePrincipal()->GetCsp(getter_AddRefs(csp));
+  NS_ENSURE_SUCCESS(rv, rv);
+  if (csp) {
+    bool permitsBaseURI = false;
+    rv = csp->PermitsBaseURI(aURI, &permitsBaseURI);
+    NS_ENSURE_SUCCESS(rv, rv);
+    if (!permitsBaseURI) {
       return NS_OK;
     }
   }
@@ -8516,13 +8536,6 @@ nsDocument::CanSavePresentation(nsIRequest *aNewRequest)
         return false;
       }
     }
-  }
-
-  // Check if we have running offline storage transactions
-  quota::QuotaManager* quotaManager =
-    win ? quota::QuotaManager::Get() : nullptr;
-  if (quotaManager && quotaManager->HasOpenTransactions(win)) {
-   return false;
   }
 
 #ifdef MOZ_MEDIA_NAVIGATOR

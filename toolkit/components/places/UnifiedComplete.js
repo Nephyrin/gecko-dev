@@ -9,10 +9,7 @@
 ////////////////////////////////////////////////////////////////////////////////
 //// Constants
 
-const Cc = Components.classes;
-const Ci = Components.interfaces;
-const Cr = Components.results;
-const Cu = Components.utils;
+const { classes: Cc, interfaces: Ci, results: Cr, utils: Cu } = Components;
 
 const TOPIC_SHUTDOWN = "places-shutdown";
 const TOPIC_PREFCHANGED = "nsPref:changed";
@@ -56,6 +53,7 @@ const QUERYTYPE_KEYWORD       = 0;
 const QUERYTYPE_FILTERED      = 1;
 const QUERYTYPE_AUTOFILL_HOST = 2;
 const QUERYTYPE_AUTOFILL_URL  = 3;
+const QUERYTYPE_AUTOFILL_PREDICTURL  = 4;
 
 // This separator is used as an RTL-friendly way to split the title and tags.
 // It can also be used by an nsIAutoCompleteResult consumer to re-split the
@@ -68,7 +66,7 @@ const TITLE_SEARCH_ENGINE_SEPARATOR = " \u00B7\u2013\u00B7 ";
 // Telemetry probes.
 const TELEMETRY_1ST_RESULT = "PLACES_AUTOCOMPLETE_1ST_RESULT_TIME_MS";
 const TELEMETRY_6_FIRST_RESULTS = "PLACES_AUTOCOMPLETE_6_FIRST_RESULTS_TIME_MS";
-// The default frecency value used when inserting search engine results.
+// The default frecency value used when inserting matches with unknown frecency.
 const FRECENCY_SEARCHENGINES_DEFAULT = 1000;
 
 // Sqlite result row index constants.
@@ -708,6 +706,11 @@ Search.prototype = {
       hasFirstResult = true;
     }
 
+    if (this._enableActions && !hasFirstResult) {
+      // If it's not a bookmarked keyword, then it may be a search engine
+      // with an alias - which works like a keyword.
+      hasFirstResult = yield this._matchSearchEngineAlias();
+    }
     let shouldAutofill = this._shouldAutofill;
     if (this.pending && !hasFirstResult && shouldAutofill) {
       // Or it may look like a URL we know about from search engines.
@@ -716,15 +719,35 @@ Search.prototype = {
 
     if (this.pending && !hasFirstResult && shouldAutofill) {
       // It may also look like a URL we know from the database.
+      // Here we can only try to predict whether the URL autofill query is
+      // likely to return a result.  If the prediction ends up being wrong,
+      // later we will need to make up for the lack of a special first result.
       hasFirstResult = yield this._matchKnownUrl(conn, queries);
     }
+
+    if (this.pending && this._enableActions && !hasFirstResult) {
+      // If we don't have a result that matches what we know about, then
+      // we use a fallback for things we don't know about.
+      yield this._matchHeuristicFallback();
+    }
+
+    // IMPORTANT: No other first result heuristics should run after
+    // _matchHeuristicFallback().
 
     yield this._sleep(Prefs.delay);
     if (!this.pending)
       return;
 
     for (let [query, params] of queries) {
-      yield conn.executeCached(query, params, this._onResultRow.bind(this));
+      let hasResult = yield conn.executeCached(query, params, this._onResultRow.bind(this));
+
+      if (this.pending && params.query_type == QUERYTYPE_AUTOFILL_URL &&
+          !hasResult) {
+        // If we predicted that our URL autofill query might have gotten a
+        // result, but it didn't, then we need to recover.
+        yield this._matchHeuristicFallback();
+      }
+
       if (!this.pending)
         return;
     }
@@ -741,12 +764,6 @@ Search.prototype = {
         if (!this.pending)
           return;
       }
-    }
-
-    // If we didn't find enough matches and we have some frecency-driven
-    // matches, add them.
-    if (this._frecencyMatches) {
-      this._frecencyMatches.forEach(this._addMatch, this);
     }
   }),
 
@@ -825,7 +842,7 @@ Search.prototype = {
     }
 
     this._result.setDefaultIndex(0);
-    this._addFrecencyMatch({
+    this._addMatch({
       value: value,
       comment: match.engineName,
       icon: match.iconUrl,
@@ -836,6 +853,112 @@ Search.prototype = {
     return true;
   },
 
+  _matchSearchEngineAlias: function* () {
+    if (this._searchTokens.length < 2)
+      return false;
+
+    let match = yield PlacesSearchAutocompleteProvider.findMatchByAlias(
+                                                         this._searchTokens[0]);
+    if (!match)
+      return false;
+
+    let query = this._searchTokens.slice(1).join(" ");
+
+    yield this._addSearchEngineMatch(match, query);
+    return true;
+  },
+
+  _matchCurrentSearchEngine: function* () {
+    let match = yield PlacesSearchAutocompleteProvider.getDefaultMatch();
+    if (!match)
+      return;
+
+    let query = this._originalSearchString;
+
+    yield this._addSearchEngineMatch(match, query);
+  },
+
+  _addSearchEngineMatch: function* (match, query) {
+    let value = makeActionURL("searchengine", {
+      engineName: match.engineName,
+      input: this._originalSearchString,
+      searchQuery: query,
+    });
+
+    this._addMatch({
+      value: value,
+      comment: match.engineName,
+      icon: match.iconUrl,
+      style: "action searchengine",
+      finalCompleteValue: this._trimmedOriginalSearchString,
+      frecency: FRECENCY_SEARCHENGINES_DEFAULT,
+    });
+  },
+
+  // These are separated out so we can run them in two distinct cases:
+  // (1) We didn't match on anything that we know about
+  // (2) Our predictive query for URL autofill thought we may get a result,
+  //     but we didn't.
+  _matchHeuristicFallback: function* () {
+    // We may not have auto-filled, but this may still look like a URL.
+    let hasFirstResult = yield this._matchUnknownUrl();
+    // However, even if the input is a valid URL, we may not want to use
+    // it as such. This can happen if the host would require whitelisting,
+    // but isn't in the whitelist.
+
+    if (this.pending && !hasFirstResult) {
+      // When all else fails, we search using the current search engine.
+      yield this._matchCurrentSearchEngine();
+    }
+  },
+
+  // TODO (bug 1054814): Use visited URLs to inform which scheme to use, if the
+  // scheme isn't specificed.
+  _matchUnknownUrl: function* () {
+    let flags = Ci.nsIURIFixup.FIXUP_FLAG_FIX_SCHEME_TYPOS |
+                Ci.nsIURIFixup.FIXUP_FLAG_REQUIRE_WHITELISTED_HOST;
+    let fixupInfo = null;
+    try {
+      fixupInfo = Services.uriFixup.getFixupURIInfo(this._originalSearchString,
+                                                    flags);
+    } catch (e) {
+      return false;
+    }
+
+    let uri = fixupInfo.preferredURI;
+    // Check the host, as "http:///" is a valid nsIURI, but not useful to us.
+    // But, some schemes are expected to have no host. So we check just against
+    // schemes we know should have a host. This allows new schemes to be
+    // implemented without us accidentally blocking access to them.
+    let hostExpected = new Set(["http", "https", "ftp", "chrome", "resource"]);
+    if (!uri || (hostExpected.has(uri.scheme) && !uri.host))
+      return false;
+
+    let value = makeActionURL("visiturl", {
+      url: uri.spec,
+      input: this._originalSearchString,
+    });
+
+    let match = {
+      value: value,
+      comment: uri.spec,
+      style: "action visiturl",
+      finalCompleteValue: this._originalSearchString,
+      frecency: 0,
+    };
+
+    try {
+      let favicon = yield PlacesUtils.promiseFaviconLinkUrl(uri);
+      if (favicon)
+        match.icon = favicon.spec;
+    } catch (e) {
+      // It's possible we don't have a favicon for this - and that's ok.
+    };
+
+    this._addMatch(match);
+    return true;
+  },
+
   _onResultRow: function (row) {
     TelemetryStopwatch.finish(TELEMETRY_1ST_RESULT);
     let queryType = row.getResultByIndex(QUERYINDEX_QUERYTYPE);
@@ -843,6 +966,8 @@ Search.prototype = {
     switch (queryType) {
       case QUERYTYPE_AUTOFILL_HOST:
         this._result.setDefaultIndex(0);
+        // Fall through.
+      case QUERYTYPE_AUTOFILL_PREDICTURL:
         match = this._processHostRow(row);
         break;
       case QUERYTYPE_AUTOFILL_URL:
@@ -855,19 +980,6 @@ Search.prototype = {
         break;
     }
     this._addMatch(match);
-  },
-
-  /**
-   * These matches should be mixed up with other matches, based on frecency.
-   */
-  _addFrecencyMatch: function (match) {
-    if (!this._frecencyMatches)
-      this._frecencyMatches = [];
-    this._frecencyMatches.push(match);
-    // We keep this array in reverse order, so we can walk it and remove stuff
-    // from it in one pass.  Notice that for frecency reverse order means from
-    // lower to higher.
-    this._frecencyMatches.sort((a, b) => a.frecency - b.frecency);
   },
 
   _maybeRestyleSearchMatch: function (match) {
@@ -901,14 +1013,6 @@ Search.prototype = {
       return;
 
     let notifyResults = false;
-
-    if (this._frecencyMatches) {
-      for (let i = this._frecencyMatches.length - 1;  i >= 0 ; i--) {
-        if (this._frecencyMatches[i].frecency > match.frecency) {
-          this._addMatch(this._frecencyMatches.splice(i, 1)[0]);
-        }
-      }
-    }
 
     // Must check both id and url, cause keywords dinamically modify the url.
     let urlMapKey = stripHttpAndTrim(match.value);
@@ -1304,7 +1408,7 @@ Search.prototype = {
     return [
       SQL_HOST_QUERY,
       {
-        query_type: QUERYTYPE_AUTOFILL_HOST,
+        query_type: QUERYTYPE_AUTOFILL_PREDICTURL,
         searchString: host
       }
     ];

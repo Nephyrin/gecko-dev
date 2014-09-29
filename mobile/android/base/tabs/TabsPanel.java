@@ -13,7 +13,9 @@ import org.mozilla.gecko.GeckoApplication;
 import org.mozilla.gecko.GeckoProfile;
 import org.mozilla.gecko.LightweightTheme;
 import org.mozilla.gecko.LightweightThemeDrawable;
+import org.mozilla.gecko.NewTabletUI;
 import org.mozilla.gecko.R;
+import org.mozilla.gecko.RestrictedProfiles;
 import org.mozilla.gecko.Telemetry;
 import org.mozilla.gecko.TelemetryContract;
 import org.mozilla.gecko.animation.PropertyAnimator;
@@ -66,7 +68,11 @@ public class TabsPanel extends LinearLayout
     }
 
     public static View createTabsLayout(final Context context, final AttributeSet attrs) {
-       return new TabsListLayout(context, attrs);
+        if (NewTabletUI.isEnabled(context)) {
+            return new TabsGridLayout(context, attrs);
+        } else {
+            return new TabsListLayout(context, attrs);
+        }
     }
 
     public static interface TabsLayoutChangeListener {
@@ -168,7 +174,7 @@ public class TabsPanel extends LinearLayout
         mTabWidget.addTab(R.drawable.tabs_normal, R.string.tabs_normal);
         mTabWidget.addTab(R.drawable.tabs_private, R.string.tabs_private);
 
-        if (!GeckoProfile.get(mContext).inGuestMode()) {
+        if (RestrictedProfiles.isAllowed(RestrictedProfiles.Restriction.DISALLOW_MODIFY_ACCOUNTS)) {
             // The initial icon is not the animated icon, because on Android
             // 4.4.2, the animation starts immediately (and can start at other
             // unpredictable times). See Bug 1015974.

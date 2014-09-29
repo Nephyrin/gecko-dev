@@ -1237,14 +1237,16 @@ FilterSupport::RenderFilterDescription(DrawTarget* aDT,
                                        const IntRect& aFillPaintRect,
                                        SourceSurface* aStrokePaint,
                                        const IntRect& aStrokePaintRect,
-                                       nsTArray<RefPtr<SourceSurface>>& aAdditionalImages)
+                                       nsTArray<RefPtr<SourceSurface>>& aAdditionalImages,
+                                       const Point& aDestPoint,
+                                       const DrawOptions& aOptions)
 {
   RefPtr<FilterNode> resultFilter =
     FilterNodeGraphFromDescription(aDT, aFilter, aRenderRect,
                                    aSourceGraphic, aSourceGraphicRect, aFillPaint, aFillPaintRect,
                                    aStrokePaint, aStrokePaintRect, aAdditionalImages);
 
-  aDT->DrawFilter(resultFilter, aRenderRect, Point(0, 0));
+  aDT->DrawFilter(resultFilter, aRenderRect, aDestPoint, aOptions);
 }
 
 static nsIntRegion
@@ -1318,7 +1320,7 @@ ResultChangeRegionForPrimitive(const FilterPrimitiveDescription& aDescription,
 
     case PrimitiveType::DisplacementMap:
     {
-      int32_t scale = ceil(abs(atts.GetFloat(eDisplacementMapScale)));
+      int32_t scale = ceil(std::abs(atts.GetFloat(eDisplacementMapScale)));
       return aInputChangeRegions[0].Inflated(nsIntMargin(scale, scale, scale, scale));
     }
 
@@ -1547,7 +1549,7 @@ SourceNeededRegionForPrimitive(const FilterPrimitiveDescription& aDescription,
       if (aInputIndex == 1) {
         return aResultNeededRegion;
       }
-      int32_t scale = ceil(abs(atts.GetFloat(eDisplacementMapScale)));
+      int32_t scale = ceil(std::abs(atts.GetFloat(eDisplacementMapScale)));
       return aResultNeededRegion.Inflated(nsIntMargin(scale, scale, scale, scale));
     }
 

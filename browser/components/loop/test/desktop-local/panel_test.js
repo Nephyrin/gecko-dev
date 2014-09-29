@@ -13,13 +13,6 @@ describe("loop.panel", function() {
 
   var sandbox, notifications, fakeXHR, requests = [];
 
-  function createTestRouter(fakeDocument) {
-    return new loop.panel.PanelRouter({
-      notifications: notifications,
-      document: fakeDocument
-    });
-  }
-
   beforeEach(function() {
     sandbox = sinon.sandbox.create();
     fakeXHR = sandbox.useFakeXMLHttpRequest();
@@ -365,8 +358,8 @@ describe("loop.panel", function() {
         }));
         view.setState({pending: false, callUrl: "http://example.com"});
 
-        TestUtils.findRenderedDOMComponentWithClass(view, "btn-email");
-        TestUtils.Simulate.click(view.getDOMNode().querySelector(".btn-email"));
+        TestUtils.findRenderedDOMComponentWithClass(view, "button-email");
+        TestUtils.Simulate.click(view.getDOMNode().querySelector(".button-email"));
         sinon.assert.calledOnce(navigator.mozLoop.composeEmail);
       });
 
@@ -383,7 +376,7 @@ describe("loop.panel", function() {
           callUrlExpiry: 6000
         });
 
-        TestUtils.Simulate.click(view.getDOMNode().querySelector(".btn-copy"));
+        TestUtils.Simulate.click(view.getDOMNode().querySelector(".button-copy"));
 
         sinon.assert.calledOnce(navigator.mozLoop.copyString);
         sinon.assert.calledWithExactly(navigator.mozLoop.copyString,
@@ -403,7 +396,7 @@ describe("loop.panel", function() {
             callUrlExpiry: 6000
           });
 
-          TestUtils.Simulate.click(view.getDOMNode().querySelector(".btn-copy"));
+          TestUtils.Simulate.click(view.getDOMNode().querySelector(".button-copy"));
 
           sinon.assert.calledOnce(navigator.mozLoop.noteCallUrlExpiry);
           sinon.assert.calledWithExactly(navigator.mozLoop.noteCallUrlExpiry,
@@ -423,7 +416,7 @@ describe("loop.panel", function() {
             callUrlExpiry: 6000
           });
 
-          TestUtils.Simulate.click(view.getDOMNode().querySelector(".btn-email"));
+          TestUtils.Simulate.click(view.getDOMNode().querySelector(".button-email"));
 
           sinon.assert.calledOnce(navigator.mozLoop.noteCallUrlExpiry);
           sinon.assert.calledWithExactly(navigator.mozLoop.noteCallUrlExpiry,

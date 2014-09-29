@@ -34,8 +34,8 @@
 #include "mozilla/dom/PermissionMessageUtils.h"
 #include "mozilla/dom/ScriptSettings.h"
 #include "mozilla/dom/StructuredCloneUtils.h"
-#include "mozilla/dom/PBlobChild.h"
-#include "mozilla/dom/PBlobParent.h"
+#include "mozilla/dom/ipc/BlobChild.h"
+#include "mozilla/dom/ipc/BlobParent.h"
 #include "JavaScriptChild.h"
 #include "JavaScriptParent.h"
 #include "mozilla/dom/DOMStringList.h"
@@ -1033,7 +1033,7 @@ nsFrameMessageManager::ReceiveMessage(nsISupports* aTarget,
       JS::Rooted<JS::Value> thisValue(cx, JS::UndefinedValue());
 
       JS::Rooted<JS::Value> funval(cx);
-      if (JS_ObjectIsCallable(cx, object)) {
+      if (JS::IsCallable(object)) {
         // If the listener is a JS function:
         funval.setObject(*object);
 
@@ -1055,7 +1055,7 @@ nsFrameMessageManager::ReceiveMessage(nsISupports* aTarget,
           return NS_ERROR_UNEXPECTED;
 
         // Check if the object is even callable.
-        NS_ENSURE_STATE(JS_ObjectIsCallable(cx, &funval.toObject()));
+        NS_ENSURE_STATE(JS::IsCallable(&funval.toObject()));
         thisValue.setObject(*object);
       }
 
