@@ -67,9 +67,7 @@ loop.contacts = (function(_, mozL10n) {
 
       return (
         <li onClick={this.handleContactClick} className={contactCSSClass}>
-          <div className="avatar">
-            <img src={navigator.mozLoop.getUserAvatar(email.value)} />
-          </div>
+          <div className="avatar" />
           <div className="details">
             <div className="username"><strong>{names.firstName}</strong> {names.lastName}
               <i className={cx({"icon icon-google": this.props.contact.category[0] == "google"})} />
