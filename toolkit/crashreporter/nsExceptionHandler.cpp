@@ -14,6 +14,7 @@
 
 #include "nsThreadUtils.h"
 #include "nsXULAppAPI.h"
+#include "jsfriendapi.h"
 
 #if defined(XP_WIN32)
 #ifdef WIN32_LEAN_AND_MEAN
@@ -358,11 +359,12 @@ static LPTOP_LEVEL_EXCEPTION_FILTER previousUnhandledExceptionFilter = nullptr;
 static WindowsDllInterceptor gKernel32Intercept;
 static bool gBlockUnhandledExceptionFilter = true;
 
-static void NotePreviousUnhandledExceptionFilter()
+static LPTOP_LEVEL_EXCEPTION_FILTER GetUnhandledExceptionFilter()
 {
-  // Set a dummy value to get the previous filter, then restore
-  previousUnhandledExceptionFilter = SetUnhandledExceptionFilter(nullptr);
-  SetUnhandledExceptionFilter(previousUnhandledExceptionFilter);
+  // Set a dummy value to get the current filter, then restore
+  LPTOP_LEVEL_EXCEPTION_FILTER current = SetUnhandledExceptionFilter(nullptr);
+  SetUnhandledExceptionFilter(current);
+  return current;
 }
 
 static LPTOP_LEVEL_EXCEPTION_FILTER WINAPI
@@ -807,6 +809,7 @@ bool MinidumpCallback(
   }
 
   if (!doReport) {
+    TerminateProcess(GetCurrentProcess(), 1);
     return returnValue;
   }
 
@@ -1222,7 +1225,7 @@ nsresult SetExceptionHandler(nsIFile* aXREDirectory,
 #endif
 
 #ifdef XP_WIN
-  NotePreviousUnhandledExceptionFilter();
+  previousUnhandledExceptionFilter = GetUnhandledExceptionFilter();
 #endif
 
   gExceptionHandler = new google_breakpad::
@@ -1262,6 +1265,10 @@ nsresult SetExceptionHandler(nsIFile* aXREDirectory,
 #ifdef XP_WIN
   gExceptionHandler->set_handle_debug_exceptions(true);
   
+  // Tell JS about the new filter before we disable SetUnhandledExceptionFilter
+  // XXX we may need a different cast depending on the final form of jsfriendapi.h            
+  js::SetUnhandledExceptionFilter((js::UnhandledExceptionFilter)GetUnhandledExceptionFilter());
+
   // protect the crash reporter from being unloaded
   gBlockUnhandledExceptionFilter = true;
   gKernel32Intercept.Init("kernel32.dll");
