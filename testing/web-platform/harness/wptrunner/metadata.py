@@ -30,7 +30,6 @@ def load_test_manifests(serve_root, test_paths):
     return manifest_loader.load()
 
 
-
 def update_expected(test_paths, serve_root, log_file_names,
                     rev_old=None, rev_new="HEAD", ignore_existing=False,
                     sync_root=None):
@@ -134,27 +133,27 @@ def unexpected_changes(manifests, change_data, files_changed):
 def update_from_logs(manifests, *log_filenames, **kwargs):
     ignore_existing = kwargs.pop("ignore_existing", False)
 
-    expected_map_by_manifest = {}
     expected_map = {}
-    id_path_map = {}
+    id_test_map = {}
 
     for test_manifest, paths in manifests.iteritems():
         expected_map_manifest, id_path_map_manifest = create_test_tree(paths["metadata_path"],
                                                                        test_manifest)
-        expected_map_by_manifest[test_manifest] = expected_map_manifest
-        expected_map.update(expected_map_manifest)
-        id_path_map.update(id_path_map_manifest)
+        expected_map[test_manifest] = expected_map_manifest
+        id_test_map.update(id_path_map_manifest)
 
-    updater = ExpectedUpdater(expected_map, id_path_map, ignore_existing=ignore_existing)
+    updater = ExpectedUpdater(manifests, expected_map, id_test_map,
+                              ignore_existing=ignore_existing)
     for log_filename in log_filenames:
         with open(log_filename) as f:
             updater.update_from_log(f)
 
-    for tree in expected_map.itervalues():
-        for test in tree.iterchildren():
-            for subtest in test.iterchildren():
-                subtest.coalesce_expected()
-            test.coalesce_expected()
+    for manifest_expected in expected_map.itervalues():
+        for tree in manifest_expected.itervalues():
+            for test in tree.iterchildren():
+                for subtest in test.iterchildren():
+                    subtest.coalesce_expected()
+                test.coalesce_expected()
 
     return expected_map_by_manifest
 
@@ -189,7 +188,8 @@ def write_new_expected(metadata_path, expected_map):
 
 
 class ExpectedUpdater(object):
-    def __init__(self, expected_tree, id_path_map, ignore_existing=False):
+    def __init__(self, test_manifests, expected_tree, id_path_map, ignore_existing=False):
+        self.test_manifests = test_manifests
         self.expected_tree = expected_tree
         self.id_path_map = id_path_map
         self.ignore_existing = ignore_existing
@@ -219,15 +219,16 @@ class ExpectedUpdater(object):
     def test_start(self, data):
         test_id = self.test_id(data["test"])
         try:
-            test = self.expected_tree[self.id_path_map[test_id]].get_test(test_id)
+            test_manifest, test = self.id_path_map[test_id]
+            expected_node = self.expected_tree[test_manifest][test].get_test(test_id)
         except KeyError:
             print "Test not found %s, skipping" % test_id
             return
-        self.test_cache[test_id] = test
+        self.test_cache[test_id] = expected_node
 
         if test_id not in self.tests_visited:
             if self.ignore_existing:
-                test.clear_expected()
+                expected_node.clear_expected()
             self.tests_visited[test_id] = set()
 
     def test_status(self, data):
@@ -265,32 +266,32 @@ class ExpectedUpdater(object):
 
 def create_test_tree(metadata_path, test_manifest):
     expected_map = {}
-    test_id_path_map = {}
+    id_test_map = {}
     exclude_types = frozenset(["stub", "helper", "manual"])
     include_types = set(manifest.item_types) ^ exclude_types
     for test_path, tests in test_manifest.itertypes(*include_types):
-
-        expected_data = load_expected(metadata_path, test_path, tests)
+        expected_data = load_expected(test_manifest, metadata_path, test_path, tests)
         if expected_data is None:
-            expected_data = create_expected(test_path, tests)
-
-        expected_map[test_path] = expected_data
+            expected_data = create_expected(test_manifest, test_path, tests)
 
         for test in tests:
-            test_id_path_map[test.id] = test.path
+            id_test_map[test.id] = (test_manifest, test)
+            expected_map[test] = expected_data
 
-    return expected_map, test_id_path_map
+    return expected_map, id_test_map
 
 
-def create_expected(test_path, tests):
-    expected = manifestupdate.ExpectedManifest(None, test_path)
+def create_expected(test_manifest, test_path, tests):
+    expected = manifestupdate.ExpectedManifest(None, test_path, test_manifest.url_base)
     for test in tests:
         expected.append(manifestupdate.TestNode.create(test.item_type, test.id))
     return expected
 
 
-def load_expected(metadata_path, test_path, tests):
-    expected_manifest = manifestupdate.get_manifest(metadata_path, test_path)
+def load_expected(test_manifest, metadata_path, test_path, tests):
+    expected_manifest = manifestupdate.get_manifest(metadata_path,
+                                                    test_path,
+                                                    test_manifest.url_base)
     if expected_manifest is None:
         return
 

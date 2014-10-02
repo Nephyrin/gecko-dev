@@ -297,8 +297,8 @@ class TestLoader(object):
             expected = None
         return wpttest.from_manifest(manifest_test, expected)
 
-    def load_expected_manifest(self, metadata_path, test_path):
-        return manifestexpected.get_manifest(metadata_path, test_path, self.run_info)
+    def load_expected_manifest(self, test_manifest, metadata_path, test_path):
+        return manifestexpected.get_manifest(metadata_path, test_path, test_manifest.url_base, self.run_info)
 
     def iter_tests(self):
         manifest_items = []
@@ -312,7 +312,8 @@ class TestLoader(object):
         for test_path, tests in manifest_items:
             manifest_file = iter(tests).next().manifest
             metadata_path = self.manifests[manifest_file]["metadata_path"]
-            expected_file = self.load_expected_manifest(metadata_path, test_path)
+            expected_file = self.load_expected_manifest(manifest_file, metadata_path, test_path)
+
             for manifest_test in tests:
                 test = self.get_test(manifest_test, expected_file)
                 test_type = manifest_test.item_type

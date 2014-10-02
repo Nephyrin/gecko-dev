@@ -39,6 +39,7 @@ ref_suffixes = ["_ref", "-ref"]
 wd_pattern = "*.py"
 blacklist = ["/", "/tools/", "/resources/", "/common/", "/conformance-checkers/"]
 
+
 logging.basicConfig()
 logger = logging.getLogger("manifest")
 logger.setLevel(logging.DEBUG)
@@ -51,6 +52,15 @@ def rel_path_to_url(rel_path, url_base="/"):
     if url_base[-1] != "/":
         url_base += "/"
     return url_base + rel_path.replace(os.sep, "/")
+
+
+def url_to_rel_path(url, url_base):
+    url_path = urlparse.urlsplit(url).path
+    if not url_path.startswith(url_base):
+        raise ValueError
+    url_path = url_path[len(url_base):]
+    return url_path
+
 
 def is_blacklisted(url):
     for item in blacklist:
@@ -83,17 +93,19 @@ class ManifestItem(object):
         raise NotImplementedError
 
     @classmethod
-    def from_json(self, obj):
+    def from_json(self, manifest, obj):
         raise NotImplementedError
 
     @property
     def id(self):
         raise NotImplementedError
 
+
 class URLManifestItem(ManifestItem):
-    def __init__(self, url):
+    def __init__(self, url, url_base="/"):
         ManifestItem.__init__(self)
         self.url = url
+        self.url_base = url_base
 
     @property
     def id(self):
@@ -104,13 +116,23 @@ class URLManifestItem(ManifestItem):
 
     @property
     def path(self):
-        return urlparse.urlsplit(self.url).path[1:].replace("/", os.path.sep)
+        return url_to_rel_path(self.url, self.url_base)
+
+    def to_json(self):
+        rv = {"url": self.url}
+        return rv
+
+    @classmethod
+    def from_json(cls, manifest, obj):
+        return cls(obj["url"],
+                   url_base=manifest.url_base)
+
 
 class TestharnessTest(URLManifestItem):
     item_type = "testharness"
 
-    def __init__(self, url, timeout=None):
-        URLManifestItem.__init__(self, url)
+    def __init__(self, url, url_base="/", timeout=None):
+        URLManifestItem.__init__(self, url, url_base=url_base)
         self.timeout = timeout
 
     def to_json(self):
@@ -120,16 +142,17 @@ class TestharnessTest(URLManifestItem):
         return rv
 
     @classmethod
-    def from_json(cls, obj):
+    def from_json(cls, manifest, obj):
         return cls(obj["url"],
+                   url_base=manifest.url_base,
                    timeout=obj.get("timeout"))
 
 
 class RefTest(URLManifestItem):
     item_type = "reftest"
 
-    def __init__(self, url, ref_url, ref_type, timeout=None):
-        URLManifestItem.__init__(self, url)
+    def __init__(self, url, ref_url, ref_type, url_base="/", timeout=None):
+        URLManifestItem.__init__(self, url, url_base=url_base)
         if ref_type not in ["==", "!="]:
             raise ValueError, "Unrecognised ref_type %s" % ref_type
         self.ref_url = ref_url
@@ -152,48 +175,22 @@ class RefTest(URLManifestItem):
         return rv
 
     @classmethod
-    def from_json(cls, obj):
+    def from_json(cls, manifest, obj):
         return cls(obj["url"],
                    obj["ref_url"],
                    obj["ref_type"],
+                   url_base=manifest.url_base,
                    timeout=obj.get("timeout"))
 
 
 class ManualTest(URLManifestItem):
     item_type = "manual"
 
-    def to_json(self):
-        rv = {"url": self.url}
-        return rv
-
-    @classmethod
-    def from_json(cls, obj):
-        return cls(obj["url"])
-
-
 class Stub(URLManifestItem):
     item_type = "stub"
 
-    def to_json(self):
-        rv = {"url": self.url}
-        return rv
-
-    @classmethod
-    def from_json(cls, obj):
-        return cls(obj["url"])
-
-
 class Helper(URLManifestItem):
     item_type = "helper"
-
-    def to_json(self):
-        rv = {"url": self.url}
-        return rv
-
-    @classmethod
-    def from_json(cls, obj):
-        return cls(obj["url"])
-
 
 class WebdriverSpecTest(ManifestItem):
     item_type = "wdspec"
@@ -209,7 +206,7 @@ class WebdriverSpecTest(ManifestItem):
         return {"path": self.path}
 
     @classmethod
-    def from_json(cls, obj):
+    def from_json(cls, manifest, obj):
         return cls(path=obj["path"])
 
 
@@ -339,7 +336,7 @@ class Manifest(object):
             if k not in item_types:
                 raise ManifestError
             for v in values:
-                manifest_item = item_classes[k].from_json(v)
+                manifest_item = item_classes[k].from_json(self, v)
                 self.add(manifest_item)
         self.local_changes = LocalChanges.from_json(obj["local_changes"])
         return self

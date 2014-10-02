@@ -5,19 +5,16 @@
         "url": "/_mozilla/editing/conformancetest/data.js"
       },
       {
-        "url": "/_mozilla/editing/selecttest/common.js"
-      },
-      {
-        "url": "/_mozilla/editing/css/reset.css"
-      },
-      {
-        "url": "/_mozilla/editing/mochitest.ini"
-      },
-      {
         "url": "/_mozilla/editing/tests.js"
       },
       {
+        "url": "/_mozilla/editing/selecttest/common.js"
+      },
+      {
         "url": "/_mozilla/editing/implementation.js"
+      },
+      {
+        "url": "/_mozilla/editing/css/reset.css"
       }
     ],
     "testharness": [
