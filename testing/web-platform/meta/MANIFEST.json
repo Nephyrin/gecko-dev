@@ -2746,6 +2746,10 @@
         "url": "/html/semantics/embedded-content/the-img-element/image-1.jpg"
       },
       {
+        "path": "html/semantics/embedded-content/the-img-element/srcset/common.js",
+        "url": "/html/semantics/embedded-content/the-img-element/srcset/common.js"
+      },
+      {
         "path": "html/semantics/embedded-content/the-video-element/video_content-ref.htm",
         "url": "html/semantics/embedded-content/the-video-element/video_content-ref.htm"
       },
@@ -6364,6 +6368,10 @@
         "url": "/pointerevents/pointerevent_pointerleave_touch-manual.html"
       },
       {
+        "path": "pointerevents/pointerevent_pointermove-manual.html",
+        "url": "/pointerevents/pointerevent_pointermove-manual.html"
+      },
+      {
         "path": "pointerevents/pointerevent_pointermove_isprimary_same_as_pointerdown-manual.html",
         "url": "/pointerevents/pointerevent_pointermove_isprimary_same_as_pointerdown-manual.html"
       },
@@ -6490,6 +6498,10 @@
       {
         "path": "pointerevents/pointerevent_touch-action-pan-y-css_touch-manual.html",
         "url": "/pointerevents/pointerevent_touch-action-pan-y-css_touch-manual.html"
+      },
+      {
+        "path": "pointerevents/pointerevent_touch-action-svg-test_touch-manual.html",
+        "url": "/pointerevents/pointerevent_touch-action-svg-test_touch-manual.html"
       },
       {
         "path": "touch-events/multi-touch-interactions-manual.html",
@@ -14266,6 +14278,10 @@
         "url": "/dom/nodes/Element-classlist.html"
       },
       {
+        "path": "dom/nodes/Element-closest.html",
+        "url": "/dom/nodes/Element-closest.html"
+      },
+      {
         "path": "dom/nodes/Element-firstElementChild-entity.svg",
         "url": "/dom/nodes/Element-firstElementChild-entity.svg"
       },
@@ -17423,8 +17439,36 @@
         "url": "/html/semantics/embedded-content/the-iframe-element/iframe_sandbox_allow_script.html"
       },
       {
+        "path": "html/semantics/embedded-content/the-img-element/current-pixel-density/basic.html",
+        "url": "/html/semantics/embedded-content/the-img-element/current-pixel-density/basic.html"
+      },
+      {
+        "path": "html/semantics/embedded-content/the-img-element/current-pixel-density/error.html",
+        "url": "/html/semantics/embedded-content/the-img-element/current-pixel-density/error.html"
+      },
+      {
         "path": "html/semantics/embedded-content/the-img-element/img.complete.html",
         "url": "/html/semantics/embedded-content/the-img-element/img.complete.html"
+      },
+      {
+        "path": "html/semantics/embedded-content/the-img-element/relevant-mutations.html",
+        "url": "/html/semantics/embedded-content/the-img-element/relevant-mutations.html"
+      },
+      {
+        "path": "html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute.html",
+        "url": "/html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute.html"
+      },
+      {
+        "path": "html/semantics/embedded-content/the-img-element/srcset/parse-a-srcset-attribute.html",
+        "url": "/html/semantics/embedded-content/the-img-element/srcset/parse-a-srcset-attribute.html"
+      },
+      {
+        "path": "html/semantics/embedded-content/the-img-element/srcset/select-an-image-source.html",
+        "url": "/html/semantics/embedded-content/the-img-element/srcset/select-an-image-source.html"
+      },
+      {
+        "path": "html/semantics/embedded-content/the-img-element/update-the-source-set.html",
+        "url": "/html/semantics/embedded-content/the-img-element/update-the-source-set.html"
       },
       {
         "path": "html/semantics/embedded-content/the-object-element/object-attributes.html",
@@ -19842,6 +19886,10 @@
         "url": "/pointerevents/pointerevent_constructor.html"
       },
       {
+        "path": "pointerevents/pointerevent_lostpointercapture_for_disconnected_node.html",
+        "url": "/pointerevents/pointerevent_lostpointercapture_for_disconnected_node.html"
+      },
+      {
         "path": "pointerevents/pointerevent_pointerleave_after_pointercancel_touch.html",
         "url": "/pointerevents/pointerevent_pointerleave_after_pointercancel_touch.html"
       },
@@ -19860,6 +19908,10 @@
       {
         "path": "pointerevents/pointerevent_pointerout_pen.html",
         "url": "/pointerevents/pointerevent_pointerout_pen.html"
+      },
+      {
+        "path": "pointerevents/pointerevent_setpointercapture_disconnected.html",
+        "url": "/pointerevents/pointerevent_setpointercapture_disconnected.html"
       },
       {
         "path": "pointerevents/pointerevent_touch-action-illegal.html",
@@ -21653,8 +21705,8 @@
         "url": "/websockets/interfaces/WebSocket/extensions/001.html"
       },
       {
-        "path": "websockets/interfaces/WebSocket/protocol/001.html",
-        "url": "/websockets/interfaces/WebSocket/protocol/001.html"
+        "path": "websockets/interfaces/WebSocket/protocol/protocol-initial.html",
+        "url": "/websockets/interfaces/WebSocket/protocol/protocol-initial.html"
       },
       {
         "path": "websockets/interfaces/WebSocket/readyState/001.html",
@@ -22761,5 +22813,5 @@
     ]
   },
   "local_changes": [],
-  "rev": "9b98ac4c3a7fba5f5437e2e29b5ae38abd6d5eb0"
+  "rev": "395cc7fa465c2f9b322b1950d4ab349543656639"
 }
