@@ -28,13 +28,7 @@ def guess_content_type(path):
 
 
 class DirectoryHandler(object):
-    def __init__(self, base_path=None):
-        self.base_path = base_path
-
     def __call__(self, request, response):
-        if self.base_path is not None:
-            request.base_path = self.base_path
-
         path = request.filesystem_path
 
         assert os.path.isdir(path)
@@ -74,13 +68,7 @@ directory_handler = DirectoryHandler()
 
 
 class FileHandler(object):
-    def __init__(self, base_path=None):
-        self.base_path = base_path
-
     def __call__(self, request, response):
-        if self.base_path is not None:
-            request.base_path = self.base_path
-
         path = request.filesystem_path
 
         if os.path.isdir(path):
@@ -179,28 +167,20 @@ class FileHandler(object):
 file_handler = FileHandler()
 
 
-class PythonScriptHandler(object):
-    def __init__(self, base_path=None):
-        self.base_path = base_path
+def python_script_handler(request, response):
+    path = request.filesystem_path
 
-    def __call__(request, response):
-        if self.base_path is not None:
-            request.base_path = self.base_path
+    try:
+        environ = {"__file__": path}
+        execfile(path, environ, environ)
+        if "main" in environ:
+            handler = FunctionHandler(environ["main"])
+            handler(request, response)
+        else:
+            raise HTTPException(500)
+    except IOError:
+        raise HTTPException(404)
 
-        path = request.filesystem_path
-
-        try:
-            environ = {"__file__": path}
-            execfile(path, environ, environ)
-            if "main" in environ:
-                handler = FunctionHandler(environ["main"])
-                handler(request, response)
-            else:
-                raise HTTPException(500)
-        except IOError:
-            raise HTTPException(404)
-
-python_script_handler = PythonScriptHandler()
 
 def FunctionHandler(func):
     def inner(request, response):
@@ -246,23 +226,14 @@ def json_handler(func):
     return FunctionHandler(inner)
 
 
-class AsIsHandler(object):
-    def __init__(self, base_path=None):
-        self.base_path = base_path
-
-    def __call__(request, response):
-        if self.base_path is not None:
-            request.base_path = self.base_path
-
-        path = request.filesystem_path
-        try:
-            with open(path) as f:
-                response.writer.write_content(f.read())
-            response.close_connection = True
-        except IOError:
-            raise HTTPException(404)
-
-as_is_handler = AsIsHandler()
+def as_is_handler(request, response):
+    path = request.filesystem_path
+    try:
+        with open(path) as f:
+            response.writer.write_content(f.read())
+        response.close_connection = True
+    except IOError:
+        raise HTTPException(404)
 
 
 class ErrorHandler(object):
