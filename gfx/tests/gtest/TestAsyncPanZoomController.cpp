@@ -162,10 +162,9 @@ public:
   bool SampleContentTransformForFrame(const TimeStamp& aSampleTime,
                                       ViewTransform* aOutTransform,
                                       ScreenPoint& aScrollOffset) {
-    Matrix4x4 aOverscrollTransform;  // ignored
     bool ret = AdvanceAnimations(aSampleTime);
     AsyncPanZoomController::SampleContentTransformForFrame(
-      aOutTransform, aScrollOffset, &aOverscrollTransform);
+      aOutTransform, aScrollOffset);
     return ret;
   }
 };
@@ -1473,6 +1472,62 @@ TEST_F(APZCGestureDetectorTester, DoubleTapPreventDefaultBoth) {
   // responses to the two touchstarts
   apzc->ContentReceivedTouch(true);
   apzc->ContentReceivedTouch(true);
+
+  while (mcc->RunThroughDelayedTasks());
+
+  apzc->AssertStateIsReset();
+}
+
+// Test for bug 947892
+// We test whether we dispatch tap event when the tap is followed by pinch.
+TEST_F(APZCGestureDetectorTester, TapFollowedByPinch) {
+  MakeApzcZoomable();
+
+  EXPECT_CALL(*mcc, HandleSingleTap(CSSPoint(10, 10), 0, apzc->GetGuid())).Times(1);
+
+  int time = 0;
+  ApzcTap(apzc, 10, 10, time, 100);
+
+  int inputId = 0;
+  MultiTouchInput mti;
+  mti = MultiTouchInput(MultiTouchInput::MULTITOUCH_START, time, TimeStamp(), 0);
+  mti.mTouches.AppendElement(SingleTouchData(inputId, ScreenIntPoint(20, 20), ScreenSize(0, 0), 0, 0));
+  mti.mTouches.AppendElement(SingleTouchData(inputId + 1, ScreenIntPoint(10, 10), ScreenSize(0, 0), 0, 0));
+  apzc->ReceiveInputEvent(mti);
+
+  mti = MultiTouchInput(MultiTouchInput::MULTITOUCH_END, time, TimeStamp(), 0);
+  mti.mTouches.AppendElement(SingleTouchData(inputId, ScreenIntPoint(20, 20), ScreenSize(0, 0), 0, 0));
+  mti.mTouches.AppendElement(SingleTouchData(inputId + 1, ScreenIntPoint(10, 10), ScreenSize(0, 0), 0, 0));
+  apzc->ReceiveInputEvent(mti);
+
+  while (mcc->RunThroughDelayedTasks());
+
+  apzc->AssertStateIsReset();
+}
+
+TEST_F(APZCGestureDetectorTester, TapFollowedByMultipleTouches) {
+  MakeApzcZoomable();
+
+  EXPECT_CALL(*mcc, HandleSingleTap(CSSPoint(10, 10), 0, apzc->GetGuid())).Times(1);
+
+  int time = 0;
+  ApzcTap(apzc, 10, 10, time, 100);
+
+  int inputId = 0;
+  MultiTouchInput mti;
+  mti = MultiTouchInput(MultiTouchInput::MULTITOUCH_START, time, TimeStamp(), 0);
+  mti.mTouches.AppendElement(SingleTouchData(inputId, ScreenIntPoint(20, 20), ScreenSize(0, 0), 0, 0));
+  apzc->ReceiveInputEvent(mti);
+
+  mti = MultiTouchInput(MultiTouchInput::MULTITOUCH_START, time, TimeStamp(), 0);
+  mti.mTouches.AppendElement(SingleTouchData(inputId, ScreenIntPoint(20, 20), ScreenSize(0, 0), 0, 0));
+  mti.mTouches.AppendElement(SingleTouchData(inputId + 1, ScreenIntPoint(10, 10), ScreenSize(0, 0), 0, 0));
+  apzc->ReceiveInputEvent(mti);
+
+  mti = MultiTouchInput(MultiTouchInput::MULTITOUCH_END, time, TimeStamp(), 0);
+  mti.mTouches.AppendElement(SingleTouchData(inputId, ScreenIntPoint(20, 20), ScreenSize(0, 0), 0, 0));
+  mti.mTouches.AppendElement(SingleTouchData(inputId + 1, ScreenIntPoint(10, 10), ScreenSize(0, 0), 0, 0));
+  apzc->ReceiveInputEvent(mti);
 
   while (mcc->RunThroughDelayedTasks());
 

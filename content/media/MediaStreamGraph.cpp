@@ -2726,7 +2726,7 @@ MediaStreamGraphImpl::MediaStreamGraphImpl(bool aRealtime,
   , mNonRealtimeProcessing(false)
   , mStreamOrderDirty(false)
   , mLatencyLog(AsyncLatencyLogger::Get())
-#ifdef MOZ_WEBRTCj
+#ifdef MOZ_WEBRTC
   , mFarendObserverRef(nullptr)
 #endif
   , mMemoryReportMonitor("MSGIMemory")
@@ -2859,8 +2859,11 @@ MediaStreamGraphImpl::CollectReports(nsIHandleReportCallback* aHandleReport,
     MonitorAutoLock memoryReportLock(mMemoryReportMonitor);
     mNeedsMemoryReport = true;
 
-    // Wake up the MSG thread.
-    CurrentDriver()->WakeUp();
+    {
+      // Wake up the MSG thread.
+      MonitorAutoLock monitorLock(mMonitor);
+      CurrentDriver()->WakeUp();
+    }
 
     if (mLifecycleState >= LIFECYCLE_WAITING_FOR_THREAD_SHUTDOWN) {
       // Shutting down, nothing to report.

@@ -520,7 +520,8 @@ public:
       //   is this one, then the SetState(NOTHING) in UpdateAnimation will
       //   stomp on the SetState(SNAP_BACK) it does.
       mDeferredTasks.append(NewRunnableMethod(mOverscrollHandoffChain.get(),
-                                              &OverscrollHandoffChain::SnapBackOverscrolledApzc));
+                                              &OverscrollHandoffChain::SnapBackOverscrolledApzc,
+                                              &mApzc));
       return false;
     }
 
@@ -1288,6 +1289,10 @@ nsEventStatus AsyncPanZoomController::OnTouchEnd(const MultiTouchInput& aEvent) 
   case TOUCHING:
   case CROSS_SLIDING_X:
   case CROSS_SLIDING_Y:
+    // We may have some velocity stored on the axis from move events
+    // that were not big enough to trigger scrolling. Clear that out.
+    mX.SetVelocity(0);
+    mY.SetVelocity(0);
     SetState(NOTHING);
     return nsEventStatus_eIgnore;
 
@@ -1578,8 +1583,9 @@ nsEventStatus AsyncPanZoomController::OnPan(const PanGestureInput& aEvent, bool 
 
   // TODO: Handle pan events sent without pan begin / pan end events properly.
   if (mPanGestureState) {
+    ScreenPoint panDistance(fabs(panDisplacement.x), fabs(panDisplacement.y));
     OverscrollHandoffState handoffState(
-        *mPanGestureState->GetOverscrollHandoffChain(), panDisplacement);
+        *mPanGestureState->GetOverscrollHandoffChain(), panDistance);
     CallDispatchScroll(aEvent.mPanStartPoint, aEvent.mPanStartPoint + aEvent.mPanDisplacement,
                        handoffState);
   }
@@ -1741,9 +1747,8 @@ static void TransformVector(const Matrix4x4& aTransform,
 void AsyncPanZoomController::ToGlobalScreenCoordinates(ScreenPoint* aVector,
                                                        const ScreenPoint& aAnchor) const {
   if (APZCTreeManager* treeManagerLocal = GetApzcTreeManager()) {
-    Matrix4x4 transform = treeManagerLocal->GetScreenToApzcTransform(this);
-    transform.Invert();
-    TransformVector(transform, aVector, aAnchor);
+    Matrix4x4 apzcToScreen = treeManagerLocal->GetScreenToApzcTransform(this).Inverse();
+    TransformVector(apzcToScreen, aVector, aAnchor);
   }
 }
 
@@ -2448,7 +2453,11 @@ bool AsyncPanZoomController::UpdateAnimation(const TimeStamp& aSampleTime,
   return false;
 }
 
-void AsyncPanZoomController::GetOverscrollTransform(Matrix4x4* aTransform) const {
+Matrix4x4 AsyncPanZoomController::GetOverscrollTransform() const {
+  if (!IsOverscrolled()) {
+    return Matrix4x4();
+  }
+
   // The overscroll effect is a uniform stretch along the overscrolled axis,
   // with the edge of the content where we have reached the end of the
   // scrollable area pinned into place.
@@ -2483,8 +2492,8 @@ void AsyncPanZoomController::GetOverscrollTransform(Matrix4x4* aTransform) const
   }
 
   // Combine the transformations into a matrix.
-  *aTransform = Matrix4x4().Scale(scaleX, scaleY, 1)
-                           .PostTranslate(translation.x, translation.y, 0);
+  return Matrix4x4().Scale(scaleX, scaleY, 1)
+                    .PostTranslate(translation.x, translation.y, 0);
 }
 
 bool AsyncPanZoomController::AdvanceAnimations(const TimeStamp& aSampleTime)
@@ -2560,19 +2569,12 @@ bool AsyncPanZoomController::AdvanceAnimations(const TimeStamp& aSampleTime)
 }
 
 void AsyncPanZoomController::SampleContentTransformForFrame(ViewTransform* aOutTransform,
-                                                            ScreenPoint& aScrollOffset,
-                                                            Matrix4x4* aOutOverscrollTransform)
+                                                            ScreenPoint& aScrollOffset)
 {
   ReentrantMonitorAutoEnter lock(mMonitor);
 
   aScrollOffset = mFrameMetrics.GetScrollOffset() * mFrameMetrics.GetZoom();
   *aOutTransform = GetCurrentAsyncTransform();
-
-  // If we are overscrolled, we would like the compositor to apply an
-  // additional transform that produces an overscroll effect.
-  if (aOutOverscrollTransform && IsOverscrolled()) {
-    GetOverscrollTransform(aOutOverscrollTransform);
-  }
 }
 
 ViewTransform AsyncPanZoomController::GetCurrentAsyncTransform() const {
@@ -2649,6 +2651,7 @@ bool AsyncPanZoomController::IsCurrentlyCheckerboarding() const {
 
   CSSPoint currentScrollOffset = mFrameMetrics.GetScrollOffset() + mTestAsyncScrollOffset;
   CSSRect painted = mLastContentPaintMetrics.mDisplayPort + mLastContentPaintMetrics.GetScrollOffset();
+  painted.Inflate(CSSMargin::FromAppUnits(nsMargin(1, 1, 1, 1)));   // fuzz for rounding error
   CSSRect visible = CSSRect(currentScrollOffset, mFrameMetrics.CalculateCompositedSizeInCssPixels());
   return !painted.Contains(visible);
 }
@@ -3135,6 +3138,7 @@ AsyncPanZoomController::GetZoomConstraints() const
 
 
 void AsyncPanZoomController::PostDelayedTask(Task* aTask, int aDelayMs) {
+  AssertOnControllerThread();
   nsRefPtr<GeckoContentController> controller = GetGeckoContentController();
   if (controller) {
     controller->PostDelayedTask(aTask, aDelayMs);

@@ -65,9 +65,9 @@ MathCache::MathCache() {
     memset(table, 0, sizeof(table));
 
     /* See comments in lookup(). */
-    JS_ASSERT(IsNegativeZero(-0.0));
-    JS_ASSERT(!IsNegativeZero(+0.0));
-    JS_ASSERT(hash(-0.0, MathCache::Sin) != hash(+0.0, MathCache::Sin));
+    MOZ_ASSERT(IsNegativeZero(-0.0));
+    MOZ_ASSERT(!IsNegativeZero(+0.0));
+    MOZ_ASSERT(hash(-0.0, MathCache::Sin) != hash(+0.0, MathCache::Sin));
 }
 
 size_t
@@ -742,9 +742,6 @@ random_generateSeed()
      * do, so just mix in the fd error code and the current time.
      */
     int fd = open("/dev/urandom", O_RDONLY);
-    if (fd < 0) {
-        perror("FITZGEN: error opening /dev/urandom: ");
-    }
     MOZ_ASSERT(fd >= 0, "Can't open /dev/urandom");
     if (fd >= 0) {
         (void)read(fd, seed.u8, mozilla::ArrayLength(seed.u8));

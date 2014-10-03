@@ -174,7 +174,7 @@ class RegExpShared
     /* Accessors */
 
     size_t getParenCount() const {
-        JS_ASSERT(isCompiled() || canStringMatch);
+        MOZ_ASSERT(isCompiled() || canStringMatch);
         return parenCount;
     }
 
@@ -232,7 +232,7 @@ class RegExpGuard : public JS::CustomAutoRooter
 
   public:
     void init(RegExpShared &re) {
-        JS_ASSERT(!initialized());
+        MOZ_ASSERT(!initialized());
         re_ = &re;
     }
 
@@ -246,7 +246,7 @@ class RegExpGuard : public JS::CustomAutoRooter
     }
 
     bool initialized() const { return !!re_; }
-    RegExpShared *re() const { JS_ASSERT(initialized()); return re_; }
+    RegExpShared *re() const { MOZ_ASSERT(initialized()); return re_; }
     RegExpShared *operator->() { return re(); }
     RegExpShared &operator*() { return *re(); }
 };
@@ -314,7 +314,7 @@ class RegExpCompartment
     size_t sizeOfExcludingThis(mozilla::MallocSizeOf mallocSizeOf);
 };
 
-class RegExpObject : public JSObject
+class RegExpObject : public NativeObject
 {
     static const unsigned LAST_INDEX_SLOT          = 0;
     static const unsigned SOURCE_SLOT              = 1;
@@ -406,8 +406,8 @@ class RegExpObject : public JSObject
     bool getShared(JSContext *cx, RegExpGuard *g);
 
     void setShared(RegExpShared &shared) {
-        JS_ASSERT(!maybeShared());
-        JSObject::setPrivate(&shared);
+        MOZ_ASSERT(!maybeShared());
+        NativeObject::setPrivate(&shared);
     }
 
     static void trace(JSTracer *trc, JSObject *obj);
@@ -436,7 +436,7 @@ class RegExpObject : public JSObject
      */
     bool createShared(JSContext *cx, RegExpGuard *g);
     RegExpShared *maybeShared() const {
-        return static_cast<RegExpShared *>(JSObject::getPrivate());
+        return static_cast<RegExpShared *>(NativeObject::getPrivate());
     }
 
     /* Call setShared in preference to setPrivate. */
@@ -463,7 +463,7 @@ RegExpToShared(JSContext *cx, HandleObject obj, RegExpGuard *g)
 
 template<XDRMode mode>
 bool
-XDRScriptRegExpObject(XDRState<mode> *xdr, HeapPtrObject *objp);
+XDRScriptRegExpObject(XDRState<mode> *xdr, MutableHandle<RegExpObject*> objp);
 
 extern JSObject *
 CloneScriptRegExpObject(JSContext *cx, RegExpObject &re);

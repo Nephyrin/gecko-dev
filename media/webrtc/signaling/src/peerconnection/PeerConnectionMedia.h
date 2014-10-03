@@ -312,11 +312,11 @@ class PeerConnectionMedia : public sigslot::has_slots<> {
   }
 
   // Add a stream (main thread only)
-  nsresult AddStream(nsIDOMMediaStream* aMediaStream, uint32_t hints,
+  nsresult AddStream(DOMMediaStream* aMediaStream, uint32_t hints,
                      uint32_t *stream_id);
 
   // Remove a stream (main thread only)
-  nsresult RemoveStream(nsIDOMMediaStream* aMediaStream,
+  nsresult RemoveStream(DOMMediaStream* aMediaStream,
                         uint32_t hints,
                         uint32_t *stream_id);
 
@@ -415,13 +415,20 @@ class PeerConnectionMedia : public sigslot::has_slots<> {
   void SelfDestruct_m();
 
   // ICE events
-  void IceGatheringStateChange(mozilla::NrIceCtx* ctx,
+  void IceGatheringStateChange_s(mozilla::NrIceCtx* ctx,
                                mozilla::NrIceCtx::GatheringState state);
-  void IceConnectionStateChange(mozilla::NrIceCtx* ctx,
+  void IceConnectionStateChange_s(mozilla::NrIceCtx* ctx,
                                 mozilla::NrIceCtx::ConnectionState state);
   void IceStreamReady(mozilla::NrIceMediaStream *aStream);
-  void OnCandidateFound(mozilla::NrIceMediaStream *aStream,
+  void OnCandidateFound_s(mozilla::NrIceMediaStream *aStream,
                         const std::string &candidate);
+
+  void IceGatheringStateChange_m(mozilla::NrIceCtx* ctx,
+                                 mozilla::NrIceCtx::GatheringState state);
+  void IceConnectionStateChange_m(mozilla::NrIceCtx* ctx,
+                                  mozilla::NrIceCtx::ConnectionState state);
+  void OnCandidateFound_m(const std::string &candidate, uint16_t level);
+
 
   // The parent PC
   PeerConnectionImpl *mParent;

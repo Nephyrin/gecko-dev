@@ -75,7 +75,7 @@ class TypedArrayLayout
                   "bad inlined constant in jsfriendapi.h");
 };
 
-class TypedArrayObject : public ArrayBufferViewObject
+class TypedArrayObject : public NativeObject
 {
   public:
     typedef TypedArrayObject AnyTypedArray;
@@ -106,15 +106,15 @@ class TypedArrayObject : public ArrayBufferViewObject
     // For typed arrays which can store their data inline, the array buffer
     // object is created lazily.
     static const uint32_t INLINE_BUFFER_LIMIT =
-        (JSObject::MAX_FIXED_SLOTS - FIXED_DATA_START) * sizeof(Value);
+        (NativeObject::MAX_FIXED_SLOTS - FIXED_DATA_START) * sizeof(Value);
 
     static gc::AllocKind
     AllocKindForLazyBuffer(size_t nbytes)
     {
-        JS_ASSERT(nbytes <= INLINE_BUFFER_LIMIT);
+        MOZ_ASSERT(nbytes <= INLINE_BUFFER_LIMIT);
         /* For GGC we need at least one slot in which to store a forwarding pointer. */
         size_t dataSlots = Max(size_t(1), AlignBytes(nbytes, sizeof(Value)) / sizeof(Value));
-        JS_ASSERT(nbytes <= dataSlots * sizeof(Value));
+        MOZ_ASSERT(nbytes <= dataSlots * sizeof(Value));
         return gc::GetGCObjectKind(FIXED_DATA_START + dataSlots);
     }
 
@@ -232,7 +232,7 @@ IsTypedArrayConstructor(HandleValue v, uint32_t type);
 inline Scalar::Type
 TypedArrayObject::type() const
 {
-    JS_ASSERT(IsTypedArrayClass(getClass()));
+    MOZ_ASSERT(IsTypedArrayClass(getClass()));
     return static_cast<Scalar::Type>(getClass() - &classes[0]);
 }
 
@@ -254,7 +254,7 @@ IsTypedArrayIndex(jsid id, uint64_t *indexp)
 {
     if (JSID_IS_INT(id)) {
         int32_t i = JSID_TO_INT(id);
-        JS_ASSERT(i >= 0);
+        MOZ_ASSERT(i >= 0);
         *indexp = (double)i;
         return true;
     }
@@ -301,7 +301,7 @@ TypedArrayShift(Scalar::Type viewType)
     MOZ_CRASH("Unexpected array type");
 }
 
-class DataViewObject : public ArrayBufferViewObject
+class DataViewObject : public NativeObject
 {
     static const size_t RESERVED_SLOTS = JS_DATAVIEW_SLOTS;
     static const size_t DATA_SLOT      = JS_DATAVIEW_SLOT_DATA;
@@ -327,20 +327,20 @@ class DataViewObject : public ArrayBufferViewObject
 
     template<Value ValueGetter(DataViewObject *view)>
     static bool
-    defineGetter(JSContext *cx, PropertyName *name, HandleObject proto);
+    defineGetter(JSContext *cx, PropertyName *name, HandleNativeObject proto);
 
   public:
     static const Class class_;
 
     static Value byteOffsetValue(DataViewObject *view) {
         Value v = view->getReservedSlot(TypedArrayLayout::BYTEOFFSET_SLOT);
-        JS_ASSERT(v.toInt32() >= 0);
+        MOZ_ASSERT(v.toInt32() >= 0);
         return v;
     }
 
     static Value byteLengthValue(DataViewObject *view) {
         Value v = view->getReservedSlot(TypedArrayLayout::LENGTH_SLOT);
-        JS_ASSERT(v.toInt32() >= 0);
+        MOZ_ASSERT(v.toInt32() >= 0);
         return v;
     }
 

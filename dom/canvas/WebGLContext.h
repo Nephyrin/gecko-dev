@@ -1272,7 +1272,7 @@ protected:
         GLuint mGLName;
 
     public:
-        FakeBlackTexture(gl::GLContext* gl, GLenum target, GLenum format);
+        FakeBlackTexture(gl::GLContext* gl, TexTarget target, GLenum format);
         ~FakeBlackTexture();
         GLuint GLName() const { return mGLName; }
     };
@@ -1326,6 +1326,22 @@ protected:
     bool ShouldGenerateWarnings() const;
 
     uint64_t mLastUseIndex;
+
+    bool mNeedsFakeNoAlpha;
+
+    struct ScopedMaskWorkaround {
+        WebGLContext& mWebGL;
+        const bool mNeedsChange;
+
+        static bool NeedsChange(WebGLContext& webgl) {
+            return webgl.mNeedsFakeNoAlpha &&
+                   webgl.mColorWriteMask[3] != false;
+        }
+
+        ScopedMaskWorkaround(WebGLContext& webgl);
+
+        ~ScopedMaskWorkaround();
+    };
 
     void LoseOldestWebGLContextIfLimitExceeded();
     void UpdateLastUseIndex();

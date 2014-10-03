@@ -98,7 +98,7 @@ public:
   {
     MOZ_ASSERT(!PreservingWrapper(), "Clearing a preserved wrapper!");
     MOZ_ASSERT(aWrapper, "Use ClearWrapper!");
-    MOZ_ASSERT(js::HasObjectMovedOp(aWrapper),
+    MOZ_ASSERT(js::HasObjectMovedOpIfRequired(aWrapper),
                "Object has not provided the hook to update the wrapper if it is moved");
 
     SetWrapperJSObject(aWrapper);
@@ -123,8 +123,10 @@ public:
    */
   void UpdateWrapper(JSObject* aNewObject, const JSObject* aOldObject)
   {
-    MOZ_ASSERT(mWrapper == aOldObject);
-    mWrapper = aNewObject;
+    if (mWrapper) {
+      MOZ_ASSERT(mWrapper == aOldObject);
+      mWrapper = aNewObject;
+    }
   }
 
   bool PreservingWrapper()

@@ -708,8 +708,7 @@ SpeechRecognition::Start(const Optional<NonNull<DOMMediaStream>>& aStream, Error
     StartRecording(&aStream.Value());
   } else {
     MediaManager* manager = MediaManager::Get();
-    manager->GetUserMedia(false,
-                          GetOwner(),
+    manager->GetUserMedia(GetOwner(),
                           constraints,
                           new GetUserMediaSuccessCallback(this),
                           new GetUserMediaErrorCallback(this));
@@ -935,8 +934,11 @@ NS_IMPL_ISUPPORTS(SpeechRecognition::GetUserMediaSuccessCallback, nsIDOMGetUserM
 NS_IMETHODIMP
 SpeechRecognition::GetUserMediaSuccessCallback::OnSuccess(nsISupports* aStream)
 {
-  nsCOMPtr<nsIDOMLocalMediaStream> localStream = do_QueryInterface(aStream);
-  mRecognition->StartRecording(static_cast<DOMLocalMediaStream*>(localStream.get()));
+  DOMLocalMediaStream *localStream = nullptr;
+  nsresult rv = CallQueryInterface(aStream, &localStream);
+  if (NS_SUCCEEDED(rv)) {
+    mRecognition->StartRecording(localStream);
+  }
   return NS_OK;
 }
 

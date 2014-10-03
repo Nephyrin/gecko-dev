@@ -79,6 +79,10 @@ class ContentParent MOZ_FINAL : public PContentParent
 
 public:
 #ifdef MOZ_NUWA_PROCESS
+    static int32_t NuwaPid() {
+        return sNuwaPid;
+    }
+
     static bool IsNuwaReady() {
         return sNuwaReady;
     }
@@ -134,6 +138,8 @@ public:
     static void GetAllEvenIfDead(nsTArray<ContentParent*>& aArray);
 
     static bool IgnoreIPCPrincipal();
+
+    static void NotifyUpdatedDictionaries();
 
     virtual bool RecvCreateChildProcess(const IPCTabContext& aContext,
                                         const hal::ProcessPriority& aPriority,
@@ -406,7 +412,9 @@ private:
     virtual bool RecvGetProcessAttributes(uint64_t* aId,
                                           bool* aIsForApp,
                                           bool* aIsForBrowser) MOZ_OVERRIDE;
-    virtual bool RecvGetXPCOMProcessAttributes(bool* aIsOffline) MOZ_OVERRIDE;
+    virtual bool RecvGetXPCOMProcessAttributes(bool* aIsOffline,
+                                               InfallibleTArray<nsString>* dictionaries)
+        MOZ_OVERRIDE;
 
     virtual bool DeallocPJavaScriptParent(mozilla::jsipc::PJavaScriptParent*) MOZ_OVERRIDE;
 
@@ -469,12 +477,16 @@ private:
             const nsCString& aMimeContentType,
             const nsCString& aContentDisposition,
             const uint32_t& aContentDispositionHint,
-            const nsString& aContentDispositionFilename, 
+            const nsString& aContentDispositionFilename,
             const bool& aForceSave,
             const int64_t& aContentLength,
             const OptionalURIParams& aReferrer,
             PBrowserParent* aBrowser) MOZ_OVERRIDE;
     virtual bool DeallocPExternalHelperAppParent(PExternalHelperAppParent* aService) MOZ_OVERRIDE;
+
+    virtual PCellBroadcastParent* AllocPCellBroadcastParent() MOZ_OVERRIDE;
+    virtual bool DeallocPCellBroadcastParent(PCellBroadcastParent*) MOZ_OVERRIDE;
+    virtual bool RecvPCellBroadcastConstructor(PCellBroadcastParent* aActor) MOZ_OVERRIDE;
 
     virtual PSmsParent* AllocPSmsParent() MOZ_OVERRIDE;
     virtual bool DeallocPSmsParent(PSmsParent*) MOZ_OVERRIDE;
@@ -623,8 +635,13 @@ private:
 
     virtual bool RecvSetFakeVolumeState(const nsString& fsName, const int32_t& fsState) MOZ_OVERRIDE;
 
-    virtual bool RecvKeywordToURI(const nsCString& aKeyword, OptionalInputStreamParams* aPostData,
+    virtual bool RecvKeywordToURI(const nsCString& aKeyword,
+                                  nsString* aProviderName,
+                                  OptionalInputStreamParams* aPostData,
                                   OptionalURIParams* aURI) MOZ_OVERRIDE;
+
+    virtual bool RecvNotifyKeywordSearchLoading(const nsString &aProvider,
+                                                const nsString &aKeyword) MOZ_OVERRIDE; 
 
     virtual void ProcessingError(Result what) MOZ_OVERRIDE;
 
@@ -721,6 +738,7 @@ private:
 #endif
 
 #ifdef MOZ_NUWA_PROCESS
+    static int32_t sNuwaPid;
     static bool sNuwaReady;
 #endif
 };

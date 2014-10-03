@@ -42,7 +42,7 @@ using mozilla::PodZero;
 JSTrapStatus
 js::ScriptDebugPrologue(JSContext *cx, AbstractFramePtr frame, jsbytecode *pc)
 {
-    JS_ASSERT_IF(frame.isInterpreterFrame(), frame.asInterpreterFrame() == cx->interpreterFrame());
+    MOZ_ASSERT_IF(frame.isInterpreterFrame(), frame.asInterpreterFrame() == cx->interpreterFrame());
 
     RootedValue rval(cx);
     JSTrapStatus status = Debugger::onEnterFrame(cx, frame, &rval);
@@ -67,7 +67,7 @@ js::ScriptDebugPrologue(JSContext *cx, AbstractFramePtr frame, jsbytecode *pc)
 bool
 js::ScriptDebugEpilogue(JSContext *cx, AbstractFramePtr frame, jsbytecode *pc, bool okArg)
 {
-    JS_ASSERT_IF(frame.isInterpreterFrame(), frame.asInterpreterFrame() == cx->interpreterFrame());
+    MOZ_ASSERT_IF(frame.isInterpreterFrame(), frame.asInterpreterFrame() == cx->interpreterFrame());
 
     bool ok = okArg;
 
@@ -77,7 +77,7 @@ js::ScriptDebugEpilogue(JSContext *cx, AbstractFramePtr frame, jsbytecode *pc, b
 JSTrapStatus
 js::DebugExceptionUnwind(JSContext *cx, AbstractFramePtr frame, jsbytecode *pc)
 {
-    JS_ASSERT(cx->compartment()->debugMode());
+    MOZ_ASSERT(cx->compartment()->debugMode());
 
     /* Call debugger throw hook if set. */
     RootedValue rval(cx);
@@ -129,14 +129,17 @@ JS_GetFunctionScript(JSContext *cx, HandleFunction fun)
 JS_PUBLIC_API(const char *)
 JS_GetScriptFilename(JSScript *script)
 {
-    return script->filename();
+    // This is called from ThreadStackHelper which can be called from another
+    // thread or inside a signal hander, so we need to be careful in case a
+    // copmacting GC is currently moving things around.
+    return script->maybeForwardedFilename();
 }
 
 JS_PUBLIC_API(const char16_t *)
 JS_GetScriptSourceMap(JSContext *cx, JSScript *script)
 {
     ScriptSource *source = script->scriptSource();
-    JS_ASSERT(source);
+    MOZ_ASSERT(source);
     return source->hasSourceMapURL() ? source->sourceMapURL() : nullptr;
 }
 

@@ -92,6 +92,28 @@ public:
   // track whether off-main-thread animations are up-to-date.
   uint64_t GetAnimationGeneration() const { return mAnimationGeneration; }
 
+  // Whether rule matching should skip styles associated with animation
+  bool SkipAnimationRules() const {
+    MOZ_ASSERT(mSkipAnimationRules || !mPostAnimationRestyles,
+               "inconsistent state");
+    return mSkipAnimationRules;
+  }
+
+  // Whether rule matching should post animation restyles when it skips
+  // styles associated with animation.  Only true when
+  // SkipAnimationRules() is also true.
+  bool PostAnimationRestyles() const {
+    MOZ_ASSERT(mSkipAnimationRules || !mPostAnimationRestyles,
+               "inconsistent state");
+    return mPostAnimationRestyles;
+  }
+
+  // Whether we're currently in the animation phase of restyle
+  // processing (to be eliminated in bug 960465)
+  bool IsProcessingAnimationStyleChange() const {
+    return mIsProcessingAnimationStyleChange;
+  }
+
   /**
    * Reparent the style contexts of this frame subtree.  The parent frame of
    * aFrame must be changed to the new parent before this function is called;
@@ -240,6 +262,9 @@ public:
   // itself.
   void ProcessPendingRestyles();
 
+  // Returns whether there are any pending restyles.
+  bool HasPendingRestyles() { return mPendingRestyles.Count() != 0; }
+
   // ProcessPendingRestyles calls into one of our RestyleTracker
   // objects.  It then calls back to these functions at the beginning
   // and end of its work.
@@ -295,7 +320,7 @@ public:
   {
     if (mPresContext) {
       PostRestyleEventCommon(aElement, aRestyleHint, aMinChangeHint,
-                             mPresContext->IsProcessingAnimationStyleChange());
+                             IsProcessingAnimationStyleChange());
     }
   }
 
@@ -372,7 +397,8 @@ public:
    */
   static bool ShouldLogRestyle(nsPresContext* aPresContext) {
     return aPresContext->RestyleLoggingEnabled() &&
-           (!aPresContext->IsProcessingAnimationStyleChange() ||
+           (!aPresContext->RestyleManager()->
+               IsProcessingAnimationStyleChange() ||
             AnimationRestyleLoggingEnabled());
   }
 
@@ -385,6 +411,13 @@ public:
     static bool animations = getenv("MOZ_DEBUG_RESTYLE_ANIMATIONS") != 0;
     return animations;
   }
+
+  // Set MOZ_DEBUG_RESTYLE_STRUCTS to a comma-separated string of
+  // style struct names -- such as "Font,SVGReset" -- to log the style context
+  // tree and those cached struct pointers before each restyle.  This
+  // function returns a bitfield of the structs named in the
+  // environment variable.
+  static uint32_t StructsToLog();
 
   static nsCString StructNamesToString(uint32_t aSIDs);
   int32_t& LoggingDepth() { return mLoggingDepth; }
@@ -417,6 +450,16 @@ private:
   bool mObservingRefreshDriver : 1;
   // True if we're in the middle of a nsRefreshDriver refresh
   bool mInStyleRefresh : 1;
+  // Whether rule matching should skip styles associated with animation
+  bool mSkipAnimationRules : 1;
+  // Whether rule matching should post animation restyles when it skips
+  // styles associated with animation.  Only true when
+  // mSkipAnimationRules is also true.
+  bool mPostAnimationRestyles : 1;
+  // Whether we're currently in the animation phase of restyle
+  // processing (to be eliminated in bug 960465)
+  bool mIsProcessingAnimationStyleChange : 1;
+
   uint32_t mHoverGeneration;
   nsChangeHint mRebuildAllExtraHint;
 
@@ -432,6 +475,10 @@ private:
 
   RestyleTracker mPendingRestyles;
   RestyleTracker mPendingAnimationRestyles;
+
+#ifdef DEBUG
+  bool mIsProcessingRestyles;
+#endif
 
 #ifdef RESTYLE_LOGGING
   int32_t mLoggingDepth;

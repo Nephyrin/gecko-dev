@@ -203,6 +203,10 @@ class B2GOptions(ReftestOptions):
         if not options.httpdPath:
             options.httpdPath = os.path.join(options.xrePath, "components")
 
+        # B2G reftests do not do leak checking, but set some reasonable defaults to avoid errors.
+        options.leakThresholds = {}
+        options.ignoreMissingLeaks = []
+
         return options
 
 
@@ -425,7 +429,6 @@ class B2GRemoteReftest(RefTest):
         prefs["browser.firstrun.show.localepicker"] = False
         prefs["b2g.system_startup_url"] = "app://test-container.gaiamobile.org/index.html"
         prefs["b2g.system_manifest_url"] = "app://test-container.gaiamobile.org/manifest.webapp"
-        prefs["browser.tabs.remote"] = False
         prefs["dom.ipc.tabs.disabled"] = False
         prefs["dom.mozBrowserFramesEnabled"] = True
         prefs["font.size.inflation.emPerLine"] = 0
@@ -439,7 +442,6 @@ class B2GRemoteReftest(RefTest):
         prefs["toolkit.telemetry.notifiedOptOut"] = 999
 
         if options.oop:
-            prefs['browser.tabs.remote'] = True
             prefs['browser.tabs.remote.autostart'] = True
             prefs['reftest.browser.iframe.enabled'] = True
 

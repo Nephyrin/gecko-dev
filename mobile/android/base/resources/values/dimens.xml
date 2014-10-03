@@ -12,12 +12,18 @@
     <dimen name="browser_toolbar_button_padding">12dp</dimen>
     <dimen name="browser_toolbar_icon_width">48dp</dimen>
     <dimen name="browser_toolbar_lock_width">20dp</dimen>
-    <dimen name="browser_toolbar_favicon_size">25.33dip</dimen>
+    <!-- favicon_size includes 4dp of right padding. We can't use margin (which would allow us to
+         specify the actual size) because that would decrease the size of our hit target. -->
+    <dimen name="browser_toolbar_favicon_size">21.33dip</dimen>
     <dimen name="browser_toolbar_shadow_size">2dp</dimen>
 
     <dimen name="new_tablet_tab_strip_height">48dp</dimen>
     <dimen name="new_tablet_tab_strip_item_width">250dp</dimen>
     <dimen name="new_tablet_tab_strip_item_margin">-30dp</dimen>
+    <dimen name="new_tablet_tab_strip_favicon_size">-30dp</dimen>
+    <dimen name="new_tablet_forward_default_offset">-6dp</dimen>
+    <dimen name="new_tablet_browser_toolbar_menu_item_padding">19dp</dimen>
+    <dimen name="forward_default_offset">-13dip</dimen>
 
     <!-- Dimensions used by Favicons and FaviconView -->
     <dimen name="favicon_size_small">16dp</dimen>

@@ -17,6 +17,7 @@
 
 #include "jsscriptinlines.h"
 
+#include "vm/ObjectImpl-inl.h"
 #include "vm/StringObject-inl.h"
 
 using mozilla::ArrayLength;
@@ -27,7 +28,7 @@ namespace jit {
 IonBuilder::InliningStatus
 IonBuilder::inlineNativeCall(CallInfo &callInfo, JSFunction *target)
 {
-    JS_ASSERT(target->isNative());
+    MOZ_ASSERT(target->isNative());
     JSNative native = target->native();
 
     if (!optimizationInfo().inlineNative())
@@ -223,14 +224,14 @@ IonBuilder::inlineNativeCall(CallInfo &callInfo, JSFunction *target)
 IonBuilder::InliningStatus
 IonBuilder::inlineNativeGetter(CallInfo &callInfo, JSFunction *target)
 {
-    JS_ASSERT(target->isNative());
+    MOZ_ASSERT(target->isNative());
     JSNative native = target->native();
 
     if (!optimizationInfo().inlineNative())
         return InliningStatus_NotInlined;
 
     types::TemporaryTypeSet *thisTypes = callInfo.thisArg()->resultTypeSet();
-    JS_ASSERT(callInfo.argc() == 0);
+    MOZ_ASSERT(callInfo.argc() == 0);
 
     // Try to optimize typed array lengths. There is one getter on
     // %TypedArray%.prototype for typed arrays and one getter on
@@ -301,10 +302,10 @@ IonBuilder::inlineArray(CallInfo &callInfo)
     uint32_t initLength = 0;
     AllocatingBehaviour allocating = NewArray_Unallocating;
 
-    JSObject *templateObject = inspector->getTemplateObjectForNative(pc, js_Array);
+    NativeObject *templateObject = inspector->getTemplateObjectForNative(pc, js_Array);
     if (!templateObject)
         return InliningStatus_NotInlined;
-    JS_ASSERT(templateObject->is<ArrayObject>());
+    MOZ_ASSERT(templateObject->is<ArrayObject>());
 
     // Multiple arguments imply array initialization, not just construction.
     if (callInfo.argc() >= 2) {
@@ -335,7 +336,7 @@ IonBuilder::inlineArray(CallInfo &callInfo)
 
         // Negative lengths generate a RangeError, unhandled by the inline path.
         initLength = arg->toConstant()->value().toInt32();
-        if (initLength >= JSObject::NELEMENTS_LIMIT)
+        if (initLength >= NativeObject::NELEMENTS_LIMIT)
             return InliningStatus_NotInlined;
 
         // Make sure initLength matches the template object's length. This is
@@ -540,7 +541,7 @@ IonBuilder::inlineArrayPush(CallInfo &callInfo)
     {
         return InliningStatus_NotInlined;
     }
-    JS_ASSERT(obj == callInfo.thisArg() && value == callInfo.getArg(0));
+    MOZ_ASSERT(obj == callInfo.thisArg() && value == callInfo.getArg(0));
 
     if (getInlineReturnType() != MIRType_Int32)
         return InliningStatus_NotInlined;
@@ -672,15 +673,16 @@ IonBuilder::inlineArrayConcat(CallInfo &callInfo)
     }
 
     // Inline the call.
-    JSObject *templateObj = inspector->getTemplateObjectForNative(pc, js::array_concat);
+    NativeObject *templateObj = inspector->getTemplateObjectForNative(pc, js::array_concat);
     if (!templateObj || templateObj->type() != baseThisType)
         return InliningStatus_NotInlined;
-    JS_ASSERT(templateObj->is<ArrayObject>());
+    MOZ_ASSERT(templateObj->is<ArrayObject>());
 
     callInfo.setImplicitlyUsedUnchecked();
 
     MArrayConcat *ins = MArrayConcat::New(alloc(), constraints(), callInfo.thisArg(), callInfo.getArg(0),
-                                          templateObj, templateObj->type()->initialHeap(constraints()));
+                                          &templateObj->as<ArrayObject>(),
+                                          templateObj->type()->initialHeap(constraints()));
     current->add(ins);
     current->push(ins);
 
@@ -1191,7 +1193,7 @@ IonBuilder::inlineStringObject(CallInfo &callInfo)
     JSObject *templateObj = inspector->getTemplateObjectForNative(pc, js_String);
     if (!templateObj)
         return InliningStatus_NotInlined;
-    JS_ASSERT(templateObj->is<StringObject>());
+    MOZ_ASSERT(templateObj->is<StringObject>());
 
     callInfo.setImplicitlyUsedUnchecked();
 
@@ -1218,7 +1220,7 @@ IonBuilder::inlineStringSplit(CallInfo &callInfo)
     JSObject *templateObject = inspector->getTemplateObjectForNative(pc, js::str_split);
     if (!templateObject)
         return InliningStatus_NotInlined;
-    JS_ASSERT(templateObject->is<ArrayObject>());
+    MOZ_ASSERT(templateObject->is<ArrayObject>());
 
     types::TypeObjectKey *retType = types::TypeObjectKey::get(templateObject);
     if (retType->unknownProperties())
@@ -1575,7 +1577,7 @@ IonBuilder::elementAccessIsTypedObjectArrayOfScalarType(MDefinition* obj, MDefin
     if (elemPrediction.isUseless() || elemPrediction.kind() != type::Scalar)
         return false;
 
-    JS_ASSERT(type::isSized(elemPrediction.kind()));
+    MOZ_ASSERT(type::isSized(elemPrediction.kind()));
     *arrayType = elemPrediction.scalarType();
     return true;
 }
@@ -1748,7 +1750,7 @@ IonBuilder::inlineNewDenseArrayForParallelExecution(CallInfo &callInfo)
         return InliningStatus_NotInlined;
     types::TypeObject *typeObject = returnTypes->getTypeObject(0);
 
-    JSObject *templateObject = inspector->getTemplateObjectForNative(pc, intrinsic_NewDenseArray);
+    NativeObject *templateObject = inspector->getTemplateObjectForNative(pc, intrinsic_NewDenseArray);
     if (!templateObject || templateObject->type() != typeObject)
         return InliningStatus_NotInlined;
 
@@ -1757,7 +1759,7 @@ IonBuilder::inlineNewDenseArrayForParallelExecution(CallInfo &callInfo)
     MNewDenseArrayPar *newObject = MNewDenseArrayPar::New(alloc(),
                                                           graph().forkJoinContext(),
                                                           callInfo.getArg(0),
-                                                          templateObject);
+                                                          &templateObject->as<ArrayObject>());
     current->add(newObject);
     current->push(newObject);
 
@@ -2117,8 +2119,8 @@ IonBuilder::inlineAssertFloat32(CallInfo &callInfo)
 
     MDefinition *secondArg = callInfo.getArg(1);
 
-    JS_ASSERT(secondArg->type() == MIRType_Boolean);
-    JS_ASSERT(secondArg->isConstant());
+    MOZ_ASSERT(secondArg->type() == MIRType_Boolean);
+    MOZ_ASSERT(secondArg->isConstant());
 
     bool mustBeFloat32 = secondArg->toConstant()->value().toBoolean();
     current->add(MAssertFloat32::New(alloc(), callInfo.getArg(0), mustBeFloat32));

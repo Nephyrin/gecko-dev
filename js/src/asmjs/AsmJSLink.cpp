@@ -44,6 +44,7 @@
 #include "jsobjinlines.h"
 
 #include "vm/ArrayBufferObject-inl.h"
+#include "vm/ObjectImpl-inl.h"
 
 using namespace js;
 using namespace js::jit;
@@ -117,7 +118,7 @@ HasPureCoercion(JSContext *cx, HandleValue v)
     jsid toString = NameToId(cx->names().toString);
     if (v.toObject().is<JSFunction>() &&
         HasObjectValueOf(&v.toObject(), cx) &&
-        ClassMethodIsNative(cx, &v.toObject(), &JSFunction::class_, toString, fun_toString))
+        ClassMethodIsNative(cx, &v.toObject().as<JSFunction>(), &JSFunction::class_, toString, fun_toString))
     {
         return true;
     }
@@ -129,7 +130,7 @@ static bool
 ValidateGlobalVariable(JSContext *cx, const AsmJSModule &module, AsmJSModule::Global &global,
                        HandleValue importVal)
 {
-    JS_ASSERT(global.which() == AsmJSModule::Global::Variable);
+    MOZ_ASSERT(global.which() == AsmJSModule::Global::Variable);
 
     void *datum = module.globalVarToGlobalDatum(global);
 
@@ -348,68 +349,31 @@ ValidateSimdOperation(JSContext *cx, AsmJSModule::Global &global, HandleValue gl
 
     Native native = nullptr;
     switch (global.simdOperationType()) {
+#define SET_NATIVE_INT32X4(op) case AsmJSSimdOperation_##op: native = simd_int32x4_##op; break;
+#define SET_NATIVE_FLOAT32X4(op) case AsmJSSimdOperation_##op: native = simd_float32x4_##op; break;
+#define FALLTHROUGH(op) case AsmJSSimdOperation_##op:
       case AsmJSSimdType_int32x4:
         switch (global.simdOperation()) {
-          case AsmJSSimdOperation_add: native = simd_int32x4_add; break;
-          case AsmJSSimdOperation_sub: native = simd_int32x4_sub; break;
-          case AsmJSSimdOperation_lessThan: native = simd_int32x4_lessThan; break;
-          case AsmJSSimdOperation_greaterThan: native = simd_int32x4_greaterThan; break;
-          case AsmJSSimdOperation_equal: native = simd_int32x4_equal; break;
-          case AsmJSSimdOperation_and: native = simd_int32x4_and; break;
-          case AsmJSSimdOperation_or: native = simd_int32x4_or; break;
-          case AsmJSSimdOperation_xor: native = simd_int32x4_xor; break;
-          case AsmJSSimdOperation_select: native = simd_int32x4_select; break;
-          case AsmJSSimdOperation_splat: native = simd_int32x4_splat; break;
-          case AsmJSSimdOperation_withX: native = simd_int32x4_withX; break;
-          case AsmJSSimdOperation_withY: native = simd_int32x4_withY; break;
-          case AsmJSSimdOperation_withZ: native = simd_int32x4_withZ; break;
-          case AsmJSSimdOperation_withW: native = simd_int32x4_withW; break;
-          case AsmJSSimdOperation_fromFloat32x4: native = simd_int32x4_fromFloat32x4; break;
-          case AsmJSSimdOperation_fromFloat32x4Bits: native = simd_int32x4_fromFloat32x4Bits; break;
-          case AsmJSSimdOperation_lessThanOrEqual:
-          case AsmJSSimdOperation_greaterThanOrEqual:
-          case AsmJSSimdOperation_notEqual:
-          case AsmJSSimdOperation_mul:
-          case AsmJSSimdOperation_div:
-          case AsmJSSimdOperation_max:
-          case AsmJSSimdOperation_min:
-          case AsmJSSimdOperation_fromInt32x4:
-          case AsmJSSimdOperation_fromInt32x4Bits:
+          FOREACH_INT32X4_SIMD_OP(SET_NATIVE_INT32X4)
+          FOREACH_COMMONX4_SIMD_OP(SET_NATIVE_INT32X4)
+          FOREACH_FLOAT32X4_SIMD_OP(FALLTHROUGH)
             MOZ_MAKE_COMPILER_ASSUME_IS_UNREACHABLE("shouldn't have been validated in the first "
                                                     "place");
         }
         break;
       case AsmJSSimdType_float32x4:
         switch (global.simdOperation()) {
-          case AsmJSSimdOperation_add: native = simd_float32x4_add; break;
-          case AsmJSSimdOperation_sub: native = simd_float32x4_sub; break;
-          case AsmJSSimdOperation_mul: native = simd_float32x4_mul; break;
-          case AsmJSSimdOperation_div: native = simd_float32x4_div; break;
-          case AsmJSSimdOperation_max: native = simd_float32x4_max; break;
-          case AsmJSSimdOperation_min: native = simd_float32x4_min; break;
-          case AsmJSSimdOperation_lessThan: native = simd_float32x4_lessThan ; break;
-          case AsmJSSimdOperation_lessThanOrEqual: native = simd_float32x4_lessThanOrEqual; break;
-          case AsmJSSimdOperation_equal: native = simd_float32x4_equal; break;
-          case AsmJSSimdOperation_notEqual: native = simd_float32x4_notEqual ; break;
-          case AsmJSSimdOperation_greaterThan: native = simd_float32x4_greaterThan; break;
-          case AsmJSSimdOperation_greaterThanOrEqual: native = simd_float32x4_greaterThanOrEqual ; break;
-          case AsmJSSimdOperation_and: native = simd_float32x4_and; break;
-          case AsmJSSimdOperation_or: native = simd_float32x4_or; break;
-          case AsmJSSimdOperation_xor: native = simd_float32x4_xor; break;
-          case AsmJSSimdOperation_select: native = simd_float32x4_select; break;
-          case AsmJSSimdOperation_splat: native = simd_float32x4_splat; break;
-          case AsmJSSimdOperation_withX: native = simd_float32x4_withX; break;
-          case AsmJSSimdOperation_withY: native = simd_float32x4_withY; break;
-          case AsmJSSimdOperation_withZ: native = simd_float32x4_withZ; break;
-          case AsmJSSimdOperation_withW: native = simd_float32x4_withW; break;
-          case AsmJSSimdOperation_fromInt32x4: native = simd_float32x4_fromInt32x4; break;
-          case AsmJSSimdOperation_fromInt32x4Bits: native = simd_float32x4_fromInt32x4Bits; break;
-          case AsmJSSimdOperation_fromFloat32x4:
-          case AsmJSSimdOperation_fromFloat32x4Bits:
+          FOREACH_FLOAT32X4_SIMD_OP(SET_NATIVE_FLOAT32X4)
+          FOREACH_COMMONX4_SIMD_OP(SET_NATIVE_FLOAT32X4)
+          FOREACH_INT32X4_SIMD_OP(FALLTHROUGH)
              MOZ_MAKE_COMPILER_ASSUME_IS_UNREACHABLE("shouldn't have been validated in the first "
                                                      "place");
         }
         break;
+#undef FALLTHROUGH
+#undef SET_NATIVE_FLOAT32X4
+#undef SET_NATIVE_INT32X4
+#undef SET_NATIVE
     }
     if (!native || !IsNativeFunction(v, native))
         return LinkFail(cx, "bad SIMD.type.* operation");
@@ -472,7 +436,7 @@ LinkModuleToHeap(JSContext *cx, AsmJSModule &module, Handle<ArrayBufferObjectMay
 
     // This check is sufficient without considering the size of the loaded datum because heap
     // loads and stores start on an aligned boundary and the heap byteLength has larger alignment.
-    JS_ASSERT((module.minHeapLength() - 1) <= INT32_MAX);
+    MOZ_ASSERT((module.minHeapLength() - 1) <= INT32_MAX);
     if (heapLength < module.minHeapLength()) {
         ScopedJSFreePtr<char> msg(
             JS_smprintf("ArrayBuffer byteLength of 0x%x is less than 0x%x (which is the "
@@ -776,7 +740,7 @@ HandleDynamicLinkFailure(JSContext *cx, CallArgs args, AsmJSModule &module, Hand
         formals.infallibleAppend(module.bufferArgumentName());
 
     CompileOptions options(cx);
-    options.setOriginPrincipals(module.scriptSource()->originPrincipals())
+    options.setMutedErrors(module.scriptSource()->mutedErrors())
            .setFile(module.scriptSource()->filename())
            .setCompileAndGo(false)
            .setNoScriptRval(false);
@@ -814,7 +778,7 @@ SendFunctionsToVTune(JSContext *cx, AsmJSModule &module)
 
         uint8_t *start = base + func.pod.startCodeOffset;
         uint8_t *end   = base + func.pod.endCodeOffset;
-        JS_ASSERT(end >= start);
+        MOZ_ASSERT(end >= start);
 
         unsigned method_id = iJIT_GetNewMethodID();
         if (method_id == 0)
@@ -857,7 +821,7 @@ SendFunctionsToPerf(JSContext *cx, AsmJSModule &module)
         const AsmJSModule::ProfiledFunction &func = module.profiledFunction(i);
         uintptr_t start = base + (unsigned long) func.pod.startCodeOffset;
         uintptr_t end   = base + (unsigned long) func.pod.endCodeOffset;
-        JS_ASSERT(end >= start);
+        MOZ_ASSERT(end >= start);
         size_t size = end - start;
 
         JSAutoByteString bytes;
@@ -934,7 +898,7 @@ CreateExportObject(JSContext *cx, Handle<AsmJSModuleObject*> moduleObj)
     }
 
     gc::AllocKind allocKind = gc::GetGCObjectKind(module.numExportedFunctions());
-    RootedObject obj(cx, NewBuiltinClassInstance(cx, &JSObject::class_, allocKind));
+    RootedNativeObject obj(cx, NewNativeBuiltinClassInstance(cx, &JSObject::class_, allocKind));
     if (!obj)
         return nullptr;
 
@@ -945,7 +909,7 @@ CreateExportObject(JSContext *cx, Handle<AsmJSModuleObject*> moduleObj)
         if (!fun)
             return nullptr;
 
-        JS_ASSERT(func.maybeFieldName() != nullptr);
+        MOZ_ASSERT(func.maybeFieldName() != nullptr);
         RootedId id(cx, NameToId(func.maybeFieldName()));
         RootedValue val(cx, ObjectValue(*fun));
         if (!DefineNativeProperty(cx, obj, id, val, nullptr, nullptr, JSPROP_ENUMERATE))
@@ -1211,7 +1175,7 @@ js::AsmJSFunctionToString(JSContext *cx, HandleFunction fun)
 
     // asm.js functions cannot have been created with a Function constructor
     // as they belong within a module.
-    JS_ASSERT(!(begin == 0 && end == source->length() && source->argumentsNotIncluded()));
+    MOZ_ASSERT(!(begin == 0 && end == source->length() && source->argumentsNotIncluded()));
 
     if (!out.append("function "))
         return nullptr;
@@ -1222,7 +1186,7 @@ js::AsmJSFunctionToString(JSContext *cx, HandleFunction fun)
         // the function name and the rest (arguments + body).
 
         // asm.js functions can't be anonymous
-        JS_ASSERT(fun->atom());
+        MOZ_ASSERT(fun->atom());
         if (!out.append(fun->atom()))
             return nullptr;
 

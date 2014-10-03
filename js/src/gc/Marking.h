@@ -105,6 +105,8 @@ type *Update##base##IfRelocated(JSRuntime *rt, type **thingp);
 DeclMarker(BaseShape, BaseShape)
 DeclMarker(BaseShape, UnownedBaseShape)
 DeclMarker(JitCode, jit::JitCode)
+DeclMarker(Object, NativeObject)
+DeclMarker(Object, ArrayObject)
 DeclMarker(Object, ArgumentsObject)
 DeclMarker(Object, ArrayBufferObject)
 DeclMarker(Object, ArrayBufferObjectMaybeShared)
@@ -305,6 +307,13 @@ Mark(JSTracer *trc, JSObject **objp, const char *name)
     MarkObjectUnbarriered(trc, objp, name);
 }
 
+/* For use by Debugger::WeakMap's missingScopes HashKeyRef instantiation. */
+inline void
+Mark(JSTracer *trc, NativeObject **obj, const char *name)
+{
+    MarkObjectUnbarriered(trc, obj, name);
+}
+
 /* For use by Debugger::WeakMap's proxiedScopes HashKeyRef instantiation. */
 inline void
 Mark(JSTracer *trc, ScopeObject **obj, const char *name)
@@ -391,12 +400,12 @@ ToMarkable(Cell *cell)
 inline JSGCTraceKind
 TraceKind(const Value &v)
 {
-    JS_ASSERT(v.isMarkable());
+    MOZ_ASSERT(v.isMarkable());
     if (v.isObject())
         return JSTRACE_OBJECT;
     if (v.isString())
         return JSTRACE_STRING;
-    JS_ASSERT(v.isSymbol());
+    MOZ_ASSERT(v.isSymbol());
     return JSTRACE_SYMBOL;
 }
 

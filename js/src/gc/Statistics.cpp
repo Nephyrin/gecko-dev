@@ -292,14 +292,14 @@ static const PhaseInfo phases[] = {
         { PHASE_SWEEP_SYMBOL_REGISTRY, "Sweep Symbol Registry", PHASE_SWEEP },
         { PHASE_SWEEP_COMPARTMENTS, "Sweep Compartments", PHASE_SWEEP },
             { PHASE_SWEEP_DISCARD_CODE, "Sweep Discard Code", PHASE_SWEEP_COMPARTMENTS },
-            { PHASE_SWEEP_TABLES, "Sweep Tables", PHASE_SWEEP_COMPARTMENTS },
-                { PHASE_SWEEP_TABLES_INNER_VIEWS, "Sweep Inner Views", PHASE_SWEEP_TABLES },
-                { PHASE_SWEEP_TABLES_WRAPPER, "Sweep Cross Compartment Wrappers", PHASE_SWEEP_TABLES },
-                { PHASE_SWEEP_TABLES_BASE_SHAPE, "Sweep Base Shapes", PHASE_SWEEP_TABLES },
-                { PHASE_SWEEP_TABLES_INITIAL_SHAPE, "Sweep Initial Shapes", PHASE_SWEEP_TABLES },
-                { PHASE_SWEEP_TABLES_TYPE_OBJECT, "Sweep Type Objects", PHASE_SWEEP_TABLES },
-                { PHASE_SWEEP_TABLES_BREAKPOINT, "Sweep Breakpoints", PHASE_SWEEP_TABLES },
-                { PHASE_SWEEP_TABLES_REGEXP, "Sweep Regexps", PHASE_SWEEP_TABLES },
+            { PHASE_SWEEP_INNER_VIEWS, "Sweep Inner Views", PHASE_SWEEP_COMPARTMENTS },
+            { PHASE_SWEEP_CC_WRAPPER, "Sweep Cross Compartment Wrappers", PHASE_SWEEP_COMPARTMENTS },
+            { PHASE_SWEEP_BASE_SHAPE, "Sweep Base Shapes", PHASE_SWEEP_COMPARTMENTS },
+            { PHASE_SWEEP_INITIAL_SHAPE, "Sweep Initial Shapes", PHASE_SWEEP_COMPARTMENTS },
+            { PHASE_SWEEP_TYPE_OBJECT, "Sweep Type Objects", PHASE_SWEEP_COMPARTMENTS },
+            { PHASE_SWEEP_BREAKPOINT, "Sweep Breakpoints", PHASE_SWEEP_COMPARTMENTS },
+            { PHASE_SWEEP_REGEXP, "Sweep Regexps", PHASE_SWEEP_COMPARTMENTS },
+            { PHASE_SWEEP_MISC, "Sweep Miscellaneous", PHASE_SWEEP_COMPARTMENTS },
             { PHASE_DISCARD_ANALYSIS, "Discard Analysis", PHASE_SWEEP_COMPARTMENTS },
                 { PHASE_DISCARD_TI, "Discard TI", PHASE_DISCARD_ANALYSIS },
                 { PHASE_FREE_TI_ARENA, "Free TI Arena", PHASE_DISCARD_ANALYSIS },
@@ -645,7 +645,7 @@ Statistics::Statistics(JSRuntime *rt)
         fullFormat = true;
 
         fp = fopen(env, "a");
-        JS_ASSERT(fp);
+        MOZ_ASSERT(fp);
     }
 }
 
@@ -812,13 +812,13 @@ void
 Statistics::beginPhase(Phase phase)
 {
     /* Guard against re-entry */
-    JS_ASSERT(!phaseStartTimes[phase]);
+    MOZ_ASSERT(!phaseStartTimes[phase]);
 
 #ifdef DEBUG
-    JS_ASSERT(phases[phase].index == phase);
+    MOZ_ASSERT(phases[phase].index == phase);
     Phase parent = phaseNestingDepth ? phaseNesting[phaseNestingDepth - 1] : PHASE_NO_PARENT;
-    JS_ASSERT(phaseNestingDepth < MAX_NESTING);
-    JS_ASSERT_IF(gcDepth == 1, phases[phase].parent == parent);
+    MOZ_ASSERT(phaseNestingDepth < MAX_NESTING);
+    MOZ_ASSERT_IF(gcDepth == 1, phases[phase].parent == parent);
     phaseNesting[phaseNestingDepth] = phase;
     phaseNestingDepth++;
 #endif
@@ -864,7 +864,7 @@ Statistics::endSCC(unsigned scc, int64_t start)
 double
 Statistics::computeMMU(int64_t window)
 {
-    JS_ASSERT(!slices.empty());
+    MOZ_ASSERT(!slices.empty());
 
     int64_t gc = slices[0].end - slices[0].start;
     int64_t gcMax = gc;
