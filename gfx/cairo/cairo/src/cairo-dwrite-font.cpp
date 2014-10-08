@@ -805,15 +805,19 @@ public:
     
     cairo_fixed_t GetFixedX(const D2D1_POINT_2F &point)
     {
+#ifdef _M_IX86
 	unsigned int control_word;
 	_controlfp_s(&control_word, _CW_DEFAULT, MCW_PC);
+#endif
 	return _cairo_fixed_from_double(point.x);
     }
 
     cairo_fixed_t GetFixedY(const D2D1_POINT_2F &point)
     {
+#ifdef _M_IX86
 	unsigned int control_word;
 	_controlfp_s(&control_word, _CW_DEFAULT, MCW_PC);
+#endif
 	return _cairo_fixed_from_double(point.y);
     }
 

@@ -37,13 +37,10 @@ i.addEventListener("load", function loadfunc() {
   // Navigate the frame to cause the document with the plugin to go inactive
   i.removeEventListener("load", loadfunc);
   i.src = "about:blank";
-  SimpleTest.executeSoon(function() {
-    // Ensure this event doesn't race with CheckPluginStopEvent
-    SimpleTest.executeSoon(function() {
-      ok(destroyran, "OnDestroy callback ran and did not crash");
-      SimpleTest.finish();
-    });
-  });
+  setTimeout(function() {
+    ok(destroyran, "OnDestroy callback ran and did not crash");
+    SimpleTest.finish();
+  }, 0);
 });
 document.body.appendChild(i);
 

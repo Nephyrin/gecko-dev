@@ -47,7 +47,7 @@ if (!t) {
 
   var f = document.createElement("iframe");
   f.src = t.name;
-  f.addEventListener("load", function() { SimpleTest.executeSoon(check); }, false);
+  f.addEventListener("load", function() { setTimeout(check, 0); }, false);
   document.body.appendChild(f);
 }
 
