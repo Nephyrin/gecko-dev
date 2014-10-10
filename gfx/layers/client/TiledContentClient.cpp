@@ -512,7 +512,7 @@ TileClient::TileClient(const TileClient& o)
   mFrontBufferOnWhite = o.mFrontBufferOnWhite;
   mBackLock = o.mBackLock;
   mFrontLock = o.mFrontLock;
-  mCompositableClient = nullptr;
+  mCompositableClient = o.mCompositableClient;
 #ifdef GFX_TILEDLAYER_DEBUG_OVERLAY
   mLastUpdate = o.mLastUpdate;
 #endif
@@ -531,7 +531,7 @@ TileClient::operator=(const TileClient& o)
   mFrontBufferOnWhite = o.mFrontBufferOnWhite;
   mBackLock = o.mBackLock;
   mFrontLock = o.mFrontLock;
-  mCompositableClient = nullptr;
+  mCompositableClient = o.mCompositableClient;
 #ifdef GFX_TILEDLAYER_DEBUG_OVERLAY
   mLastUpdate = o.mLastUpdate;
 #endif
@@ -1366,7 +1366,7 @@ GetCompositorSideCompositionBounds(const LayerMetricsWrapper& aScrollAncestor,
                                    const Matrix4x4& aTransformToCompBounds,
                                    const ViewTransform& aAPZTransform)
 {
-  Matrix4x4 nonTransientAPZUntransform = Matrix4x4().Scale(
+  Matrix4x4 nonTransientAPZUntransform = Matrix4x4::Scaling(
     aScrollAncestor.Metrics().mResolution.scale,
     aScrollAncestor.Metrics().mResolution.scale,
     1.f);

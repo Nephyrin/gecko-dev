@@ -2067,14 +2067,15 @@ HTMLFormElement::GetNextRadioButton(const nsAString& aName,
       index = 0;
     }
     radio = HTMLInputElement::FromContentOrNull(radioGroup->Item(index));
-    if (!radio)
+    isRadio = radio && radio->GetType() == NS_FORM_INPUT_RADIO;
+    if (!isRadio) {
       continue;
+    }
 
-    isRadio = radio->GetType() == NS_FORM_INPUT_RADIO;
-    if (!isRadio)
-      continue;
-
-  } while ((radio->Disabled() && radio != currentRadio) || !isRadio);
+    nsAutoString name;
+    radio->GetName(name);
+    isRadio = aName.Equals(name);
+  } while (!isRadio || (radio->Disabled() && radio != currentRadio));
 
   NS_IF_ADDREF(*aRadioOut = radio);
   return NS_OK;
@@ -2243,7 +2244,7 @@ namespace {
 struct PositionComparator
 {
   nsIContent* const mElement;
-  PositionComparator(nsIContent* const element) : mElement(element) {}
+  explicit PositionComparator(nsIContent* const aElement) : mElement(aElement) {}
 
   int operator()(nsIContent* aElement) const {
     if (mElement == aElement) {
@@ -2259,7 +2260,7 @@ struct PositionComparator
 struct NodeListAdaptor
 {
   nsINodeList* const mList;
-  NodeListAdaptor(nsINodeList* aList) : mList(aList) {}
+  explicit NodeListAdaptor(nsINodeList* aList) : mList(aList) {}
   nsIContent* operator[](size_t aIdx) const {
     return mList->Item(aIdx);
   }

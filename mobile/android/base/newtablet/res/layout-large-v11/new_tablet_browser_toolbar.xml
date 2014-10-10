@@ -32,7 +32,7 @@
                                           android:layout_alignParentLeft="true"
                                           android:src="@drawable/new_tablet_ic_menu_back"
                                           android:contentDescription="@string/back"
-                                          android:background="@drawable/url_bar_nav_button"/>
+                                          android:background="@drawable/new_tablet_url_bar_nav_button"/>
 
     <org.mozilla.gecko.toolbar.ToolbarEditLayout android:id="@+id/edit_layout"
                   style="@style/UrlBar.Button"
@@ -43,12 +43,12 @@
                   android:layout_toRightOf="@id/back"
                   android:layout_toLeftOf="@id/menu_items"/>
 
-    <!-- Values of marginLeft are used to animate the forward button so don't change its value. -->
+    <!-- Note: * Values of marginLeft are used to animate the forward button so don't change its value.
+               * We set the padding on the site security icon to increase its tappable area. -->
     <org.mozilla.gecko.toolbar.ToolbarDisplayLayout android:id="@+id/display_layout"
                   style="@style/UrlBar.Button.Container"
                   android:layout_toRightOf="@id/back"
                   android:layout_toLeftOf="@id/menu_items"
-                  android:paddingLeft="6dip"
                   android:paddingRight="4dip"/>
 
     <LinearLayout android:id="@+id/menu_items"

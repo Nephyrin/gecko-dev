@@ -28,7 +28,7 @@ namespace dom {
 class FontFaceBufferSource : public gfxFontFaceBufferSource
 {
 public:
-  FontFaceBufferSource(FontFace* aFontFace)
+  explicit FontFaceBufferSource(FontFace* aFontFace)
     : mFontFace(aFontFace) {}
   virtual void TakeBuffer(uint8_t*& aBuffer, uint32_t& aLength);
 
@@ -71,7 +71,7 @@ class FontFaceInitializer : public nsIRunnable
 public:
   NS_DECL_ISUPPORTS
 
-  FontFaceInitializer(FontFace* aFontFace)
+  explicit FontFaceInitializer(FontFace* aFontFace)
     : mFontFace(aFontFace)
     , mSourceBuffer(nullptr)
     , mSourceBufferLength(0) {}
@@ -224,8 +224,6 @@ FontFace::FontFace(nsISupports* aParent, nsPresContext* aPresContext)
 {
   MOZ_COUNT_CTOR(FontFace);
 
-  SetIsDOMBinding();
-
   nsCOMPtr<nsIGlobalObject> global = do_QueryInterface(aParent);
 
   if (global) {
@@ -275,8 +273,7 @@ LoadStateToStatus(gfxUserFontEntry::UserFontLoadState aLoadState)
 already_AddRefed<FontFace>
 FontFace::CreateForRule(nsISupports* aGlobal,
                         nsPresContext* aPresContext,
-                        nsCSSFontFaceRule* aRule,
-                        gfxUserFontEntry* aUserFontEntry)
+                        nsCSSFontFaceRule* aRule)
 {
   nsCOMPtr<nsIGlobalObject> globalObject = do_QueryInterface(aGlobal);
 
@@ -285,7 +282,6 @@ FontFace::CreateForRule(nsISupports* aGlobal,
   obj->mRule = aRule;
   obj->mSourceType = eSourceType_FontFaceRule;
   obj->mInFontFaceSet = true;
-  obj->SetUserFontEntry(aUserFontEntry);
   return obj.forget();
 }
 
@@ -829,8 +825,6 @@ FontFace::DisconnectFromRule()
   // Make a copy of the descriptors.
   mDescriptors = new CSSFontFaceDescriptors;
   mRule->GetDescriptors(*mDescriptors);
-
-  mRule->SetFontFace(nullptr);
   mRule = nullptr;
   mInFontFaceSet = false;
 }

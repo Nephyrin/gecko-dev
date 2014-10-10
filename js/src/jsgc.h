@@ -20,7 +20,7 @@
 #include "js/SliceBudget.h"
 #include "js/Vector.h"
 
-#include "vm/ObjectImpl.h"
+#include "vm/NativeObject.h"
 
 namespace js {
 
@@ -802,6 +802,10 @@ class ArenaLists
 
     template <AllowGC allowGC>
     static void *refillFreeList(ThreadSafeContext *cx, AllocKind thingKind);
+    template <AllowGC allowGC>
+    static void *refillFreeListFromMainThread(JSContext *cx, AllocKind thingKind);
+    static void *refillFreeListOffMainThread(ExclusiveContext *cx, AllocKind thingKind);
+    static void *refillFreeListPJS(ForkJoinContext *cx, AllocKind thingKind);
 
     static void *refillFreeListInGC(Zone *zone, AllocKind thingKind);
 

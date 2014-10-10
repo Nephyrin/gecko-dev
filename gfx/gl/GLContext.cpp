@@ -1740,10 +1740,9 @@ GLContext::UpdatePixelFormat()
     MOZ_ASSERT(caps.color == !!format.green);
     MOZ_ASSERT(caps.color == !!format.blue);
 
-    MOZ_ASSERT(caps.alpha == !!format.alpha);
-
     // These we either must have if they're requested, or
     // we can have if they're not.
+    MOZ_ASSERT(caps.alpha == !!format.alpha || !caps.alpha);
     MOZ_ASSERT(caps.depth == !!format.depth || !caps.depth);
     MOZ_ASSERT(caps.stencil == !!format.stencil || !caps.stencil);
 
@@ -2365,7 +2364,6 @@ GLContext::ResizeScreenBuffer(const IntSize& size)
 
     return mScreen->Resize(size);
 }
-
 
 void
 GLContext::DestroyScreenBuffer()

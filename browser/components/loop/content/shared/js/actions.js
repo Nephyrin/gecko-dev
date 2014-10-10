@@ -34,11 +34,9 @@ loop.shared.actions = (function() {
      * Used to trigger gathering of initial call data.
      */
     GatherCallData: Action.define("gatherCallData", {
-      // XXX This may change when bug 1072323 is implemented.
-      // Optional: Specify the calleeId for an outgoing call
-      calleeId: [String, null],
       // Specify the callId for an incoming call.
-      callId: [String, null]
+      callId: [String, null],
+      outgoing: Boolean
     }),
 
     /**
@@ -120,6 +118,13 @@ loop.shared.actions = (function() {
       type: String,
       // Whether or not to enable the stream.
       enabled: Boolean
+    }),
+
+    /**
+     * Retrieves room list.
+     * XXX: should move to some roomActions module - refs bug 1079284
+     */
+    GetAllRooms: Action.define("getAllRooms", {
     })
   };
 })();

@@ -2344,8 +2344,8 @@ XrayDefineProperty(JSContext* cx, JS::Handle<JSObject*> wrapper,
                    JS::MutableHandle<JSPropertyDescriptor> desc, bool* defined);
 
 /**
- * This enumerates indexed or named properties of obj and operations, attributes
- * and constants of the interfaces for obj.
+ * Add to props the property keys of all indexed or named properties of obj and
+ * operations, attributes and constants of the interfaces for obj.
  *
  * wrapper is the Xray JS object.
  * obj is the target object of the Xray, a binding's instance object or a
@@ -2353,9 +2353,9 @@ XrayDefineProperty(JSContext* cx, JS::Handle<JSObject*> wrapper,
  * flags are JSITER_* flags.
  */
 bool
-XrayEnumerateProperties(JSContext* cx, JS::Handle<JSObject*> wrapper,
-                        JS::Handle<JSObject*> obj,
-                        unsigned flags, JS::AutoIdVector& props);
+XrayOwnPropertyKeys(JSContext* cx, JS::Handle<JSObject*> wrapper,
+                    JS::Handle<JSObject*> obj,
+                    unsigned flags, JS::AutoIdVector& props);
 
 /**
  * Returns the prototype to use for an Xray for a DOM object, wrapped in cx's
@@ -2868,7 +2868,6 @@ CreateGlobal(JSContext* aCx, T* aNative, nsWrapperCache* aCache,
     js::SetReservedSlot(aGlobal, DOM_OBJECT_SLOT, PRIVATE_TO_JSVAL(aNative));
     NS_ADDREF(aNative);
 
-    aCache->SetIsDOMBinding();
     aCache->SetWrapper(aGlobal);
 
     dom::AllocateProtoAndIfaceCache(aGlobal,

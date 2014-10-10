@@ -832,7 +832,6 @@ CanvasRenderingContext2D::CanvasRenderingContext2D()
   , mInvalidateCount(0)
 {
   sNumLivingContexts++;
-  SetIsDOMBinding();
 
   // The default is to use OpenGL mode
   if (!gfxPlatform::GetPlatform()->UseAcceleratedSkiaCanvas()) {
@@ -3508,8 +3507,9 @@ CanvasRenderingContext2D::DrawOrMeasureText(const nsAString& aRawText,
   processor.mFontgrp->UpdateUserFonts(); // ensure user font generation is current
   const gfxFont::Metrics& fontMetrics =
     processor.mFontgrp->GetFirstValidFont()->GetMetrics(
-      processor.mTextRun->IsVertical() ? gfxFont::eVertical :
-                                         gfxFont::eHorizontal);
+      ((processor.mTextRunFlags & gfxTextRunFactory::TEXT_ORIENT_MASK) ==
+        gfxTextRunFactory::TEXT_ORIENT_HORIZONTAL)
+      ? gfxFont::eHorizontal : gfxFont::eVertical);
 
   gfxFloat anchorY;
 
@@ -4515,16 +4515,22 @@ CanvasRenderingContext2D::GetImageDataArray(JSContext* aCx,
     return NS_OK;
   }
 
-  uint8_t* data = JS_GetUint8ClampedArrayData(darray);
-
   IntRect dstWriteRect = srcReadRect;
   dstWriteRect.MoveBy(-aX, -aY);
 
-  uint8_t* src = data;
-  uint32_t srcStride = aWidth * 4;
+  uint8_t* src;
+  uint32_t srcStride;
+
   if (readback) {
     srcStride = readback->Stride();
     src = readback->GetData() + srcReadRect.y * srcStride + srcReadRect.x * 4;
+  }
+
+  JS::AutoCheckCannotGC nogc;
+  uint8_t* data = JS_GetUint8ClampedArrayData(darray, nogc);
+  if (!readback) {
+    src = data;
+    srcStride = aWidth * 4;
   }
 
   // NOTE! dst is the same as src, and this relies on reading
@@ -4950,16 +4956,12 @@ NS_IMPL_CYCLE_COLLECTION_WRAPPERCACHE(CanvasPath, mParent)
 CanvasPath::CanvasPath(nsISupports* aParent)
   : mParent(aParent)
 {
-  SetIsDOMBinding();
-
   mPathBuilder = gfxPlatform::GetPlatform()->ScreenReferenceDrawTarget()->CreatePathBuilder();
 }
 
 CanvasPath::CanvasPath(nsISupports* aParent, TemporaryRef<PathBuilder> aPathBuilder)
   : mParent(aParent), mPathBuilder(aPathBuilder)
 {
-  SetIsDOMBinding();
-
   if (!mPathBuilder) {
     mPathBuilder = gfxPlatform::GetPlatform()->ScreenReferenceDrawTarget()->CreatePathBuilder();
   }

@@ -27,6 +27,8 @@ class B2GOptions(ReftestOptions):
     def __init__(self, **kwargs):
         defaults = {}
         ReftestOptions.__init__(self)
+        # This is only used for procName in run_remote_reftests.
+        defaults["app"] = Automation.DEFAULT_APP
 
         self.add_option("--browser-arg", action="store",
                     type = "string", dest = "browser_arg",
@@ -145,7 +147,7 @@ class B2GOptions(ReftestOptions):
         options.remoteProfile = options.remoteTestRoot + "/profile"
 
         productRoot = options.remoteTestRoot + "/" + auto._product
-        if options.utilityPath == auto.DIST_BIN:
+        if options.utilityPath is None:
             options.utilityPath = productRoot + "/bin"
 
         if options.remoteWebServer == None:
@@ -203,10 +205,6 @@ class B2GOptions(ReftestOptions):
         if not options.httpdPath:
             options.httpdPath = os.path.join(options.xrePath, "components")
 
-        # B2G reftests do not do leak checking, but set some reasonable defaults to avoid errors.
-        options.leakThresholds = {}
-        options.ignoreMissingLeaks = []
-
         return options
 
 
@@ -243,7 +241,8 @@ class B2GRemoteReftest(RefTest):
     profile = None
 
     def __init__(self, automation, devicemanager, options, scriptDir):
-        RefTest.__init__(self, automation)
+        RefTest.__init__(self)
+        self.automation = automation
         self._devicemanager = devicemanager
         self.runSSLTunnel = False
         self.remoteTestRoot = options.remoteTestRoot
@@ -485,6 +484,23 @@ class B2GRemoteReftest(RefTest):
 
     def getManifestPath(self, path):
         return path
+
+    def environment(self, **kwargs):
+     return self.automation.environment(**kwargs)
+
+    def runApp(self, profile, binary, cmdargs, env,
+               timeout=None, debuggerInfo=None,
+               symbolsPath=None, options=None):
+        status = self.automation.runApp(None, env,
+                                        binary,
+                                        profile.profile,
+                                        cmdargs,
+                                        utilityPath=options.utilityPath,
+                                        xrePath=options.xrePath,
+                                        debuggerInfo=debuggerInfo,
+                                        symbolsPath=symbolsPath,
+                                        timeout=timeout)
+        return status
 
 
 def run_remote_reftests(parser, options, args):

@@ -31,7 +31,7 @@
 #include "jsopcodeinlines.h"
 #include "jsscriptinlines.h"
 
-#include "vm/ObjectImpl-inl.h"
+#include "vm/NativeObject-inl.h"
 #include "vm/Stack-inl.h"
 
 using namespace js;
@@ -1514,7 +1514,7 @@ Debugger::slowPathOnNewGlobalObject(JSContext *cx, Handle<GlobalObject *> global
 }
 
 /* static */ bool
-Debugger::slowPathOnLogAllocationSite(JSContext *cx, HandleSavedFrame frame,
+Debugger::slowPathOnLogAllocationSite(JSContext *cx, HandleSavedFrame frame, int64_t when,
                                       GlobalObject::DebuggerVector &dbgs)
 {
     MOZ_ASSERT(!dbgs.empty());
@@ -1527,7 +1527,7 @@ Debugger::slowPathOnLogAllocationSite(JSContext *cx, HandleSavedFrame frame,
 
         if ((*dbgp)->trackingAllocationSites &&
             (*dbgp)->enabled &&
-            !(*dbgp)->appendAllocationSite(cx, frame))
+            !(*dbgp)->appendAllocationSite(cx, frame, when))
         {
             return false;
         }
@@ -1537,14 +1537,14 @@ Debugger::slowPathOnLogAllocationSite(JSContext *cx, HandleSavedFrame frame,
 }
 
 bool
-Debugger::appendAllocationSite(JSContext *cx, HandleSavedFrame frame)
+Debugger::appendAllocationSite(JSContext *cx, HandleSavedFrame frame, int64_t when)
 {
     AutoCompartment ac(cx, object);
     RootedObject wrapped(cx, frame);
     if (!cx->compartment()->wrap(cx, &wrapped))
         return false;
 
-    AllocationSite *allocSite = cx->new_<AllocationSite>(wrapped);
+    AllocationSite *allocSite = cx->new_<AllocationSite>(wrapped, when);
     if (!allocSite)
         return false;
 
@@ -3262,26 +3262,6 @@ DebuggerScript_getStaticLevel(JSContext *cx, unsigned argc, Value *vp)
 }
 
 static bool
-DebuggerScript_getSourceMapUrl(JSContext *cx, unsigned argc, Value *vp)
-{
-    THIS_DEBUGSCRIPT_SCRIPT(cx, argc, vp, "(get sourceMapURL)", args, obj, script);
-
-    ScriptSource *source = script->scriptSource();
-    MOZ_ASSERT(source);
-
-    if (source->hasSourceMapURL()) {
-        JSString *str = JS_NewUCStringCopyZ(cx, source->sourceMapURL());
-        if (!str)
-            return false;
-        args.rval().setString(str);
-    } else {
-        args.rval().setNull();
-    }
-
-    return true;
-}
-
-static bool
 DebuggerScript_getGlobal(JSContext *cx, unsigned argc, Value *vp)
 {
     THIS_DEBUGSCRIPT_SCRIPT(cx, argc, vp, "(get global)", args, obj, script);
@@ -4011,7 +3991,6 @@ static const JSPropertySpec DebuggerScript_properties[] = {
     JS_PSG("sourceStart", DebuggerScript_getSourceStart, 0),
     JS_PSG("sourceLength", DebuggerScript_getSourceLength, 0),
     JS_PSG("staticLevel", DebuggerScript_getStaticLevel, 0),
-    JS_PSG("sourceMapURL", DebuggerScript_getSourceMapUrl, 0),
     JS_PSG("global", DebuggerScript_getGlobal, 0),
     JS_PS_END
 };
@@ -4280,6 +4259,26 @@ DebuggerSource_getIntroductionType(JSContext *cx, unsigned argc, Value *vp)
     return true;
 }
 
+static bool
+DebuggerSource_getSourceMapUrl(JSContext *cx, unsigned argc, Value *vp)
+{
+    THIS_DEBUGSOURCE_REFERENT(cx, argc, vp, "(get sourceMapURL)", args, obj, sourceObject);
+
+    ScriptSource *ss = sourceObject->source();
+    MOZ_ASSERT(ss);
+
+    if (ss->hasSourceMapURL()) {
+        JSString *str = JS_NewUCStringCopyZ(cx, ss->sourceMapURL());
+        if (!str)
+            return false;
+        args.rval().setString(str);
+    } else {
+        args.rval().setNull();
+    }
+
+    return true;
+}
+
 static const JSPropertySpec DebuggerSource_properties[] = {
     JS_PSG("text", DebuggerSource_getText, 0),
     JS_PSG("url", DebuggerSource_getUrl, 0),
@@ -4289,6 +4288,7 @@ static const JSPropertySpec DebuggerSource_properties[] = {
     JS_PSG("introductionOffset", DebuggerSource_getIntroductionOffset, 0),
     JS_PSG("introductionType", DebuggerSource_getIntroductionType, 0),
     JS_PSG("elementAttributeName", DebuggerSource_getElementProperty, 0),
+    JS_PSG("sourceMapURL", DebuggerSource_getSourceMapUrl, 0),
     JS_PS_END
 };
 
@@ -4905,7 +4905,7 @@ DebuggerGenericEval(JSContext *cx, const char *fullMethodName, const Value &code
     if (evalWithBindings) {
         RootedObject bindingsobj(cx, NonNullObject(cx, bindings));
         if (!bindingsobj ||
-            !GetPropertyNames(cx, bindingsobj, JSITER_OWNONLY, &keys) ||
+            !GetPropertyKeys(cx, bindingsobj, JSITER_OWNONLY, &keys) ||
             !values.growBy(keys.length()))
         {
             return false;
@@ -5499,7 +5499,7 @@ DebuggerObject_getOwnPropertyNames(JSContext *cx, unsigned argc, Value *vp)
         Maybe<AutoCompartment> ac;
         ac.emplace(cx, obj);
         ErrorCopier ec(ac);
-        if (!GetPropertyNames(cx, obj, JSITER_OWNONLY | JSITER_HIDDEN, &keys))
+        if (!GetPropertyKeys(cx, obj, JSITER_OWNONLY | JSITER_HIDDEN, &keys))
             return false;
     }
 
@@ -5517,7 +5517,7 @@ DebuggerObject_getOwnPropertyNames(JSContext *cx, unsigned argc, Value *vp)
          } else if (JSID_IS_ATOM(id)) {
              vals[i].setString(JSID_TO_STRING(id));
          } else {
-             MOZ_ASSERT_UNREACHABLE("GetPropertyNames must return only string and int jsids");
+             MOZ_ASSERT_UNREACHABLE("GetPropertyKeys must return only string and int jsids");
          }
     }
 
@@ -6186,7 +6186,7 @@ DebuggerEnv_names(JSContext *cx, unsigned argc, Value *vp)
         Maybe<AutoCompartment> ac;
         ac.emplace(cx, env);
         ErrorCopier ec(ac);
-        if (!GetPropertyNames(cx, env, JSITER_HIDDEN, &keys))
+        if (!GetPropertyKeys(cx, env, JSITER_HIDDEN, &keys))
             return false;
     }
 

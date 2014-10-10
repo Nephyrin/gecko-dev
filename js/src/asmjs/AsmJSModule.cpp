@@ -18,8 +18,6 @@
 
 #include "asmjs/AsmJSModule.h"
 
-#include <errno.h>
-
 #ifndef XP_WIN
 # include <sys/mman.h>
 #endif
@@ -57,37 +55,17 @@ using mozilla::Compression::LZ4;
 using mozilla::Swap;
 
 static uint8_t *
-AllocateExecutableMemory(ExclusiveContext *cx, size_t totalBytes)
-{
-    MOZ_ASSERT(totalBytes % AsmJSPageSize == 0);
-
-#ifdef XP_WIN
-    void *p = VirtualAlloc(nullptr, totalBytes, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
-    if (!p) {
-        js_ReportOutOfMemory(cx);
-        return nullptr;
-    }
-#else  // assume Unix
-    void *p = MozTaggedAnonymousMmap(nullptr, totalBytes,
-                                     PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANON,
-                                     -1, 0, "asm-js-code");
-    if (p == MAP_FAILED) {
-        js_ReportOutOfMemory(cx);
-        return nullptr;
-    }
-#endif
-
-    return (uint8_t *)p;
-}
-
-static void
-DeallocateExecutableMemory(uint8_t *code, size_t totalBytes)
+AllocateExecutableMemory(ExclusiveContext *cx, size_t bytes)
 {
 #ifdef XP_WIN
-    JS_ALWAYS_TRUE(VirtualFree(code, 0, MEM_RELEASE));
+    unsigned permissions = PAGE_EXECUTE_READWRITE;
 #else
-    JS_ALWAYS_TRUE(munmap(code, totalBytes) == 0 || errno == ENOMEM);
+    unsigned permissions = PROT_READ | PROT_WRITE | PROT_EXEC;
 #endif
+    void *p = AllocateExecutableMemory(nullptr, bytes, permissions, "asm-js-code", AsmJSPageSize);
+    if (!p)
+        js_ReportOutOfMemory(cx);
+    return (uint8_t *)p;
 }
 
 AsmJSModule::AsmJSModule(ScriptSource *scriptSource, uint32_t srcStart, uint32_t srcBodyStart,
@@ -103,6 +81,7 @@ AsmJSModule::AsmJSModule(ScriptSource *scriptSource, uint32_t srcStart, uint32_t
     dynamicallyLinked_(false),
     loadedFromCache_(false),
     profilingEnabled_(false),
+    interrupted_(false),
     codeIsProtected_(false)
 {
     mozilla::PodZero(&pod);
@@ -117,6 +96,8 @@ AsmJSModule::AsmJSModule(ScriptSource *scriptSource, uint32_t srcStart, uint32_t
 
 AsmJSModule::~AsmJSModule()
 {
+    MOZ_ASSERT(!interrupted_);
+
     scriptSource_->decref();
 
     if (code_) {
@@ -129,7 +110,7 @@ AsmJSModule::~AsmJSModule()
             exitDatum.ionScript->removeDependentAsmJSModule(exit);
         }
 
-        DeallocateExecutableMemory(code_, pod.totalBytes_);
+        DeallocateExecutableMemory(code_, pod.totalBytes_, AsmJSPageSize);
     }
 
     for (size_t i = 0; i < numFunctionCounts(); i++)
@@ -337,8 +318,10 @@ AsmJSModule::finish(ExclusiveContext *cx, TokenStream &tokenStream, MacroAssembl
         AsmJSHeapAccess &a = heapAccesses_[i];
         a.setOffset(masm.actualOffset(a.offset()));
     }
-    for (unsigned i = 0; i < numExportedFunctions(); i++)
-        exportedFunction(i).updateCodeOffset(masm);
+    for (unsigned i = 0; i < numExportedFunctions(); i++) {
+        if (!exportedFunction(i).isChangeHeap())
+            exportedFunction(i).updateCodeOffset(masm);
+    }
     for (unsigned i = 0; i < numExits(); i++)
         exit(i).updateOffsets(masm);
     for (size_t i = 0; i < callSites_.length(); i++) {
@@ -466,8 +449,11 @@ AsmJSReportOverRecursed()
 static bool
 AsmJSHandleExecutionInterrupt()
 {
-    JSContext *cx = PerThreadData::innermostAsmJSActivation()->cx();
-    return HandleExecutionInterrupt(cx);
+    AsmJSActivation *act = PerThreadData::innermostAsmJSActivation();
+    act->module().setInterrupted(true);
+    bool ret = HandleExecutionInterrupt(act->cx());
+    act->module().setInterrupted(false);
+    return ret;
 }
 
 static int32_t
@@ -765,13 +751,13 @@ AsmJSModule::initHeap(Handle<ArrayBufferObjectMaybeShared *> heap, JSContext *cx
         X86Assembler::setPointer(addr, (void *)(heapOffset + disp));
     }
 #elif defined(JS_CODEGEN_X64)
-    int32_t heapLength = int32_t(intptr_t(heap->byteLength()));
     if (usesSignalHandlersForOOB())
         return;
     // If we cannot use the signal handlers, we need to patch the heap length
     // checks at the right places. All accesses that have been recorded are the
     // only ones that need bound checks (see also
     // CodeGeneratorX64::visitAsmJS{Load,Store}Heap)
+    int32_t heapLength = int32_t(intptr_t(heap->byteLength()));
     for (size_t i = 0; i < heapAccesses_.length(); i++) {
         const jit::AsmJSHeapAccess &access = heapAccesses_[i];
         if (access.hasLengthCheck())
@@ -787,8 +773,29 @@ AsmJSModule::initHeap(Handle<ArrayBufferObjectMaybeShared *> heap, JSContext *cx
 }
 
 void
-AsmJSModule::restoreToInitialState(uint8_t *prevCode,
-                                   ArrayBufferObjectMaybeShared *maybePrevBuffer,
+AsmJSModule::restoreHeapToInitialState(ArrayBufferObjectMaybeShared *maybePrevBuffer)
+{
+#if defined(JS_CODEGEN_X86)
+    if (maybePrevBuffer) {
+        // Subtract out the base-pointer added by AsmJSModule::initHeap.
+        uint8_t *ptrBase = maybePrevBuffer->dataPointer();
+        for (unsigned i = 0; i < heapAccesses_.length(); i++) {
+            const jit::AsmJSHeapAccess &access = heapAccesses_[i];
+            void *addr = access.patchOffsetAt(code_);
+            uint8_t *ptr = reinterpret_cast<uint8_t*>(X86Assembler::getPointer(addr));
+            MOZ_ASSERT(ptr >= ptrBase);
+            X86Assembler::setPointer(addr, (void *)(ptr - ptrBase));
+        }
+    }
+#endif
+
+    maybeHeap_ = nullptr;
+    heapDatum() = nullptr;
+}
+
+void
+AsmJSModule::restoreToInitialState(ArrayBufferObjectMaybeShared *maybePrevBuffer,
+                                   uint8_t *prevCode,
                                    ExclusiveContext *cx)
 {
 #ifdef DEBUG
@@ -817,19 +824,7 @@ AsmJSModule::restoreToInitialState(uint8_t *prevCode,
     }
 #endif
 
-    if (maybePrevBuffer) {
-#if defined(JS_CODEGEN_X86)
-        // Subtract out the base-pointer added by AsmJSModule::initHeap.
-        uint8_t *ptrBase = maybePrevBuffer->dataPointer();
-        for (unsigned i = 0; i < heapAccesses_.length(); i++) {
-            const jit::AsmJSHeapAccess &access = heapAccesses_[i];
-            void *addr = access.patchOffsetAt(code_);
-            uint8_t *ptr = reinterpret_cast<uint8_t*>(X86Assembler::getPointer(addr));
-            MOZ_ASSERT(ptr >= ptrBase);
-            X86Assembler::setPointer(addr, (void *)(ptr - ptrBase));
-        }
-#endif
-    }
+    restoreHeapToInitialState(maybePrevBuffer);
 }
 
 static void
@@ -1550,7 +1545,29 @@ AsmJSModule::clone(JSContext *cx, ScopedJSDeletePtr<AsmJSModule> *moduleOut) con
     // flush all of them at once.
     out.setAutoFlushICacheRange();
 
-    out.restoreToInitialState(code_, maybeHeap_, cx);
+    out.restoreToInitialState(maybeHeap_, code_, cx);
+    return true;
+}
+
+bool
+AsmJSModule::changeHeap(Handle<ArrayBufferObject*> newBuffer, JSContext *cx)
+{
+    // Content JS should not be able to run (and change heap) from within an
+    // interrupt callback, but in case it does, fail to change heap. Otherwise,
+    // the heap can change at every single instruction which would prevent
+    // future optimizations like heap-base hoisting.
+    if (interrupted_)
+        return false;
+
+    uint32_t heapLength = newBuffer->byteLength();
+    if (heapLength & pod.heapLengthMask_ || heapLength < pod.minHeapLength_)
+        return false;
+
+    MOZ_ASSERT(IsValidAsmJSHeapLength(heapLength));
+    MOZ_ASSERT(!IsDeprecatedAsmJSHeapLength(heapLength));
+
+    restoreHeapToInitialState(maybeHeap_);
+    initHeap(newBuffer, cx);
     return true;
 }
 
