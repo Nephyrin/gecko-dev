@@ -627,6 +627,9 @@ function BuildConditionSandbox(aURL) {
     sandbox.azureSkia = info.AzureCanvasBackend == "skia";
     sandbox.skiaContent = info.AzureContentBackend == "skia";
     sandbox.azureSkiaGL = info.AzureSkiaAccelerated; // FIXME: assumes GL right now
+    // this is the Windows RDP emulated Virtual GPU; 0x1414 is Microsoft, 0xfefe is an unused code
+    // that we hack into place in windows/GfxInfo.cpp
+    sandbox.remoteFX = gfxInfo.adapterVendorID == "0x1414" && gfxInfo.adapterDeviceID == "0xfefe";
     // true if we are using the same Azure backend for rendering canvas and content
     sandbox.contentSameGfxBackendAsCanvas = info.AzureContentBackend == info.AzureCanvasBackend
                                             || (info.AzureContentBackend == "none" && info.AzureCanvasBackend == "cairo");

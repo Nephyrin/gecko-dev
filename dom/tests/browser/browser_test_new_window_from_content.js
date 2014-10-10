@@ -228,12 +228,12 @@ function prepareForResult(aTab, aExpectation) {
       // The onbeforeunload event handler is set in the content script automatically.
       browser.addEventListener("DOMWillOpenModalDialog", function onModalDialog() {
         browser.removeEventListener("DOMWillOpenModalDialog", onModalDialog, true);
-        executeSoon(() => {
+        setTimeout(() => {
           let stack = browser.parentNode;
           let dialogs = stack.getElementsByTagNameNS(kXULNS, "tabmodalprompt");
           dialogs[0].ui.button1.click()
           deferred.resolve();
-        })
+        }, 0)
       }, true);
       break;
     case kNewWin:
@@ -243,9 +243,9 @@ function prepareForResult(aTab, aExpectation) {
       info("Waiting for a new about:blank window");
       listener.openPromise.then(function(aWindow) {
         info("Got the new about:blank window - closing it.");
-        executeSoon(() => {
+        setTimeout(() => {
           aWindow.close();
-        });
+        }, 0);
         listener.closePromise.then(() => {
           info("New about:blank window closed!");
           Services.wm.removeListener(listener);
@@ -259,10 +259,10 @@ function prepareForResult(aTab, aExpectation) {
         let newBrowser = gBrowser.getBrowserForTab(newTab);
         if (newBrowser.contentDocument.location.href == "about:blank") {
           gBrowser.tabContainer.removeEventListener("TabOpen", onTabOpen);
-          executeSoon(() => {
+          setTimeout(() => {
             gBrowser.removeTab(newTab);
             deferred.resolve();
-          })
+          }, 0)
         }
       })
       break;
