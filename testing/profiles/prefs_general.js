@@ -77,8 +77,6 @@ user_pref("geo.wifi.timeToWaitBeforeSending", 2000);
 user_pref("geo.wifi.scan", false);
 user_pref("geo.wifi.logging.enabled", true);
 
-user_pref("camino.warn_when_closing", false); // Camino-only, harmless to others
-
 // Make url-classifier updates so rare that they won't affect tests
 user_pref("urlclassifier.updateinterval", 172800);
 // Point the url-classifier to the local testing server for fast failures
@@ -263,4 +261,4 @@ user_pref("browser.uitour.url", "http://%(server)s/uitour-dummy/tour");
 user_pref("media.eme.enabled", true);
 
 // Don't prompt about e10s
-user_pref("browser.displayedE10SPrompt", 5);
+user_pref("browser.displayedE10SPrompt.1", 5);

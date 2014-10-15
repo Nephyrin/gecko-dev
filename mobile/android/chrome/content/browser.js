@@ -342,6 +342,7 @@ var BrowserApp = {
 
     Services.androidBridge.browserApp = this;
 
+    Services.obs.addObserver(this, "Locale:OS", false);
     Services.obs.addObserver(this, "Locale:Changed", false);
     Services.obs.addObserver(this, "Tab:Load", false);
     Services.obs.addObserver(this, "Tab:Selected", false);
@@ -465,7 +466,7 @@ var BrowserApp = {
     if (this._startupStatus)
       this.onAppUpdated();
 
-    if (!ParentalControls.isAllowed(ParentalControls.INSTALL_EXTENSIONS)) {
+    if (!ParentalControls.isAllowed(ParentalControls.INSTALL_EXTENSION)) {
       // Disable extension installs
       Services.prefs.setIntPref("extensions.enabledScopes", 1);
       Services.prefs.setIntPref("extensions.autoDisableScopes", 1);
@@ -1758,6 +1759,34 @@ var BrowserApp = {
         WebappManager.autoUninstall(JSON.parse(aData));
         break;
 
+      case "Locale:OS":
+        // We know the system locale. We use this for generating Accept-Language headers.
+        console.log("Locale:OS: " + aData);
+        let currentOSLocale;
+        try {
+          currentOSLocale = Services.prefs.getCharPref("intl.locale.os");
+        } catch (e) {
+        }
+        if (currentOSLocale == aData) {
+          break;
+        }
+
+        console.log("New OS locale.");
+
+        // Ensure that this choice is immediately persisted, because
+        // Gecko won't be told again if it forgets.
+        Services.prefs.setCharPref("intl.locale.os", aData);
+        Services.prefs.savePrefFile(null);
+
+        let appLocale;
+        try {
+          appLocale = Services.prefs.getCharPref("general.useragent.locale");
+        } catch (e) {
+        }
+
+        this.computeAcceptLanguages(aData, appLocale);
+        break;
+
       case "Locale:Changed":
         if (aData) {
           // The value provided to Locale:Changed should be a BCP47 language tag
@@ -1779,6 +1808,16 @@ var BrowserApp = {
         // Blow away the string cache so that future lookups get the
         // correct locale.
         Services.strings.flushBundles();
+
+        // Make sure we use the right Accept-Language header.
+        let osLocale;
+        try {
+          // This should never not be set at this point, but better safe than sorry.
+          osLocale = Services.prefs.getCharPref("intl.locale.os");
+        } catch (e) {
+        }
+
+        this.computeAcceptLanguages(osLocale, aData);
         break;
 
       default:
@@ -1786,6 +1825,63 @@ var BrowserApp = {
         break;
 
     }
+  },
+
+  /**
+   * Set intl.accept_languages accordingly.
+   *
+   * After Bug 881510 this will also accept a real Accept-Language choice as
+   * input; all Accept-Language logic lives here.
+   *
+   * osLocale should never be null, but this method is safe regardless.
+   * appLocale may explicitly be null.
+   */
+  computeAcceptLanguages(osLocale, appLocale) {
+    let defaultBranch = Services.prefs.getDefaultBranch(null);
+    let defaultAccept = defaultBranch.getComplexValue("intl.accept_languages", Ci.nsIPrefLocalizedString).data;
+    console.log("Default intl.accept_languages = " + defaultAccept);
+
+    // A guard for potential breakage. Bug 438031.
+    // This should not be necessary, because we're reading from the default branch,
+    // but better safe than sorry.
+    if (defaultAccept && defaultAccept.startsWith("chrome://")) {
+      defaultAccept = null;
+    } else {
+      // Ensure lowercase everywhere so we can compare.
+      defaultAccept = defaultAccept.toLowerCase();
+    }
+
+    if (appLocale) {
+      appLocale = appLocale.toLowerCase();
+    }
+
+    if (osLocale) {
+      osLocale = osLocale.toLowerCase();
+    }
+
+    // Eliminate values if they're present in the default.
+    let chosen;
+    if (defaultAccept) {
+      // intl.accept_languages is a comma-separated list, with no q-value params. Those
+      // are added when the header is generated.
+      chosen = defaultAccept.split(",")
+                            .map(String.trim)
+                            .filter((x) => (x != appLocale && x != osLocale));
+    } else {
+      chosen = [];
+    }
+
+    if (osLocale) {
+      chosen.unshift(osLocale);
+    }
+
+    if (appLocale && appLocale != osLocale) {
+      chosen.unshift(appLocale);
+    }
+
+    let result = chosen.join(",");
+    console.log("Setting intl.accept_languages to " + result);
+    Services.prefs.setCharPref("intl.accept_languages", result);
   },
 
   get defaultBrowserWidth() {
@@ -3423,7 +3519,7 @@ Tab.prototype = {
       this.browser.focus();
       this.browser.docShellIsActive = true;
       Reader.updatePageAction(this);
-      ExternalApps.updatePageAction(this.browser.currentURI);
+      ExternalApps.updatePageAction(this.browser.currentURI, this.browser.contentDocument);
     } else {
       this.browser.setAttribute("type", "content-targetable");
       this.browser.docShellIsActive = false;
@@ -4088,7 +4184,7 @@ Tab.prototype = {
         let uri = this.browser.currentURI;
         if (BrowserApp.selectedTab == this) {
           if (ExternalApps.shouldCheckUri(uri)) {
-            ExternalApps.updatePageAction(uri);
+            ExternalApps.updatePageAction(uri, this.browser.contentDocument);
           } else {
             ExternalApps.clearPageAction();
           }
@@ -7861,6 +7957,9 @@ var ExternalApps = {
   },
 
   openExternal: function(aElement) {
+    if (aElement.pause) {
+      aElement.pause();
+    }
     let uri = ExternalApps._getMediaLink(aElement);
     HelperApps.launchUri(uri);
   },
@@ -7873,11 +7972,11 @@ var ExternalApps = {
     return true;
   },
 
-  updatePageAction: function updatePageAction(uri) {
+  updatePageAction: function updatePageAction(uri, contentDocument) {
     HelperApps.getAppsForUri(uri, { filterHttp: true }, (apps) => {
       this.clearPageAction();
       if (apps.length > 0)
-        this._setUriForPageAction(uri, apps);
+        this._setUriForPageAction(uri, apps, contentDocument);
     });
   },
 
@@ -7885,12 +7984,33 @@ var ExternalApps = {
     this._pageActionUri = uri;
   },
 
-  _setUriForPageAction: function setUriForPageAction(uri, apps) {
+  _getMediaContentElement(contentDocument) {
+    if (!contentDocument.contentType.startsWith("video/") &&
+        !contentDocument.contentType.startsWith("audio/")) {
+      return null;
+    }
+
+    let element = contentDocument.activeElement;
+
+    if (element instanceof HTMLBodyElement) {
+      element = element.firstChild;
+    }
+
+    if (element instanceof HTMLMediaElement) {
+      return element;
+    }
+
+    return null;
+  },
+
+  _setUriForPageAction: function setUriForPageAction(uri, apps, contentDocument) {
     this.updatePageActionUri(uri);
 
     // If the pageaction is already added, simply update the URI to be launched when 'onclick' is triggered.
     if (this._pageActionId != undefined)
       return;
+
+    let mediaElement = this._getMediaContentElement(contentDocument);
 
     this._pageActionId = PageActions.add({
       title: Strings.browser.GetStringFromName("openInApp.pageAction"),
@@ -7898,6 +8018,11 @@ var ExternalApps = {
 
       clickCallback: () => {
         UITelemetry.addEvent("launch.1", "pageaction", null, "helper");
+
+        let wasPlaying = mediaElement && !mediaElement.paused && !mediaElement.ended;
+        if (wasPlaying) {
+          mediaElement.pause();
+        }
 
         if (apps.length > 1) {
           // Use the HelperApps prompt here to filter out any Http handlers
@@ -7909,6 +8034,10 @@ var ExternalApps = {
             ]
           }, (result) => {
             if (result.button != 0) {
+              if (wasPlaying) {
+                mediaElement.play();
+              }
+
               return;
             }
             apps[result.icongrid0].launch(this._pageActionUri);

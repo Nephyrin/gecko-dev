@@ -406,6 +406,46 @@ describe("loop.conversation", function() {
               });
             });
 
+            describe("progress - terminated - closed", function() {
+              it("should stop alerting", function(done) {
+                promise.then(function() {
+                  icView._websocket.trigger("progress", {
+                    state: "terminated",
+                    reason: "closed"
+                  });
+
+                  sinon.assert.calledOnce(navigator.mozLoop.stopAlerting);
+                  done();
+                });
+              });
+
+              it("should close the websocket", function(done) {
+                promise.then(function() {
+                  icView._websocket.trigger("progress", {
+                    state: "terminated",
+                    reason: "closed"
+                  });
+
+                  sinon.assert.calledOnce(icView._websocket.close);
+                  done();
+                });
+              });
+
+              it("should close the window", function(done) {
+                promise.then(function() {
+                  icView._websocket.trigger("progress", {
+                    state: "terminated",
+                    reason: "closed"
+                  });
+
+                  sandbox.clock.tick(1);
+
+                  sinon.assert.calledOnce(window.close);
+                  done();
+                });
+              });
+            });
+
             describe("progress - terminated - timeout (previousState = alerting)", function() {
               it("should stop alerting", function(done) {
                 promise.then(function() {
@@ -609,6 +649,14 @@ describe("loop.conversation", function() {
             TestUtils.findRenderedComponentWithType(icView,
               sharedView.ConversationView);
           });
+
+        it("should set the title to the call identifier", function() {
+          sandbox.stub(conversation, "getCallIdentifier").returns("fakeId");
+
+          conversation.accepted();
+
+          expect(document.title).eql("fakeId");
+        });
       });
 
       describe("session:ended", function() {
@@ -696,7 +744,9 @@ describe("loop.conversation", function() {
     var view, model;
 
     beforeEach(function() {
-      var Model = Backbone.Model.extend({});
+      var Model = Backbone.Model.extend({
+        getCallIdentifier: function() {return "fakeId";}
+      });
       model = new Model();
       sandbox.spy(model, "trigger");
       sandbox.stub(model, "set");

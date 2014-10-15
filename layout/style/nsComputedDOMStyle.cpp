@@ -5183,20 +5183,19 @@ nsComputedDOMStyle::CreatePrimitiveValueForClipPath(
 
   if (aStyleBasicShape &&
       aStyleBasicShape->GetShapeType() == nsStyleBasicShape::Type::ePolygon) {
-    nsROCSSPrimitiveValue* val = new nsROCSSPrimitiveValue;
-
     // Shape function name and opening parenthesis.
     nsAutoString shapeFunctionString;
     AppendASCIItoUTF16(nsCSSKeywords::GetStringValue(eCSSKeyword_polygon),
                        shapeFunctionString);
     shapeFunctionString.Append('(');
-    uint8_t fillRule = aStyleBasicShape->GetFillRule();
-    if (fillRule == NS_STYLE_FILL_RULE_EVENODD) {
+    bool hasEvenOdd = aStyleBasicShape->GetFillRule() ==
+                          NS_STYLE_FILL_RULE_EVENODD;
+    if (hasEvenOdd) {
       shapeFunctionString.AppendLiteral("evenodd");
     }
     for (size_t i = 0; i < aStyleBasicShape->Coordinates().Length(); i += 2) {
       nsAutoString coordString;
-      if (i > 0 || fillRule) {
+      if (i > 0 || hasEvenOdd) {
         shapeFunctionString.AppendLiteral(", ");
       }
       SetCssTextToCoord(coordString,
@@ -5208,11 +5207,10 @@ nsComputedDOMStyle::CreatePrimitiveValueForClipPath(
       shapeFunctionString.Append(coordString);
     }
     shapeFunctionString.Append(')');
+    nsROCSSPrimitiveValue* val = new nsROCSSPrimitiveValue;
     val->SetString(shapeFunctionString);
     valueList->AppendCSSValue(val);
   }
-
-  nsROCSSPrimitiveValue* val = new nsROCSSPrimitiveValue;
 
   if (aSizingBox == NS_STYLE_CLIP_SHAPE_SIZING_NOBOX) {
     return valueList;
@@ -5223,6 +5221,7 @@ nsComputedDOMStyle::CreatePrimitiveValueForClipPath(
     nsCSSProps::ValueToKeyword(aSizingBox,
                                nsCSSProps::kClipShapeSizingKTable),
                                boxString);
+  nsROCSSPrimitiveValue* val = new nsROCSSPrimitiveValue;
   val->SetString(boxString);
   valueList->AppendCSSValue(val);
 

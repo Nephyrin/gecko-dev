@@ -220,9 +220,7 @@ pref("app.update.incompatible.mode", 0);
 
 // Whether or not to attempt using the service for updates.
 #ifdef MOZ_MAINTENANCE_SERVICE
-#ifndef HAVE_64BIT_BUILD
 pref("app.update.service.enabled", true);
-#endif
 #endif
 
 // Symmetric (can be overridden by individual extensions) update preferences.
@@ -1294,6 +1292,7 @@ pref("services.sync.prefs.sync.xpinstall.whitelist.required", true);
 
 // Developer edition preferences
 pref("browser.devedition.theme.enabled", false);
+pref("browser.devedition.theme.showCustomizeButton", false);
 
 // Disable the error console
 pref("devtools.errorconsole.enabled", false);
@@ -1418,7 +1417,7 @@ pref("devtools.storage.enabled", false);
 
 // Enable the Style Editor.
 pref("devtools.styleeditor.enabled", true);
-pref("devtools.styleeditor.source-maps-enabled", false);
+pref("devtools.styleeditor.source-maps-enabled", true);
 pref("devtools.styleeditor.autocompletion-enabled", true);
 pref("devtools.styleeditor.showMediaSidebar", true);
 pref("devtools.styleeditor.mediaSidebarWidth", 238);
@@ -1554,7 +1553,7 @@ pref("browser.newtabpage.rows", 3);
 pref("browser.newtabpage.columns", 5);
 
 // directory tiles download URL
-pref("browser.newtabpage.directory.source", "https://tiles.services.mozilla.com/v2/links/fetch");
+pref("browser.newtabpage.directory.source", "https://tiles.services.mozilla.com/v2/links/fetch/%LOCALE%");
 
 // endpoint to send newtab click and view pings
 pref("browser.newtabpage.directory.ping", "https://tiles.services.mozilla.com/v2/links/");

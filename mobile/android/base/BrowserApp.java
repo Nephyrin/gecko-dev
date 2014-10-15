@@ -240,7 +240,7 @@ public class BrowserApp extends GeckoApp
     // race by determining if the web content should be hidden at the animation's end.
     private boolean mHideWebContentOnAnimationEnd;
 
-    private DynamicToolbar mDynamicToolbar = new DynamicToolbar();
+    private final DynamicToolbar mDynamicToolbar = new DynamicToolbar();
 
     @Override
     public View onCreateView(final String name, final Context context, final AttributeSet attrs) {
@@ -685,7 +685,20 @@ public class BrowserApp extends GeckoApp
 
         mTintManager = new SystemBarTintManager(this);
         mTintManager.setTintColor(getResources().getColor(R.color.background_tabs));
-        mTintManager.setStatusBarTintEnabled(true);
+        updateSystemUITinting(mRootLayout.getSystemUiVisibility());
+
+        mRootLayout.setOnSystemUiVisibilityChangeListener(new View.OnSystemUiVisibilityChangeListener() {
+            @Override
+            public void onSystemUiVisibilityChange(int visibility) {
+                updateSystemUITinting(visibility);
+            }
+        });
+    }
+
+    private void updateSystemUITinting(int visibility) {
+        final boolean shouldTint = (visibility & View.SYSTEM_UI_FLAG_HIDE_NAVIGATION) == 0 &&
+                                   (visibility & View.SYSTEM_UI_FLAG_FULLSCREEN) == 0;
+        mTintManager.setStatusBarTintEnabled(shouldTint);
     }
 
     /**
@@ -847,24 +860,28 @@ public class BrowserApp extends GeckoApp
 
     private void setBrowserToolbarListeners() {
         mBrowserToolbar.setOnActivateListener(new BrowserToolbar.OnActivateListener() {
+            @Override
             public void onActivate() {
                 enterEditingMode();
             }
         });
 
         mBrowserToolbar.setOnCommitListener(new BrowserToolbar.OnCommitListener() {
+            @Override
             public void onCommit() {
                 commitEditingMode();
             }
         });
 
         mBrowserToolbar.setOnDismissListener(new BrowserToolbar.OnDismissListener() {
+            @Override
             public void onDismiss() {
                 mBrowserToolbar.cancelEdit();
             }
         });
 
         mBrowserToolbar.setOnFilterListener(new BrowserToolbar.OnFilterListener() {
+            @Override
             public void onFilter(String searchText, AutocompleteHandler handler) {
                 filterEditingMode(searchText, handler);
             }
@@ -880,6 +897,7 @@ public class BrowserApp extends GeckoApp
         });
 
         mBrowserToolbar.setOnStartEditingListener(new BrowserToolbar.OnStartEditingListener() {
+            @Override
             public void onStartEditing() {
                 // Temporarily disable doorhanger notifications.
                 mDoorHangerPopup.disable();
@@ -887,6 +905,7 @@ public class BrowserApp extends GeckoApp
         });
 
         mBrowserToolbar.setOnStopEditingListener(new BrowserToolbar.OnStopEditingListener() {
+            @Override
             public void onStopEditing() {
                 selectTargetTabForEditingMode();
 
@@ -1240,6 +1259,7 @@ public class BrowserApp extends GeckoApp
                 mDynamicToolbarCanScroll = false;
                 if (mBrowserChrome.getVisibility() != View.VISIBLE) {
                     ThreadUtils.postToUiThread(new Runnable() {
+                        @Override
                         public void run() {
                             mDynamicToolbar.setVisible(true, VisibilityTransition.ANIMATE);
                         }
@@ -1254,6 +1274,7 @@ public class BrowserApp extends GeckoApp
         final ToolbarProgressView progressView = mProgressView;
         final int marginTop = Math.round(aMetrics.marginTop);
         ThreadUtils.postToUiThread(new Runnable() {
+            @Override
             public void run() {
                 final float translationY = marginTop - browserChrome.getHeight();
                 ViewHelper.setTranslationY(browserChrome, translationY);
@@ -2656,10 +2677,6 @@ public class BrowserApp extends GeckoApp
                         mLayerView.getLayerMarginsAnimator().setMaxMargins(0, mToolbarHeight, 0, 0);
                     }
                 }
-
-                if (mTintManager != null) {
-                    mTintManager.setStatusBarTintEnabled(!fullscreen);
-                }
             }
         });
     }
@@ -2743,7 +2760,7 @@ public class BrowserApp extends GeckoApp
         share.setVisible(shareEnabled);
         share.setEnabled(StringUtils.isShareableUrl(url) && shareEnabled);
         MenuUtils.safeSetEnabled(aMenu, R.id.apps, RestrictedProfiles.isAllowed(RestrictedProfiles.Restriction.DISALLOW_INSTALL_APPS));
-        MenuUtils.safeSetEnabled(aMenu, R.id.addons, RestrictedProfiles.isAllowed(RestrictedProfiles.Restriction.DISALLOW_INSTALL_EXTENSIONS));
+        MenuUtils.safeSetEnabled(aMenu, R.id.addons, RestrictedProfiles.isAllowed(RestrictedProfiles.Restriction.DISALLOW_INSTALL_EXTENSION));
         MenuUtils.safeSetEnabled(aMenu, R.id.downloads, RestrictedProfiles.isAllowed(RestrictedProfiles.Restriction.DISALLOW_DOWNLOADS));
 
         // NOTE: Use MenuUtils.safeSetEnabled because some actions might

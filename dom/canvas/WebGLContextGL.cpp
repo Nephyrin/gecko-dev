@@ -48,6 +48,7 @@
 #include "mozilla/dom/ImageData.h"
 #include "mozilla/dom/ToJSValue.h"
 #include "mozilla/Endian.h"
+#include "mozilla/fallible.h"
 
 using namespace mozilla;
 using namespace mozilla::dom;
@@ -233,6 +234,12 @@ WebGLContext::BindTexture(GLenum rawTarget, WebGLTexture *newTex)
        case LOCAL_GL_TEXTURE_CUBE_MAP:
             currentTexPtr = &mBoundCubeMapTextures[mActiveTexture];
             break;
+       case LOCAL_GL_TEXTURE_3D:
+            if (!IsWebGL2()) {
+                return ErrorInvalidEnum("bindTexture: target TEXTURE_3D is only available in WebGL version 2.0 or newer");
+            }
+            currentTexPtr = &mBound3DTextures[mActiveTexture];
+            break;
        default:
             return ErrorInvalidEnumInfo("bindTexture: target", rawTarget);
     }
@@ -367,22 +374,25 @@ WebGLContext::CopyTexSubImage2D_base(TexImageTarget texImageTarget,
     GLsizei framebufferWidth = framebufferRect ? framebufferRect->Width() : 0;
     GLsizei framebufferHeight = framebufferRect ? framebufferRect->Height() : 0;
 
-    const char* info = sub ? "copyTexSubImage2D" : "copyTexImage2D";
-    WebGLTexImageFunc func = sub ? WebGLTexImageFunc::CopyTexSubImage : WebGLTexImageFunc::CopyTexImage;
+    WebGLTexImageFunc func = sub
+                             ? WebGLTexImageFunc::CopyTexSubImage
+                             : WebGLTexImageFunc::CopyTexImage;
+    WebGLTexDimensions dims = WebGLTexDimensions::Tex2D;
+    const char* info = InfoFrom(func, dims);
 
     // TODO: This changes with color_buffer_float. Reassess when the
     // patch lands.
-    if (!ValidateTexImage(2, texImageTarget, level, internalformat.get(),
+    if (!ValidateTexImage(texImageTarget, level, internalformat.get(),
                           xoffset, yoffset, 0,
                           width, height, 0,
                           0,
                           LOCAL_GL_NONE, LOCAL_GL_NONE,
-                          func))
+                          func, dims))
     {
         return;
     }
 
-    if (!ValidateCopyTexImage(internalformat.get(), func))
+    if (!ValidateCopyTexImage(internalformat.get(), func, dims))
         return;
 
     if (!mBoundFramebuffer)
@@ -411,11 +421,11 @@ WebGLContext::CopyTexSubImage2D_base(TexImageTarget texImageTarget,
         framebuffertype = LOCAL_GL_UNSIGNED_BYTE;
     }
 
-    TexInternalFormat effectiveinternalformat =
+    TexInternalFormat effectiveInternalFormat =
         EffectiveInternalFormatFromUnsizedInternalFormatAndType(internalformat, framebuffertype);
 
     // this should never fail, validation happened earlier.
-    MOZ_ASSERT(effectiveinternalformat != LOCAL_GL_NONE);
+    MOZ_ASSERT(effectiveInternalFormat != LOCAL_GL_NONE);
 
     // check if the memory size of this texture may change with this call
     bool sizeMayChange = !sub;
@@ -423,7 +433,7 @@ WebGLContext::CopyTexSubImage2D_base(TexImageTarget texImageTarget,
         const WebGLTexture::ImageInfo& imageInfo = tex->ImageInfoAt(texImageTarget, level);
         sizeMayChange = width != imageInfo.Width() ||
                         height != imageInfo.Height() ||
-                        effectiveinternalformat != imageInfo.EffectiveInternalFormat();
+                        effectiveInternalFormat != imageInfo.EffectiveInternalFormat();
     }
 
     if (sizeMayChange)
@@ -440,8 +450,8 @@ WebGLContext::CopyTexSubImage2D_base(TexImageTarget texImageTarget,
 
         // first, we initialize the texture as black
         if (!sub) {
-            tex->SetImageInfo(texImageTarget, level, width, height,
-                      effectiveinternalformat,
+            tex->SetImageInfo(texImageTarget, level, width, height, 1,
+                      effectiveInternalFormat,
                       WebGLImageDataStatus::UninitializedImageData);
             tex->DoDeferredImageInitialization(texImageTarget, level);
         }
@@ -478,8 +488,8 @@ WebGLContext::CopyTexSubImage2D_base(TexImageTarget texImageTarget,
     }
 
     if (!sub) {
-        tex->SetImageInfo(texImageTarget, level, width, height,
-                          effectiveinternalformat,
+        tex->SetImageInfo(texImageTarget, level, width, height, 1,
+                          effectiveInternalFormat,
                           WebGLImageDataStatus::InitializedImageData);
     }
 }
@@ -499,20 +509,21 @@ WebGLContext::CopyTexImage2D(GLenum rawTexImgTarget,
 
     // copyTexImage2D only generates textures with type = UNSIGNED_BYTE
     const WebGLTexImageFunc func = WebGLTexImageFunc::CopyTexImage;
+    const WebGLTexDimensions dims = WebGLTexDimensions::Tex2D;
 
-    if (!ValidateTexImageTarget(2, rawTexImgTarget, WebGLTexImageFunc::CopyTexImage))
+    if (!ValidateTexImageTarget(rawTexImgTarget, func, dims))
         return;
 
-    if (!ValidateTexImage(2, rawTexImgTarget, level, internalformat,
+    if (!ValidateTexImage(rawTexImgTarget, level, internalformat,
                           0, 0, 0,
                           width, height, 0,
                           border, LOCAL_GL_NONE, LOCAL_GL_NONE,
-                          func))
+                          func, dims))
     {
         return;
     }
 
-    if (!ValidateCopyTexImage(internalformat, func))
+    if (!ValidateCopyTexImage(internalformat, func, dims))
         return;
 
     if (!mBoundFramebuffer)
@@ -583,7 +594,15 @@ WebGLContext::CopyTexSubImage2D(GLenum rawTexImgTarget,
         ClearBackbufferIfNeeded();
 
     if (imageInfo.HasUninitializedImageData()) {
-        tex->DoDeferredImageInitialization(texImageTarget, level);
+        bool coversWholeImage = xoffset == 0 &&
+                                yoffset == 0 &&
+                                width == texWidth &&
+                                height == texHeight;
+        if (coversWholeImage) {
+            tex->SetImageDataStatus(texImageTarget, level, WebGLImageDataStatus::InitializedImageData);
+        } else {
+            tex->DoDeferredImageInitialization(texImageTarget, level);
+        }
     }
 
     TexInternalFormat internalformat;
@@ -698,7 +717,8 @@ WebGLContext::DeleteTexture(WebGLTexture *tex)
     GLuint activeTexture = mActiveTexture;
     for (int32_t i = 0; i < mGLMaxTextureUnits; i++) {
         if ((mBound2DTextures[i] == tex && tex->Target() == LOCAL_GL_TEXTURE_2D) ||
-            (mBoundCubeMapTextures[i] == tex && tex->Target() == LOCAL_GL_TEXTURE_CUBE_MAP))
+            (mBoundCubeMapTextures[i] == tex && tex->Target() == LOCAL_GL_TEXTURE_CUBE_MAP) ||
+            (mBound3DTextures[i] == tex && tex->Target() == LOCAL_GL_TEXTURE_3D))
         {
             ActiveTexture(LOCAL_GL_TEXTURE0 + i);
             BindTexture(tex->Target().get(), static_cast<WebGLTexture*>(nullptr));
@@ -1171,12 +1191,12 @@ WebGLContext::GetFramebufferAttachmentParameter(JSContext* cx,
         switch (pname) {
              case LOCAL_GL_FRAMEBUFFER_ATTACHMENT_COLOR_ENCODING_EXT:
                 if (IsExtensionEnabled(WebGLExtensionID::EXT_sRGB)) {
-                    const TexInternalFormat effectiveinternalformat =
+                    const TexInternalFormat effectiveInternalFormat =
                         fba.Texture()->ImageInfoBase().EffectiveInternalFormat();
                     TexInternalFormat unsizedinternalformat = LOCAL_GL_NONE;
                     TexType type = LOCAL_GL_NONE;
                     UnsizedInternalFormatAndTypeFromEffectiveInternalFormat(
-                        effectiveinternalformat, &unsizedinternalformat, &type);
+                        effectiveInternalFormat, &unsizedinternalformat, &type);
                     MOZ_ASSERT(unsizedinternalformat != LOCAL_GL_NONE);
                     const bool srgb = unsizedinternalformat == LOCAL_GL_SRGB ||
                                       unsizedinternalformat == LOCAL_GL_SRGB_ALPHA;
@@ -1217,9 +1237,9 @@ WebGLContext::GetFramebufferAttachmentParameter(JSContext* cx,
                 if (!fba.IsComplete())
                     return JS::NumberValue(uint32_t(LOCAL_GL_NONE));
 
-                TexInternalFormat effectiveinternalformat =
+                TexInternalFormat effectiveInternalFormat =
                     fba.Texture()->ImageInfoAt(fba.ImageTarget(), fba.MipLevel()).EffectiveInternalFormat();
-                TexType type = TypeFromInternalFormat(effectiveinternalformat);
+                TexType type = TypeFromInternalFormat(effectiveInternalFormat);
                 GLenum ret = LOCAL_GL_NONE;
                 switch (type.get()) {
                 case LOCAL_GL_UNSIGNED_BYTE:
@@ -1893,6 +1913,25 @@ bool WebGLContext::BindArrayAttribToLocation0(WebGLProgram *program)
     return false;
 }
 
+static void
+LinkAndUpdateProgram(GLContext* gl, WebGLProgram* prog)
+{
+    GLuint name = prog->GLName();
+    gl->fLinkProgram(name);
+
+    prog->SetLinkStatus(false);
+
+    GLint ok = 0;
+    gl->fGetProgramiv(name, LOCAL_GL_LINK_STATUS, &ok);
+    if (!ok)
+        return;
+
+    if (!prog->UpdateInfo())
+        return;
+
+    prog->SetLinkStatus(true);
+}
+
 void
 WebGLContext::LinkProgram(WebGLProgram *program)
 {
@@ -1905,16 +1944,20 @@ WebGLContext::LinkProgram(WebGLProgram *program)
     InvalidateBufferFetching(); // we do it early in this function
     // as some of the validation below changes program state
 
-    GLuint progname = program->GLName();
-
     if (!program->NextGeneration()) {
         // XXX throw?
         return;
     }
 
     if (!program->HasBothShaderTypesAttached()) {
-        GenerateWarning("linkProgram: this program doesn't have both a vertex shader"
-                        " and a fragment shader");
+        GenerateWarning("linkProgram: this program doesn't have both a vertex"
+                        " shader and a fragment shader");
+        program->SetLinkStatus(false);
+        return;
+    }
+
+    if (program->HasBadShaderAttached()) {
+        GenerateWarning("linkProgram: The program has bad shaders attached.");
         program->SetLinkStatus(false);
         return;
     }
@@ -1925,56 +1968,25 @@ WebGLContext::LinkProgram(WebGLProgram *program)
         mIsMesa &&
         program->UpperBoundNumSamplerUniforms() > 16)
     {
-        GenerateWarning("Programs with more than 16 samplers are disallowed on Mesa drivers " "to avoid a Mesa crasher.");
+        GenerateWarning("Programs with more than 16 samplers are disallowed on"
+                        " Mesa drivers to avoid a Mesa crasher.");
         program->SetLinkStatus(false);
         return;
     }
 
-    bool updateInfoSucceeded = false;
-    GLint ok = 0;
-    if (gl->WorkAroundDriverBugs() &&
-        program->HasBadShaderAttached())
-    {
-        // it's a common driver bug, caught by program-test.html, that linkProgram doesn't
-        // correctly preserve the state of an in-use program that has been attached a bad shader
-        // see bug 777883
-        ok = false;
-    } else {
-        MakeContextCurrent();
-        gl->fLinkProgram(progname);
-        gl->fGetProgramiv(progname, LOCAL_GL_LINK_STATUS, &ok);
+    MakeContextCurrent();
+    LinkAndUpdateProgram(gl, program);
 
-        if (ok) {
-            updateInfoSucceeded = program->UpdateInfo();
-            program->SetLinkStatus(updateInfoSucceeded);
-
-            if (BindArrayAttribToLocation0(program)) {
-                GenerateWarning("linkProgram: relinking program to make attrib0 an "
-                                "array.");
-                gl->fLinkProgram(progname);
-                gl->fGetProgramiv(progname, LOCAL_GL_LINK_STATUS, &ok);
-                if (ok) {
-                    updateInfoSucceeded = program->UpdateInfo();
-                    program->SetLinkStatus(updateInfoSucceeded);
-                }
-            }
+    if (program->LinkStatus()) {
+        if (BindArrayAttribToLocation0(program)) {
+            GenerateWarning("linkProgram: Relinking program to make attrib0 an"
+                            " array.");
+            LinkAndUpdateProgram(gl, program);
         }
     }
 
-    if (ok) {
-        // Bug 750527
-        if (gl->WorkAroundDriverBugs() &&
-            updateInfoSucceeded &&
-            gl->Vendor() == gl::GLVendor::NVIDIA)
-        {
-            if (program == mCurrentProgram)
-                gl->fUseProgram(progname);
-        }
-    } else {
-        program->SetLinkStatus(false);
-
+    if (!program->LinkStatus()) {
         if (ShouldGenerateWarnings()) {
-
             // report shader/program infoLogs as warnings.
             // note that shader compilation errors can be deferred to linkProgram,
             // which is why we can't do anything in compileShader. In practice we could
@@ -2020,6 +2032,14 @@ WebGLContext::LinkProgram(WebGLProgram *program)
                 }
             }
         }
+        return;
+    }
+
+    if (gl->WorkAroundDriverBugs() &&
+        gl->Vendor() == gl::GLVendor::NVIDIA)
+    {
+        if (program == mCurrentProgram)
+            gl->fUseProgram(program->GLName());
     }
 }
 
@@ -2144,7 +2164,7 @@ WebGLContext::ReadPixels(GLint x, GLint y, GLsizei width,
 
     // Check the pixels param size
     CheckedUint32 checked_neededByteLength =
-        GetImageSize(height, width, bytesPerPixel, mPixelStorePackAlignment);
+        GetImageSize(height, width, 1, bytesPerPixel, mPixelStorePackAlignment);
 
     CheckedUint32 checked_plainRowSize = CheckedUint32(width) * bytesPerPixel;
 
@@ -3309,15 +3329,16 @@ WebGLContext::CompressedTexImage2D(GLenum rawTexImgTarget,
         return;
 
     const WebGLTexImageFunc func = WebGLTexImageFunc::CompTexImage;
+    const WebGLTexDimensions dims = WebGLTexDimensions::Tex2D;
 
-    if (!ValidateTexImageTarget(2, rawTexImgTarget, WebGLTexImageFunc::CompTexImage))
+    if (!ValidateTexImageTarget(rawTexImgTarget, func, dims))
         return;
 
-    if (!ValidateTexImage(2, rawTexImgTarget, level, internalformat,
+    if (!ValidateTexImage(rawTexImgTarget, level, internalformat,
                           0, 0, 0, width, height, 0,
                           border, LOCAL_GL_NONE,
                           LOCAL_GL_NONE,
-                          func))
+                          func, dims))
     {
         return;
     }
@@ -3325,11 +3346,11 @@ WebGLContext::CompressedTexImage2D(GLenum rawTexImgTarget,
     view.ComputeLengthAndData();
 
     uint32_t byteLength = view.Length();
-    if (!ValidateCompTexImageDataSize(level, internalformat, width, height, byteLength, func)) {
+    if (!ValidateCompTexImageDataSize(level, internalformat, width, height, byteLength, func, dims)) {
         return;
     }
 
-    if (!ValidateCompTexImageSize(level, internalformat, 0, 0, width, height, width, height, func))
+    if (!ValidateCompTexImageSize(level, internalformat, 0, 0, width, height, width, height, func, dims))
     {
         return;
     }
@@ -3347,7 +3368,7 @@ WebGLContext::CompressedTexImage2D(GLenum rawTexImgTarget,
     MakeContextCurrent();
     gl->fCompressedTexImage2D(texImageTarget.get(), level, internalformat, width, height, border, byteLength, view.Data());
 
-    tex->SetImageInfo(texImageTarget, level, width, height, internalformat,
+    tex->SetImageInfo(texImageTarget, level, width, height, 1, internalformat,
                       WebGLImageDataStatus::InitializedImageData);
 }
 
@@ -3361,16 +3382,17 @@ WebGLContext::CompressedTexSubImage2D(GLenum rawTexImgTarget, GLint level, GLint
         return;
 
     const WebGLTexImageFunc func = WebGLTexImageFunc::CompTexSubImage;
+    const WebGLTexDimensions dims = WebGLTexDimensions::Tex2D;
 
-    if (!ValidateTexImageTarget(2, rawTexImgTarget, WebGLTexImageFunc::CompTexSubImage))
+    if (!ValidateTexImageTarget(rawTexImgTarget, func, dims))
         return;
 
-    if (!ValidateTexImage(2, rawTexImgTarget,
+    if (!ValidateTexImage(rawTexImgTarget,
                           level, internalformat,
                           xoffset, yoffset, 0,
                           width, height, 0,
                           0, LOCAL_GL_NONE, LOCAL_GL_NONE,
-                          func))
+                          func, dims))
     {
         return;
     }
@@ -3388,20 +3410,29 @@ WebGLContext::CompressedTexSubImage2D(GLenum rawTexImgTarget, GLint level, GLint
     view.ComputeLengthAndData();
 
     uint32_t byteLength = view.Length();
-    if (!ValidateCompTexImageDataSize(level, internalformat, width, height, byteLength, func))
+    if (!ValidateCompTexImageDataSize(level, internalformat, width, height, byteLength, func, dims))
         return;
 
     if (!ValidateCompTexImageSize(level, internalformat,
                                   xoffset, yoffset,
                                   width, height,
                                   levelInfo.Width(), levelInfo.Height(),
-                                  func))
+                                  func, dims))
     {
         return;
     }
 
-    if (levelInfo.HasUninitializedImageData())
-        tex->DoDeferredImageInitialization(texImageTarget, level);
+    if (levelInfo.HasUninitializedImageData()) {
+        bool coversWholeImage = xoffset == 0 &&
+                                yoffset == 0 &&
+                                width == levelInfo.Width() &&
+                                height == levelInfo.Height();
+        if (coversWholeImage) {
+            tex->SetImageDataStatus(texImageTarget, level, WebGLImageDataStatus::InitializedImageData);
+        } else {
+            tex->DoDeferredImageInitialization(texImageTarget, level);
+        }
+    }
 
     MakeContextCurrent();
     gl->fCompressedTexSubImage2D(texImageTarget.get(), level, xoffset, yoffset, width, height, internalformat, byteLength, view.Data());
@@ -3647,19 +3678,20 @@ WebGLContext::TexImage2D_base(TexImageTarget texImageTarget, GLint level,
                               GLenum format,
                               GLenum type,
                               void* data, uint32_t byteLength,
-                              int jsArrayType, // a TypedArray format enum, or -1 if not relevant
+                              js::Scalar::Type jsArrayType,
                               WebGLTexelFormat srcFormat, bool srcPremultiplied)
 {
     const WebGLTexImageFunc func = WebGLTexImageFunc::TexImage;
+    const WebGLTexDimensions dims = WebGLTexDimensions::Tex2D;
 
     if (type == LOCAL_GL_HALF_FLOAT_OES) {
         type = LOCAL_GL_HALF_FLOAT;
     }
 
-    if (!ValidateTexImage(2, texImageTarget, level, internalformat,
+    if (!ValidateTexImage(texImageTarget, level, internalformat,
                           0, 0, 0,
                           width, height, 0,
-                          border, format, type, func))
+                          border, format, type, func, dims))
     {
         return;
     }
@@ -3667,7 +3699,7 @@ WebGLContext::TexImage2D_base(TexImageTarget texImageTarget, GLint level,
     const bool isDepthTexture = format == LOCAL_GL_DEPTH_COMPONENT ||
                                 format == LOCAL_GL_DEPTH_STENCIL;
 
-    if (isDepthTexture) {
+    if (isDepthTexture && !IsWebGL2()) {
         if (data != nullptr || level != 0)
             return ErrorInvalidOperation("texImage2D: "
                                          "with format of DEPTH_COMPONENT or DEPTH_STENCIL, "
@@ -3675,23 +3707,33 @@ WebGLContext::TexImage2D_base(TexImageTarget texImageTarget, GLint level,
                                          "level must be zero");
     }
 
-    if (!ValidateTexInputData(type, jsArrayType, func))
+    if (!ValidateTexInputData(type, jsArrayType, func, dims))
         return;
 
-    TexInternalFormat effectiveinternalformat =
+    TexInternalFormat effectiveInternalFormat =
         EffectiveInternalFormatFromInternalFormatAndType(internalformat, type);
 
-    if (effectiveinternalformat == LOCAL_GL_NONE) {
+    if (effectiveInternalFormat == LOCAL_GL_NONE) {
         return ErrorInvalidOperation("texImage2D: bad combination of internalformat and type");
     }
 
-    WebGLTexelFormat dstFormat = GetWebGLTexelFormat(effectiveinternalformat);
-    WebGLTexelFormat actualSrcFormat = srcFormat == WebGLTexelFormat::Auto ? dstFormat : srcFormat;
-
-    uint32_t srcTexelSize = WebGLTexelConversions::TexelBytesForFormat(actualSrcFormat);
+    size_t srcTexelSize = size_t(-1);
+    if (srcFormat == WebGLTexelFormat::Auto) {
+        // we need to find the exact sized format of the source data. Slightly abusing
+        // EffectiveInternalFormatFromInternalFormatAndType for that purpose. Really, an unsized source format
+        // is the same thing as an unsized internalformat.
+        TexInternalFormat effectiveSourceFormat =
+            EffectiveInternalFormatFromInternalFormatAndType(format, type);
+        MOZ_ASSERT(effectiveSourceFormat != LOCAL_GL_NONE); // should have validated format/type combo earlier
+        const size_t srcbitsPerTexel = GetBitsPerTexel(effectiveSourceFormat);
+        MOZ_ASSERT((srcbitsPerTexel % 8) == 0); // should not have compressed formats here.
+        srcTexelSize = srcbitsPerTexel / 8;
+    } else {
+        srcTexelSize = WebGLTexelConversions::TexelBytesForFormat(srcFormat);
+    }
 
     CheckedUint32 checked_neededByteLength =
-        GetImageSize(height, width, srcTexelSize, mPixelStoreUnpackAlignment);
+        GetImageSize(height, width, 1, srcTexelSize, mPixelStoreUnpackAlignment);
 
     CheckedUint32 checked_plainRowSize = CheckedUint32(width) * srcTexelSize;
     CheckedUint32 checked_alignedRowSize =
@@ -3722,10 +3764,13 @@ WebGLContext::TexImage2D_base(TexImageTarget texImageTarget, GLint level,
     void* pixels = nullptr;
     WebGLImageDataStatus imageInfoStatusIfSuccess = WebGLImageDataStatus::UninitializedImageData;
 
+    WebGLTexelFormat dstFormat = GetWebGLTexelFormat(effectiveInternalFormat);
+    WebGLTexelFormat actualSrcFormat = srcFormat == WebGLTexelFormat::Auto ? dstFormat : srcFormat;
+
     if (byteLength) {
-        size_t   bitspertexel = GetBitsPerTexel(effectiveinternalformat);
-        MOZ_ASSERT((bitspertexel % 8) == 0); // should not have compressed formats here.
-        size_t   dstTexelSize = bitspertexel / 8;
+        size_t   bitsPerTexel = GetBitsPerTexel(effectiveInternalFormat);
+        MOZ_ASSERT((bitsPerTexel % 8) == 0); // should not have compressed formats here.
+        size_t   dstTexelSize = bitsPerTexel / 8;
         size_t   srcStride = srcStrideOrZero ? srcStrideOrZero : checked_alignedRowSize.value();
         size_t   dstPlainRowSize = dstTexelSize * width;
         size_t   unpackAlignment = mPixelStoreUnpackAlignment;
@@ -3742,11 +3787,19 @@ WebGLContext::TexImage2D_base(TexImageTarget texImageTarget, GLint level,
         else
         {
             size_t convertedDataSize = height * dstStride;
-            convertedData = new uint8_t[convertedDataSize];
-            ConvertImage(width, height, srcStride, dstStride,
-                        static_cast<uint8_t*>(data), convertedData,
-                        actualSrcFormat, srcPremultiplied,
-                        dstFormat, mPixelStorePremultiplyAlpha, dstTexelSize);
+            convertedData = (uint8_t*)moz_malloc(convertedDataSize);
+            if (!convertedData) {
+                ErrorOutOfMemory("texImage2D: Ran out of memory when allocating"
+                                 " a buffer for doing format conversion.");
+                return;
+            }
+            if (!ConvertImage(width, height, srcStride, dstStride,
+                              static_cast<uint8_t*>(data), convertedData,
+                              actualSrcFormat, srcPremultiplied,
+                              dstFormat, mPixelStorePremultiplyAlpha, dstTexelSize))
+            {
+                return ErrorInvalidOperation("texImage2D: Unsupported texture format conversion");
+            }
             pixels = reinterpret_cast<void*>(convertedData.get());
         }
         imageInfoStatusIfSuccess = WebGLImageDataStatus::InitializedImageData;
@@ -3765,8 +3818,8 @@ WebGLContext::TexImage2D_base(TexImageTarget texImageTarget, GLint level,
     // have NoImageData at this point.
     MOZ_ASSERT(imageInfoStatusIfSuccess != WebGLImageDataStatus::NoImageData);
 
-    tex->SetImageInfo(texImageTarget, level, width, height,
-                      effectiveinternalformat, imageInfoStatusIfSuccess);
+    tex->SetImageInfo(texImageTarget, level, width, height, 1,
+                      effectiveInternalFormat, imageInfoStatusIfSuccess);
 }
 
 void
@@ -3780,21 +3833,21 @@ WebGLContext::TexImage2D(GLenum rawTarget, GLint level,
 
     void* data;
     uint32_t length;
-    int jsArrayType;
+    js::Scalar::Type jsArrayType;
     if (pixels.IsNull()) {
         data = nullptr;
         length = 0;
-        jsArrayType = -1;
+        jsArrayType = js::Scalar::TypeMax;
     } else {
         const ArrayBufferView& view = pixels.Value();
         view.ComputeLengthAndData();
 
         data = view.Data();
         length = view.Length();
-        jsArrayType = int(JS_GetArrayBufferViewType(view.Obj()));
+        jsArrayType = JS_GetArrayBufferViewType(view.Obj());
     }
 
-    if (!ValidateTexImageTarget(2, rawTarget, WebGLTexImageFunc::TexImage))
+    if (!ValidateTexImageTarget(rawTarget, WebGLTexImageFunc::TexImage, WebGLTexDimensions::Tex2D))
         return;
 
     return TexImage2D_base(rawTarget, level, internalformat, width, height, 0, border, format, type,
@@ -3823,12 +3876,12 @@ WebGLContext::TexImage2D(GLenum rawTarget, GLint level,
     void* pixelData = arr.Data();
     const uint32_t pixelDataLength = arr.Length();
 
-    if (!ValidateTexImageTarget(2, rawTarget, WebGLTexImageFunc::TexImage))
+    if (!ValidateTexImageTarget(rawTarget, WebGLTexImageFunc::TexImage, WebGLTexDimensions::Tex2D))
         return;
 
     return TexImage2D_base(rawTarget, level, internalformat, pixels->Width(),
                            pixels->Height(), 4*pixels->Width(), 0,
-                           format, type, pixelData, pixelDataLength, -1,
+                           format, type, pixelData, pixelDataLength, js::Scalar::TypeMax,
                            WebGLTexelFormat::RGBA8, false);
 }
 
@@ -3839,10 +3892,11 @@ WebGLContext::TexSubImage2D_base(TexImageTarget texImageTarget, GLint level,
                                  GLsizei width, GLsizei height, GLsizei srcStrideOrZero,
                                  GLenum format, GLenum type,
                                  void* data, uint32_t byteLength,
-                                 int jsArrayType,
+                                 js::Scalar::Type jsArrayType,
                                  WebGLTexelFormat srcFormat, bool srcPremultiplied)
 {
     const WebGLTexImageFunc func = WebGLTexImageFunc::TexSubImage;
+    const WebGLTexDimensions dims = WebGLTexDimensions::Tex2D;
 
     if (type == LOCAL_GL_HALF_FLOAT_OES) {
         type = LOCAL_GL_HALF_FLOAT;
@@ -3859,37 +3913,37 @@ WebGLContext::TexSubImage2D_base(TexImageTarget texImageTarget, GLint level,
 
     const WebGLTexture::ImageInfo& imageInfo = tex->ImageInfoAt(texImageTarget, level);
     const TexInternalFormat existingEffectiveInternalFormat = imageInfo.EffectiveInternalFormat();
-    TexInternalFormat existingUnsizedInternalFormat = LOCAL_GL_NONE;
-    TexType existingType = LOCAL_GL_NONE;
-    UnsizedInternalFormatAndTypeFromEffectiveInternalFormat(existingEffectiveInternalFormat,
-                                                            &existingUnsizedInternalFormat,
-                                                            &existingType);
 
-    if (!ValidateTexImage(2, texImageTarget, level, existingUnsizedInternalFormat.get(),
+    if (!ValidateTexImage(texImageTarget, level,
+                          existingEffectiveInternalFormat.get(),
                           xoffset, yoffset, 0,
                           width, height, 0,
-                          0, format, type, func))
+                          0, format, type, func, dims))
     {
         return;
     }
 
-    if (!ValidateTexInputData(type, jsArrayType, func))
+    if (!ValidateTexInputData(type, jsArrayType, func, dims))
         return;
 
-    if (type != existingType) {
+    if (type != TypeFromInternalFormat(existingEffectiveInternalFormat)) {
         return ErrorInvalidOperation("texSubImage2D: type differs from that of the existing image");
     }
 
-    WebGLTexelFormat dstFormat = GetWebGLTexelFormat(existingEffectiveInternalFormat);
-    WebGLTexelFormat actualSrcFormat = srcFormat == WebGLTexelFormat::Auto ? dstFormat : srcFormat;
-
-    uint32_t srcTexelSize = WebGLTexelConversions::TexelBytesForFormat(actualSrcFormat);
+    size_t srcTexelSize = size_t(-1);
+    if (srcFormat == WebGLTexelFormat::Auto) {
+        const size_t bitsPerTexel = GetBitsPerTexel(existingEffectiveInternalFormat);
+        MOZ_ASSERT((bitsPerTexel % 8) == 0); // should not have compressed formats here.
+        srcTexelSize = bitsPerTexel / 8;
+    } else {
+        srcTexelSize = WebGLTexelConversions::TexelBytesForFormat(srcFormat);
+    }
 
     if (width == 0 || height == 0)
         return; // ES 2.0 says it has no effect, we better return right now
 
     CheckedUint32 checked_neededByteLength =
-        GetImageSize(height, width, srcTexelSize, mPixelStoreUnpackAlignment);
+        GetImageSize(height, width, 1, srcTexelSize, mPixelStoreUnpackAlignment);
 
     CheckedUint32 checked_plainRowSize = CheckedUint32(width) * srcTexelSize;
 
@@ -3904,9 +3958,17 @@ WebGLContext::TexSubImage2D_base(TexImageTarget texImageTarget, GLint level,
     if (byteLength < bytesNeeded)
         return ErrorInvalidOperation("texSubImage2D: not enough data for operation (need %d, have %d)", bytesNeeded, byteLength);
 
-    if (imageInfo.HasUninitializedImageData())
-        tex->DoDeferredImageInitialization(texImageTarget, level);
-
+    if (imageInfo.HasUninitializedImageData()) {
+        bool coversWholeImage = xoffset == 0 &&
+                                yoffset == 0 &&
+                                width == imageInfo.Width() &&
+                                height == imageInfo.Height();
+        if (coversWholeImage) {
+            tex->SetImageDataStatus(texImageTarget, level, WebGLImageDataStatus::InitializedImageData);
+        } else {
+            tex->DoDeferredImageInitialization(texImageTarget, level);
+        }
+    }
     MakeContextCurrent();
 
     size_t   srcStride = srcStrideOrZero ? srcStrideOrZero : checked_alignedRowSize.value();
@@ -3918,6 +3980,9 @@ WebGLContext::TexSubImage2D_base(TexImageTarget texImageTarget, GLint level,
     void* pixels = data;
     nsAutoArrayPtr<uint8_t> convertedData;
 
+    WebGLTexelFormat dstFormat = GetWebGLTexelFormat(existingEffectiveInternalFormat);
+    WebGLTexelFormat actualSrcFormat = srcFormat == WebGLTexelFormat::Auto ? dstFormat : srcFormat;
+
     // no conversion, no flipping, so we avoid copying anything and just pass the source pointer
     bool noConversion = (actualSrcFormat == dstFormat &&
                          srcPremultiplied == mPixelStorePremultiplyAlpha &&
@@ -3926,11 +3991,19 @@ WebGLContext::TexSubImage2D_base(TexImageTarget texImageTarget, GLint level,
 
     if (!noConversion) {
         size_t convertedDataSize = height * dstStride;
-        convertedData = new uint8_t[convertedDataSize];
-        ConvertImage(width, height, srcStride, dstStride,
-                    static_cast<const uint8_t*>(data), convertedData,
-                    actualSrcFormat, srcPremultiplied,
-                    dstFormat, mPixelStorePremultiplyAlpha, dstTexelSize);
+        convertedData = (uint8_t*)moz_malloc(convertedDataSize);
+        if (!convertedData) {
+            ErrorOutOfMemory("texImage2D: Ran out of memory when allocating"
+                             " a buffer for doing format conversion.");
+            return;
+        }
+        if (!ConvertImage(width, height, srcStride, dstStride,
+                          static_cast<const uint8_t*>(data), convertedData,
+                          actualSrcFormat, srcPremultiplied,
+                          dstFormat, mPixelStorePremultiplyAlpha, dstTexelSize))
+        {
+            return ErrorInvalidOperation("texSubImage2D: Unsupported texture format conversion");
+        }
         pixels = reinterpret_cast<void*>(convertedData.get());
     }
 
@@ -3963,7 +4036,7 @@ WebGLContext::TexSubImage2D(GLenum rawTarget, GLint level,
     const ArrayBufferView& view = pixels.Value();
     view.ComputeLengthAndData();
 
-    if (!ValidateTexImageTarget(2, rawTarget, WebGLTexImageFunc::TexSubImage))
+    if (!ValidateTexImageTarget(rawTarget, WebGLTexImageFunc::TexSubImage, WebGLTexDimensions::Tex2D))
         return;
 
     return TexSubImage2D_base(rawTarget, level, xoffset, yoffset,
@@ -3994,7 +4067,7 @@ WebGLContext::TexSubImage2D(GLenum target, GLint level,
                               pixels->Width(), pixels->Height(),
                               4*pixels->Width(), format, type,
                               arr.Data(), arr.Length(),
-                              -1,
+                              js::Scalar::TypeMax,
                               WebGLTexelFormat::RGBA8, false);
 }
 
@@ -4099,12 +4172,9 @@ BaseTypeAndSizeFromUniformType(GLenum uType, GLenum *baseType, GLint *unitSize)
 
 
 WebGLTexelFormat
-mozilla::GetWebGLTexelFormat(TexInternalFormat effectiveinternalformat)
+mozilla::GetWebGLTexelFormat(TexInternalFormat effectiveInternalFormat)
 {
-    switch (effectiveinternalformat.get()) {
-        case LOCAL_GL_DEPTH_COMPONENT16:      return WebGLTexelFormat::D16;
-        case LOCAL_GL_DEPTH_COMPONENT24:      return WebGLTexelFormat::D32;
-        case LOCAL_GL_DEPTH24_STENCIL8:       return WebGLTexelFormat::D24S8;
+    switch (effectiveInternalFormat.get()) {
         case LOCAL_GL_RGBA8:                  return WebGLTexelFormat::RGBA8;
         case LOCAL_GL_SRGB8_ALPHA8:           return WebGLTexelFormat::RGBA8;
         case LOCAL_GL_RGB8:                   return WebGLTexelFormat::RGB8;
@@ -4126,8 +4196,7 @@ mozilla::GetWebGLTexelFormat(TexInternalFormat effectiveinternalformat)
         case LOCAL_GL_RGB5_A1:                return WebGLTexelFormat::RGBA5551;
         case LOCAL_GL_RGB565:                 return WebGLTexelFormat::RGB565;
         default:
-            MOZ_CRASH("Unhandled format");
-            return WebGLTexelFormat::BadFormat;
+            return WebGLTexelFormat::FormatNotSupportingAnyConversion;
     }
 }
 
