@@ -720,6 +720,10 @@ static inline mozilla::css::Side operator++(mozilla::css::Side& side, int) {
 #define NS_STYLE_IMAGE_ORIENTATION_FLIP         0
 #define NS_STYLE_IMAGE_ORIENTATION_FROM_IMAGE   1
 
+// See nsStyleDisplay
+#define NS_STYLE_ISOLATION_AUTO                 0
+#define NS_STYLE_ISOLATION_ISOLATE              1
+
 // See nsStylePosition.mObjectFit
 #define NS_STYLE_OBJECT_FIT_FILL                0
 #define NS_STYLE_OBJECT_FIT_CONTAIN             1
@@ -1064,6 +1068,11 @@ static inline mozilla::css::Side operator++(mozilla::css::Side& side, int) {
 #define NS_STYLE_COUNTER_SPEAKAS_WORDS      2
 #define NS_STYLE_COUNTER_SPEAKAS_SPELL_OUT  3
 #define NS_STYLE_COUNTER_SPEAKAS_OTHER      255 // refer to another style
+
+// See nsStyleDisplay::mScrollBehavior
+#define NS_STYLE_SCROLL_BEHAVIOR_AUTO       0
+#define NS_STYLE_SCROLL_BEHAVIOR_INSTANT    1
+#define NS_STYLE_SCROLL_BEHAVIOR_SMOOTH     2
 
 /*****************************************************************************
  * Constants for media features.                                             *

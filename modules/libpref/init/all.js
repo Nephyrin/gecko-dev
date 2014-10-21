@@ -1493,6 +1493,9 @@ pref("network.dnsCacheEntries", 400);
 // In the absence of OS TTLs, the DNS cache TTL value
 pref("network.dnsCacheExpiration", 60);
 
+// Get TTL; not supported on all platforms; nop on the unsupported ones.
+pref("network.dns.get-ttl", true);
+
 // The grace period allows the DNS cache to use expired entries, while kicking off
 // a revalidation in the background.
 pref("network.dnsCacheExpirationGracePeriod", 60);
@@ -2018,6 +2021,9 @@ pref("layout.css.masking.enabled", true);
 // Is support for mix-blend-mode enabled?
 pref("layout.css.mix-blend-mode.enabled", true);
 
+// Is support for isolation enabled?
+pref("layout.css.isolation.enabled", false);
+
 // Is support for CSS Filters enabled?
 pref("layout.css.filters.enabled", true);
 
@@ -2113,6 +2119,9 @@ pref("layout.css.outline-style-auto.enabled", false);
 
 // Is CSSOM-View scroll-behavior and its MSD smooth scrolling enabled?
 pref("layout.css.scroll-behavior.enabled", false);
+
+// Is the CSSOM-View scroll-behavior CSS property enabled?
+pref("layout.css.scroll-behavior.property-enabled", false);
 
 // Tuning of the smooth scroll motion used by CSSOM-View scroll-behavior.
 // Spring-constant controls the strength of the simulated MSD
@@ -3869,8 +3878,6 @@ pref("layers.async-video-oop.enabled",true);
 
 #ifdef XP_WIN
 pref("layers.offmainthreadcomposition.enabled", true);
-// XXX - see bug 1009616
-pref("layers.async-video-oop.enabled", false);
 #endif
 
 #ifdef MOZ_WIDGET_QT
@@ -4311,6 +4318,7 @@ pref("touchcaret.expiration.time", 3000);
 
 // Turn off selection caret by default
 pref("selectioncaret.enabled", false);
+pref("selectioncaret.noneditable", false);
 
 // This will inflate size of selection caret frame when we checking if
 // user click on selection caret or not. In app units.
@@ -4348,13 +4356,6 @@ pref("camera.control.low_memory_thresholdMB", 404);
 
 // UDPSocket API
 pref("dom.udpsocket.enabled", false);
-
-// Experiment: Get TTL from DNS records.
-//     Unset initially (0); Randomly chosen on first run; will remain unchanged
-//     unless adjusted by the user or experiment ends. Variants defined in
-//     nsHostResolver.cpp.
-pref("dns.ttl-experiment.variant", 0);
-pref("dns.ttl-experiment.enabled", true);
 
 // Use raw ICU instead of CoreServices API in Unicode collation
 #ifdef XP_MACOSX

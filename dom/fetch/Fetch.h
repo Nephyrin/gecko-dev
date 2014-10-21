@@ -6,14 +6,34 @@
 #ifndef mozilla_dom_Fetch_h
 #define mozilla_dom_Fetch_h
 
-#include "mozilla/dom/UnionTypes.h"
+#include "nsCOMPtr.h"
+#include "nsError.h"
+#include "nsString.h"
+#include "mozilla/ErrorResult.h"
+#include "mozilla/dom/RequestBinding.h"
 
 class nsIInputStream;
+class nsIGlobalObject;
 
 namespace mozilla {
 namespace dom {
 
+class ArrayBufferOrArrayBufferViewOrBlobOrScalarValueStringOrURLSearchParams;
+class InternalRequest;
+class OwningArrayBufferOrArrayBufferViewOrBlobOrScalarValueStringOrURLSearchParams;
 class Promise;
+class RequestOrScalarValueString;
+
+namespace workers {
+class WorkerPrivate;
+} // namespace workers
+
+already_AddRefed<Promise>
+FetchRequest(nsIGlobalObject* aGlobal, const RequestOrScalarValueString& aInput,
+             const RequestInit& aInit, ErrorResult& aRv);
+
+nsresult
+GetRequestReferrer(nsIGlobalObject* aGlobal, const InternalRequest* aRequest, nsCString& aReferrer);
 
 /*
  * Creates an nsIInputStream based on the fetch specifications 'extract a byte
@@ -100,6 +120,7 @@ private:
   bool mBodyUsed;
   nsCString mMimeType;
 };
+
 } // namespace dom
 } // namespace mozilla
 

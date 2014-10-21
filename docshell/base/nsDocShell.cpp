@@ -2834,10 +2834,10 @@ nsDocShell::SetRecordProfileTimelineMarkers(bool aValue)
   if (currentValue != aValue) {
     if (aValue) {
       ++gProfileTimelineRecordingsCount;
-      mProfileTimelineStartTime = TimeStamp::Now();
+      mProfileTimelineRecording = true;
     } else {
       --gProfileTimelineRecordingsCount;
-      mProfileTimelineStartTime = TimeStamp();
+      mProfileTimelineRecording = false;
       ClearProfileTimelineMarkers();
     }
   }
@@ -2851,7 +2851,7 @@ nsDocShell::SetRecordProfileTimelineMarkers(bool aValue)
 NS_IMETHODIMP
 nsDocShell::GetRecordProfileTimelineMarkers(bool* aValue)
 {
-  *aValue = !mProfileTimelineStartTime.IsNull();
+  *aValue = mProfileTimelineRecording;
   return NS_OK;
 }
 
@@ -2939,10 +2939,12 @@ nsDocShell::PopProfileTimelineMarkers(JSContext* aCx,
 #endif
 }
 
-float
-nsDocShell::GetProfileTimelineDelta()
+nsresult
+nsDocShell::Now(DOMHighResTimeStamp* aWhen)
 {
-  return (TimeStamp::Now() - mProfileTimelineStartTime).ToMilliseconds();
+  bool ignore;
+  *aWhen = (TimeStamp::Now() - TimeStamp::ProcessCreation(ignore)).ToMilliseconds();
+  return NS_OK;
 }
 
 void
@@ -2950,8 +2952,9 @@ nsDocShell::AddProfileTimelineMarker(const char* aName,
                                      TracingMetadata aMetaData)
 {
 #ifdef MOZ_ENABLE_PROFILER_SPS
-  if (!mProfileTimelineStartTime.IsNull()) {
-    float delta = GetProfileTimelineDelta();
+  if (mProfileTimelineRecording) {
+    DOMHighResTimeStamp delta;
+    Now(&delta);
     ProfilerMarkerTracing* payload = new ProfilerMarkerTracing("Timeline",
                                                                aMetaData);
     mProfileTimelineMarkers.AppendElement(
@@ -2966,8 +2969,9 @@ nsDocShell::AddProfileTimelineMarker(const char* aName,
                                      TracingMetadata aMetaData)
 {
 #ifdef MOZ_ENABLE_PROFILER_SPS
-  if (!mProfileTimelineStartTime.IsNull()) {
-    float delta = GetProfileTimelineDelta();
+  if (mProfileTimelineRecording) {
+    DOMHighResTimeStamp delta;
+    Now(&delta);
     ProfilerMarkerTracing* payload = new ProfilerMarkerTracing("Timeline",
                                                                aMetaData,
                                                                aCause);
@@ -10726,7 +10730,8 @@ nsDocShell::ScrollToAnchor(nsACString & aCurHash, nsACString & aNewHash,
         nsresult rv = NS_ERROR_FAILURE;
         NS_ConvertUTF8toUTF16 uStr(str);
         if (!uStr.IsEmpty()) {
-            rv = shell->GoToAnchor(NS_ConvertUTF8toUTF16(str), scroll);
+            rv = shell->GoToAnchor(NS_ConvertUTF8toUTF16(str), scroll,
+                                   nsIPresShell::SCROLL_SMOOTH_AUTO);
         }
         nsMemory::Free(str);
 
@@ -10760,7 +10765,8 @@ nsDocShell::ScrollToAnchor(nsACString & aCurHash, nsACString & aNewHash,
             //
             // When newHashName contains "%00", unescaped string may be empty.
             // And GoToAnchor asserts if we ask it to scroll to an empty ref.
-            shell->GoToAnchor(uStr, scroll && !uStr.IsEmpty());
+            shell->GoToAnchor(uStr, scroll && !uStr.IsEmpty(),
+                              nsIPresShell::SCROLL_SMOOTH_AUTO);
         }
     }
     else {

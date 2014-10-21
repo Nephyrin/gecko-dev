@@ -11,7 +11,6 @@
 #include "mozilla/dom/MozMobileConnectionBinding.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/TelephonyBinding.h"
-#include "mozilla/dom/UnionTypes.h"
 
 #include "nsCharSeparatedTokenizer.h"
 #include "nsContentUtils.h"
@@ -496,6 +495,11 @@ Telephony::CallStateChanged(uint32_t aServiceId, uint32_t aCallIndex,
     modifiedCall->UpdateMergeable(aIsMergeable);
 
     if (modifiedCall->CallState() != aCallState) {
+      if (aCallState == nsITelephonyService::CALL_STATE_DISCONNECTED) {
+        modifiedCall->ChangeStateInternal(aCallState, true);
+        return NS_OK;
+      }
+
       // We don't fire the statechange event on a call in conference here.
       // Instead, the event will be fired later in
       // TelephonyCallGroup::ChangeState(). Thus the sequence of firing the

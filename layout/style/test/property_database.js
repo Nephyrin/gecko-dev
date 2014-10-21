@@ -5514,6 +5514,17 @@ if (SpecialPowers.getBoolPref("layout.css.mix-blend-mode.enabled")) {
   };
 }
 
+if (SpecialPowers.getBoolPref("layout.css.isolation.enabled")) {
+  gCSSProperties["isolation"] = {
+    domProp: "isolation",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: [ "auto" ],
+    other_values: ["isolated"],
+    invalid_values: []
+  };
+}
+
 if (SpecialPowers.getBoolPref("layout.css.background-blend-mode.enabled")) {
   gCSSProperties["background-blend-mode"] = {
     domProp: "backgroundBlendMode",
@@ -5608,6 +5619,17 @@ if (SpecialPowers.getBoolPref("layout.css.box-decoration-break.enabled")) {
     initial_values: [ "slice" ],
     other_values: [ "clone" ],
     invalid_values: [ "auto",  "none",  "1px" ]
+  };
+}
+
+if (SpecialPowers.getBoolPref("layout.css.scroll-behavior.property-enabled")) {
+  gCSSProperties["scroll-behavior"] = {
+    domProp: "scrollBehavior",
+    inherited: false,
+    type: CSS_TYPE_LONGHAND,
+    initial_values: [ "auto" ],
+    other_values: [ "instant", "smooth" ],
+    invalid_values: [ "none",  "1px" ]
   };
 }
 

@@ -5,6 +5,7 @@
 
 #include "nsComboboxControlFrame.h"
 
+#include "gfxUtils.h"
 #include "mozilla/gfx/2D.h"
 #include "mozilla/gfx/PathHelpers.h"
 #include "nsCOMPtr.h"
@@ -1504,9 +1505,13 @@ void nsComboboxControlFrame::PaintFocus(nsRenderingContext& aRenderingContext,
   if (eventStates.HasState(NS_EVENT_STATE_DISABLED) || sFocused != this)
     return;
 
-  aRenderingContext.ThebesContext()->Save();
+  gfxContext* gfx = aRenderingContext.ThebesContext();
+
+  gfx->Save();
   nsRect clipRect = mDisplayFrame->GetRect() + aPt;
-  aRenderingContext.IntersectClip(clipRect);
+  gfx->Clip(NSRectToRect(clipRect,
+                         PresContext()->AppUnitsPerDevPixel(),
+                         *aRenderingContext.GetDrawTarget()));
 
   // REVIEW: Why does the old code paint mDisplayFrame again? We've
   // already painted it in the children above. So clipping it here won't do
@@ -1517,7 +1522,7 @@ void nsComboboxControlFrame::PaintFocus(nsRenderingContext& aRenderingContext,
 
   StrokeOptions strokeOptions;
   nsLayoutUtils::InitDashPattern(strokeOptions, NS_STYLE_BORDER_STYLE_DOTTED);
-  ColorPattern color(nsLayoutUtils::NSColorToColor(StyleColor()->mColor));
+  ColorPattern color(ToDeviceColor(StyleColor()->mColor));
   nscoord onePixel = nsPresContext::CSSPixelsToAppUnits(1);
   clipRect.width -= onePixel;
   clipRect.height -= onePixel;
@@ -1526,7 +1531,7 @@ void nsComboboxControlFrame::PaintFocus(nsRenderingContext& aRenderingContext,
   StrokeSnappedEdgesOfRect(r, *aRenderingContext.GetDrawTarget(),
                            color, strokeOptions);
 
-  aRenderingContext.ThebesContext()->Restore();
+  gfx->Restore();
 }
 
 //---------------------------------------------------------

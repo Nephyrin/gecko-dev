@@ -6816,14 +6816,14 @@ nsContentUtils::HasDistributedChildren(nsIContent* aContent)
   if (shadow) {
     // Children of a shadow root are distributed to
     // the shadow insertion point of the younger shadow root.
-    return shadow->GetYoungerShadow();
+    return shadow->GetYoungerShadowRoot();
   }
 
   HTMLShadowElement* shadowEl = HTMLShadowElement::FromContent(aContent);
   if (shadowEl && shadowEl->IsInsertionPoint()) {
     // Children of a shadow insertion points are distributed
     // to the insertion points in the older shadow root.
-    return shadow->GetOlderShadow();
+    return shadowEl->GetOlderShadowRoot();
   }
 
   HTMLContentElement* contentEl = HTMLContentElement::FromContent(aContent);
@@ -6997,4 +6997,24 @@ nsContentUtils::GetInnerWindowID(nsIRequest* aRequest)
   nsPIDOMWindow* inner = pwindow->IsInnerWindow() ? pwindow.get() : pwindow->GetCurrentInnerWindow();
 
   return inner ? inner->WindowID() : 0;
+}
+
+void
+nsContentUtils::GetHostOrIPv6WithBrackets(nsIURI* aURI, nsAString& aHost)
+{
+  aHost.Truncate();
+  nsAutoCString hostname;
+  nsresult rv = aURI->GetHost(hostname);
+  if (NS_FAILED(rv)) { // Some URIs do not have a host
+    return;
+  }
+
+  if (hostname.FindChar(':') != -1) { // Escape IPv6 address
+    MOZ_ASSERT(!hostname.Length() ||
+      (hostname[0] !='[' && hostname[hostname.Length() - 1] != ']'));
+    hostname.Insert('[', 0);
+    hostname.Append(']');
+  }
+
+  CopyUTF8toUTF16(hostname, aHost);
 }
