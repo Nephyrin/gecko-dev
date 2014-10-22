@@ -177,6 +177,22 @@ WebGLContext::GetParameter(JSContext* cx, GLenum pname, ErrorResult& rv)
         }
     }
 
+    if (IsWebGL2()) {
+        switch (pname) {
+            case LOCAL_GL_MAX_SAMPLES:
+            case LOCAL_GL_MAX_UNIFORM_BLOCK_SIZE:
+            case LOCAL_GL_MAX_VERTEX_UNIFORM_COMPONENTS: {
+                GLint val;
+                gl->fGetIntegerv(pname, &val);
+                return JS::NumberValue(uint32_t(val));
+            }
+
+            case LOCAL_GL_TEXTURE_BINDING_3D: {
+                return WebGLObjectAsJSValue(cx, mBound3DTextures[mActiveTexture].get(), rv);
+            }
+        }
+    }
+
     switch (pname) {
         //
         // String params

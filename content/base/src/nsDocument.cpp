@@ -220,6 +220,7 @@
 #include "nsWindowMemoryReporter.h"
 #include "nsLocation.h"
 #include "mozilla/dom/FontFaceSet.h"
+#include "mozilla/dom/BoxObject.h"
 
 #ifdef MOZ_MEDIA_NAVIGATOR
 #include "mozilla/MediaManager.h"
@@ -1329,7 +1330,6 @@ nsExternalResourceMap::PendingLoad::StartLoad(nsIURI* aURI,
                      aRequestingNode,
                      nsILoadInfo::SEC_NORMAL,
                      nsIContentPolicy::TYPE_OTHER,
-                     nullptr, // aChannelPolicy
                      loadGroup,
                      req); // aCallbacks
 
@@ -5844,12 +5844,7 @@ nsDocument::ProcessTopElementQueue(bool aIsBaseQueue)
 {
   MOZ_ASSERT(nsContentUtils::IsSafeToRunScript());
 
-  if (sProcessingStack.isNothing()) {
-    // If XPCOM shutdown has reset the processing stack, don't do anything.
-    return;
-  }
-
-  nsTArray<CustomElementData*>& stack = *sProcessingStack;
+  nsTArray<nsRefPtr<CustomElementData>>& stack = *sProcessingStack;
   uint32_t firstQueue = stack.LastIndexOf((CustomElementData*) nullptr);
 
   if (aIsBaseQueue && firstQueue != 0) {
@@ -5886,7 +5881,7 @@ nsDocument::RegisterEnabled()
 }
 
 // static
-Maybe<nsTArray<mozilla::dom::CustomElementData*>>
+Maybe<nsTArray<nsRefPtr<mozilla::dom::CustomElementData>>>
 nsDocument::sProcessingStack;
 
 // static
@@ -6947,7 +6942,7 @@ nsDocument::DoNotifyPossibleTitleChange()
                                       true, true);
 }
 
-already_AddRefed<nsIBoxObject>
+already_AddRefed<BoxObject>
 nsDocument::GetBoxObjectFor(Element* aElement, ErrorResult& aRv)
 {
   if (!aElement) {
@@ -6974,7 +6969,7 @@ nsDocument::GetBoxObjectFor(Element* aElement, ErrorResult& aRv)
   } else {
     nsCOMPtr<nsPIBoxObject> boxObject = mBoxObjectTable->Get(aElement);
     if (boxObject) {
-      return boxObject.forget();
+      return boxObject.forget().downcast<BoxObject>();
     }
   }
 
@@ -7015,7 +7010,7 @@ nsDocument::GetBoxObjectFor(Element* aElement, ErrorResult& aRv)
     mBoxObjectTable->Put(aElement, boxObject.get());
   }
 
-  return boxObject.forget();
+  return boxObject.forget().downcast<BoxObject>();
 }
 
 void

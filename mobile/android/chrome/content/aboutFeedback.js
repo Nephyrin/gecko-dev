@@ -77,6 +77,7 @@ function init() {
 
   // Fill "Last visited site" input with most recent history entry URL.
   Services.obs.addObserver(function observer(aSubject, aTopic, aData) {
+    aData = aData.substring(0, 200);
     document.getElementById("last-url").value = aData;
     // Enable the parent div iff the URL is valid.
     if (aData.length != 0) {
@@ -146,6 +147,15 @@ function sendFeedback(aEvent) {
   data["version"] = Services.appinfo.version;
   data["locale"] = Services.locale.getSystemLocale().getCategory("NSILOCALE_CTYPE");
   data["channel"] = UpdateChannel.get();
+
+  // Source field is added only when Fennec prompts the user.
+  let getParam = window.location.href.split("?");
+  if (getParam.length > 1) {
+    let urlParam = new URLSearchParams(getParam[1]);
+    if(urlParam.get("source")) {
+      data["source"] = urlParam.get("source");
+    }
+  }
 
   let req = new XMLHttpRequest();
   req.addEventListener("error", function() {

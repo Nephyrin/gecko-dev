@@ -11,6 +11,7 @@
 #include "mozilla/dom/MediaKeyError.h"
 #include "mozilla/dom/MediaKeySession.h"
 #include "mozilla/dom/DOMException.h"
+#include "mozilla/dom/UnionTypes.h"
 #include "mozilla/CDMProxy.h"
 #include "mozilla/EMELog.h"
 #include "nsContentUtils.h"
@@ -589,6 +590,12 @@ CopyArrayBufferViewOrArrayBufferData(const ArrayBufferViewOrArrayBuffer& aBuffer
     return false;
   }
   return true;
+}
+
+nsIDocument*
+MediaKeys::GetOwnerDoc() const
+{
+  return mElement ? mElement->OwnerDoc() : nullptr;
 }
 
 } // namespace dom

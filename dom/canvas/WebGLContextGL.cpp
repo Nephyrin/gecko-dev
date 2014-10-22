@@ -453,7 +453,7 @@ WebGLContext::CopyTexSubImage2D_base(TexImageTarget texImageTarget,
             tex->SetImageInfo(texImageTarget, level, width, height, 1,
                       effectiveInternalFormat,
                       WebGLImageDataStatus::UninitializedImageData);
-            tex->DoDeferredImageInitialization(texImageTarget, level);
+            tex->EnsureNoUninitializedImageData(texImageTarget, level);
         }
 
         // if we are completely outside of the framebuffer, we can exit now with our black texture
@@ -601,7 +601,7 @@ WebGLContext::CopyTexSubImage2D(GLenum rawTexImgTarget,
         if (coversWholeImage) {
             tex->SetImageDataStatus(texImageTarget, level, WebGLImageDataStatus::InitializedImageData);
         } else {
-            tex->DoDeferredImageInitialization(texImageTarget, level);
+            tex->EnsureNoUninitializedImageData(texImageTarget, level);
         }
     }
 
@@ -922,12 +922,16 @@ WebGLContext::GenerateMipmap(GLenum rawTarget)
     const TexImageTarget imageTarget = (target == LOCAL_GL_TEXTURE_2D)
                                                   ? LOCAL_GL_TEXTURE_2D
                                                   : LOCAL_GL_TEXTURE_CUBE_MAP_POSITIVE_X;
-    if (!tex->HasImageInfoAt(imageTarget, 0))
+    if (!tex->IsMipmapRangeValid())
+    {
+        return ErrorInvalidOperation("generateMipmap: Texture does not have a valid mipmap range.");
+    }
+    if (!tex->HasImageInfoAt(imageTarget, tex->EffectiveBaseMipmapLevel()))
     {
         return ErrorInvalidOperation("generateMipmap: Level zero of texture is not defined.");
     }
 
-    if (!tex->IsFirstImagePowerOfTwo())
+    if (!IsWebGL2() && !tex->IsFirstImagePowerOfTwo())
         return ErrorInvalidOperation("generateMipmap: Level zero of texture does not have power-of-two width and height.");
 
     TexInternalFormat internalformat = tex->ImageInfoAt(imageTarget, 0).EffectiveInternalFormat();
@@ -1510,6 +1514,19 @@ void WebGLContext::TexParameter_base(GLenum rawTarget, GLenum pname,
     bool paramValueInvalid = false;
 
     switch (pname) {
+        case LOCAL_GL_TEXTURE_BASE_LEVEL:
+        case LOCAL_GL_TEXTURE_MAX_LEVEL:
+            if (!IsWebGL2())
+                return ErrorInvalidEnumInfo("texParameter: pname", pname);
+            if (intParam < 0) {
+                paramValueInvalid = true;
+                break;
+            }
+            if (pname == LOCAL_GL_TEXTURE_BASE_LEVEL)
+                tex->SetBaseMipmapLevel(intParam);
+            else
+                tex->SetMaxMipmapLevel(intParam);
+            break;
         case LOCAL_GL_TEXTURE_MIN_FILTER:
             switch (intParam) {
                 case LOCAL_GL_NEAREST:
@@ -1611,6 +1628,12 @@ WebGLContext::GetTexParameter(GLenum rawTarget, GLenum pname)
         return JS::NullValue();
     }
 
+    return GetTexParameterInternal(target, pname);
+}
+
+JS::Value
+WebGLContext::GetTexParameterInternal(const TexTarget& target, GLenum pname)
+{
     switch (pname) {
         case LOCAL_GL_TEXTURE_MIN_FILTER:
         case LOCAL_GL_TEXTURE_MAG_FILTER:
@@ -2303,8 +2326,12 @@ WebGLContext::ReadPixels(GLint x, GLint y, GLsizei width,
         uint32_t subrect_byteLength = (subrect_height-1)*subrect_alignedRowSize + subrect_plainRowSize;
 
         // create subrect buffer, call glReadPixels, copy pixels into destination buffer, delete subrect buffer
-        GLubyte *subrect_data = new GLubyte[subrect_byteLength];
-        gl->fReadPixels(subrect_x, subrect_y, subrect_width, subrect_height, format, type, subrect_data);
+        UniquePtr<GLubyte> subrect_data(new ((fallible_t())) GLubyte[subrect_byteLength]);
+        if (!subrect_data)
+            return ErrorOutOfMemory("readPixels: subrect_data");
+
+        gl->fReadPixels(subrect_x, subrect_y, subrect_width, subrect_height,
+                        format, type, subrect_data.get());
 
         // notice that this for loop terminates because we already checked that subrect_height is at most height
         for (GLint y_inside_subrect = 0; y_inside_subrect < subrect_height; ++y_inside_subrect) {
@@ -2313,10 +2340,9 @@ WebGLContext::ReadPixels(GLint x, GLint y, GLsizei width,
             memcpy(static_cast<GLubyte*>(data)
                      + checked_alignedRowSize.value() * (subrect_y_in_dest_buffer + y_inside_subrect)
                      + bytesPerPixel * subrect_x_in_dest_buffer, // destination
-                   subrect_data + subrect_alignedRowSize * y_inside_subrect, // source
+                   subrect_data.get() + subrect_alignedRowSize * y_inside_subrect, // source
                    subrect_plainRowSize); // size
         }
-        delete [] subrect_data;
     }
 
     // if we're reading alpha, we may need to do fixup.  Note that we don't allow
@@ -3430,7 +3456,7 @@ WebGLContext::CompressedTexSubImage2D(GLenum rawTexImgTarget, GLint level, GLint
         if (coversWholeImage) {
             tex->SetImageDataStatus(texImageTarget, level, WebGLImageDataStatus::InitializedImageData);
         } else {
-            tex->DoDeferredImageInitialization(texImageTarget, level);
+            tex->EnsureNoUninitializedImageData(texImageTarget, level);
         }
     }
 
@@ -3787,7 +3813,7 @@ WebGLContext::TexImage2D_base(TexImageTarget texImageTarget, GLint level,
         else
         {
             size_t convertedDataSize = height * dstStride;
-            convertedData = (uint8_t*)moz_malloc(convertedDataSize);
+            convertedData = new ((fallible_t())) uint8_t[convertedDataSize];
             if (!convertedData) {
                 ErrorOutOfMemory("texImage2D: Ran out of memory when allocating"
                                  " a buffer for doing format conversion.");
@@ -3966,7 +3992,7 @@ WebGLContext::TexSubImage2D_base(TexImageTarget texImageTarget, GLint level,
         if (coversWholeImage) {
             tex->SetImageDataStatus(texImageTarget, level, WebGLImageDataStatus::InitializedImageData);
         } else {
-            tex->DoDeferredImageInitialization(texImageTarget, level);
+            tex->EnsureNoUninitializedImageData(texImageTarget, level);
         }
     }
     MakeContextCurrent();
@@ -3991,7 +4017,7 @@ WebGLContext::TexSubImage2D_base(TexImageTarget texImageTarget, GLint level,
 
     if (!noConversion) {
         size_t convertedDataSize = height * dstStride;
-        convertedData = (uint8_t*)moz_malloc(convertedDataSize);
+        convertedData = new ((fallible_t())) uint8_t[convertedDataSize];
         if (!convertedData) {
             ErrorOutOfMemory("texImage2D: Ran out of memory when allocating"
                              " a buffer for doing format conversion.");

@@ -504,12 +504,14 @@ class DeviceManagerADB(DeviceManager):
         if directive == "os" or directive == "all":
             ret["os"] = self.shellCheckOutput(["getprop", "ro.build.display.id"])
         if directive == "uptime" or directive == "all":
-            utime = self.shellCheckOutput(["uptime"])
-            if (not utime):
+            uptime = self.shellCheckOutput(["uptime"])
+            if not uptime:
                 raise DMError("error getting uptime")
-            m = re.match("up time: ((\d+) days, )*(\d{2}):(\d{2}):(\d{2})", utime)
-            ret["uptime"] = "%d days %d hours %d minutes %d seconds" % tuple(
-                [int(g or 0) for g in m.groups()[1:]])
+            m = re.match("up time: ((\d+) days, )*(\d{2}):(\d{2}):(\d{2})", uptime)
+            if m:
+                uptime = "%d days %d hours %d minutes %d seconds" % tuple(
+                    [int(g or 0) for g in m.groups()[1:]])
+            ret["uptime"] = uptime
         if directive == "process" or directive == "all":
             ret["process"] = self.shellCheckOutput(["ps"])
         if directive == "systime" or directive == "all":
@@ -520,7 +522,7 @@ class DeviceManagerADB(DeviceManager):
                 key, value = line.split(":")
                 meminfo[key] = value.strip()
             ret["memtotal"] = meminfo["MemTotal"]
-        self._logger.info(ret)
+        self._logger.debug("getInfo: %s" % ret)
         return ret
 
     def uninstallApp(self, appName, installPath=None):
@@ -641,8 +643,8 @@ class DeviceManagerADB(DeviceManager):
         # Check whether we _are_ root by default (some development boards work
         # this way, this is also the result of some relatively rare rooting
         # techniques)
-        data = self._runCmd(["shell", "id"]).output[0]
-        if data.find('uid=0(root)') >= 0:
+        proc = self._runCmd(["shell", "id"])
+        if proc.output and 'uid=0(root)' in proc.output[0]:
             self._haveRootShell = True
             # if this returns true, we don't care about su
             return
@@ -660,8 +662,7 @@ class DeviceManagerADB(DeviceManager):
         if retcode is None: # still not terminated, kill
             proc.kill()
 
-        data = proc.output[0]
-        if data.find('uid=0(root)') >= 0:
+        if proc.output and 'uid=0(root)' in proc.output[0]:
             self._haveSu = True
 
         if self._runAdbAsRoot:

@@ -17,7 +17,6 @@
 #include "nsRefPtrHashtable.h"
 #include "mozilla/dom/Promise.h"
 #include "mozilla/dom/MediaKeysBinding.h"
-#include "mozilla/dom/UnionTypes.h"
 #include "mozIGeckoMediaPluginService.h"
 
 namespace mozilla {
@@ -26,6 +25,7 @@ class CDMProxy;
 
 namespace dom {
 
+class ArrayBufferViewOrArrayBuffer;
 class MediaKeySession;
 class HTMLMediaElement;
 
@@ -121,6 +121,10 @@ public:
   // Return NS_OK if the principals are the same as when the MediaKeys
   // was created, failure otherwise.
   nsresult CheckPrincipals();
+
+  // Returns a pointer to the bound media element's owner doc.
+  // If we're not bound, this returns null.
+  nsIDocument* GetOwnerDoc() const;
 
 private:
 
