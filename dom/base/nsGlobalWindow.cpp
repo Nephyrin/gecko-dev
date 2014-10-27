@@ -620,10 +620,11 @@ public:
                        bool *bp) const MOZ_OVERRIDE;
   virtual bool enumerate(JSContext *cx, JS::Handle<JSObject*> proxy,
                          JS::AutoIdVector &props) const MOZ_OVERRIDE;
+  virtual bool preventExtensions(JSContext *cx,
+                                 JS::Handle<JSObject*> proxy,
+                                 bool *succeeded) const MOZ_OVERRIDE;
   virtual bool isExtensible(JSContext *cx, JS::Handle<JSObject*> proxy, bool *extensible)
                             const MOZ_OVERRIDE;
-  virtual bool preventExtensions(JSContext *cx,
-                                 JS::Handle<JSObject*> proxy) const MOZ_OVERRIDE;
   virtual bool has(JSContext *cx, JS::Handle<JSObject*> proxy,
                    JS::Handle<jsid> id, bool *bp) const MOZ_OVERRIDE;
   virtual bool get(JSContext *cx, JS::Handle<JSObject*> proxy,
@@ -705,27 +706,6 @@ const js::Class OuterWindowProxyClass =
             false,   /* isWrappedNative */
             nsOuterWindowProxy::ObjectMoved
         ));
-
-bool
-nsOuterWindowProxy::isExtensible(JSContext *cx, JS::Handle<JSObject*> proxy,
-                                 bool *extensible) const
-{
-  // If [[Extensible]] could be false, then navigating a window could navigate
-  // to a window that's [[Extensible]] after being at one that wasn't: an
-  // invariant violation.  So always report true for this.
-  *extensible = true;
-  return true;
-}
-
-bool
-nsOuterWindowProxy::preventExtensions(JSContext *cx,
-                                      JS::Handle<JSObject*> proxy) const
-{
-  // See above.
-  JS_ReportErrorNumber(cx, js_GetErrorMessage, nullptr,
-                       JSMSG_CANT_CHANGE_EXTENSIBILITY);
-  return false;
-}
 
 const char *
 nsOuterWindowProxy::className(JSContext *cx, JS::Handle<JSObject*> proxy) const
@@ -862,6 +842,27 @@ nsOuterWindowProxy::enumerate(JSContext *cx, JS::Handle<JSObject*> proxy,
     return false;
   }
   return js::AppendUnique(cx, props, innerProps);
+}
+
+bool
+nsOuterWindowProxy::preventExtensions(JSContext *cx,
+                                      JS::Handle<JSObject*> proxy,
+                                      bool *succeeded) const
+{
+  // If [[Extensible]] could be false, then navigating a window could navigate
+  // to a window that's [[Extensible]] after being at one that wasn't: an
+  // invariant violation.  So never change a window's extensibility.
+  *succeeded = false;
+  return true;
+}
+
+bool
+nsOuterWindowProxy::isExtensible(JSContext *cx, JS::Handle<JSObject*> proxy,
+                                 bool *extensible) const
+{
+  // See above.
+  *extensible = true;
+  return true;
 }
 
 bool
@@ -9354,21 +9355,30 @@ nsGlobalWindow::UpdateCommands(const nsAString& anAction, nsISelection* aSel, in
     SelectionChangeEventInit init;
     init.mBubbles = true;
     if (aSel) {
-      nsCOMPtr<nsIDOMRange> range;
-      nsresult rv = aSel->GetRangeAt(0, getter_AddRefs(range));
-      if (NS_SUCCEEDED(rv) && range) {
-        nsRefPtr<nsRange> nsrange = static_cast<nsRange*>(range.get());
-        init.mBoundingClientRect = nsrange->GetBoundingClientRect(true, false);
-        range->ToString(init.mSelectedText);
+      Selection* selection = static_cast<Selection*>(aSel);
+      int32_t rangeCount = selection->GetRangeCount();
+      nsLayoutUtils::RectAccumulator accumulator;
+      for (int32_t idx = 0; idx < rangeCount; ++idx) {
+        nsRange* range = selection->GetRangeAt(idx);
+        nsRange::CollectClientRects(&accumulator, range,
+                                    range->GetStartParent(), range->StartOffset(),
+                                    range->GetEndParent(), range->EndOffset(),
+                                    true, false);
+      }
+      nsRect rect = accumulator.mResultRect.IsEmpty() ? accumulator.mFirstRect :
+        accumulator.mResultRect;
+      nsRefPtr<DOMRect> domRect = new DOMRect(ToSupports(this));
+      domRect->SetLayoutRect(rect);
+      init.mBoundingClientRect = domRect;
 
-        for (uint32_t reasonType = 0;
-             reasonType < static_cast<uint32_t>(SelectionChangeReason::EndGuard_);
-             ++reasonType) {
-          SelectionChangeReason strongReasonType =
-            static_cast<SelectionChangeReason>(reasonType);
-          if (CheckReason(aReason, strongReasonType)) {
-            init.mReasons.AppendElement(strongReasonType);
-          }
+      selection->Stringify(init.mSelectedText);
+      for (uint32_t reasonType = 0;
+           reasonType < static_cast<uint32_t>(SelectionChangeReason::EndGuard_);
+           ++reasonType) {
+        SelectionChangeReason strongReasonType =
+          static_cast<SelectionChangeReason>(reasonType);
+        if (CheckReason(aReason, strongReasonType)) {
+          init.mReasons.AppendElement(strongReasonType);
         }
       }
 

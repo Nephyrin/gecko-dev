@@ -421,6 +421,12 @@ class ArenaList {
         check();
     }
 
+    ArenaList copyAndClear() {
+        ArenaList result = *this;
+        clear();
+        return result;
+    }
+
     bool isEmpty() const {
         check();
         return !head_;
@@ -491,6 +497,8 @@ class ArenaList {
     }
 
 #ifdef JSGC_COMPACTING
+    size_t countUsedCells();
+    ArenaHeader *removeRemainingArenas(ArenaHeader **arenap);
     ArenaHeader *pickArenasToRelocate();
     ArenaHeader *relocateArenas(ArenaHeader *toRelocate, ArenaHeader *relocated);
 #endif
@@ -546,6 +554,16 @@ class SortedArenaList
     void insertAt(ArenaHeader *aheader, size_t nfree) {
         MOZ_ASSERT(nfree <= thingsPerArena_);
         segments[nfree].append(aheader);
+    }
+
+    // Remove all empty arenas, inserting them as a linked list.
+    void extractEmpty(ArenaHeader **empty) {
+        SortedArenaListSegment &segment = segments[thingsPerArena_];
+        if (segment.head) {
+            *segment.tailp = *empty;
+            *empty = segment.head;
+            segment.clear();
+        }
     }
 
     // Links up the tail of each non-empty segment to the head of the next
@@ -604,9 +622,19 @@ class ArenaLists
     unsigned incrementalSweptArenaKind;
     ArenaList incrementalSweptArenas;
 
-    /* Shape arenas to be swept in the foreground. */
-    ArenaHeader *gcShapeArenasToSweep;
-    ArenaHeader *gcAccessorShapeArenasToSweep;
+    // Arena lists which have yet to be swept, but need additional foreground
+    // processing before they are swept.
+    ArenaHeader *gcShapeArenasToUpdate;
+    ArenaHeader *gcAccessorShapeArenasToUpdate;
+    ArenaHeader *gcScriptArenasToUpdate;
+    ArenaHeader *gcTypeObjectArenasToUpdate;
+
+    // While sweeping type information, these lists save the arenas for the
+    // objects which have already been finalized in the foreground (which must
+    // happen at the beginning of the GC), so that type sweeping can determine
+    // which of the object pointers are marked.
+    ArenaList savedObjectArenas[FINALIZE_OBJECT_LIMIT];
+    ArenaHeader *savedEmptyObjectArenas;
 
   public:
     ArenaLists() {
@@ -617,8 +645,11 @@ class ArenaLists
         for (size_t i = 0; i != FINALIZE_LIMIT; ++i)
             arenaListsToSweep[i] = nullptr;
         incrementalSweptArenaKind = FINALIZE_LIMIT;
-        gcShapeArenasToSweep = nullptr;
-        gcAccessorShapeArenasToSweep = nullptr;
+        gcShapeArenasToUpdate = nullptr;
+        gcAccessorShapeArenasToUpdate = nullptr;
+        gcScriptArenasToUpdate = nullptr;
+        gcTypeObjectArenasToUpdate = nullptr;
+        savedEmptyObjectArenas = nullptr;
     }
 
     ~ArenaLists() {
@@ -628,19 +659,13 @@ class ArenaLists
              * the background finalization is disabled.
              */
             MOZ_ASSERT(backgroundFinalizeState[i] == BFS_DONE);
-            ArenaHeader *next;
-            for (ArenaHeader *aheader = arenaLists[i].head(); aheader; aheader = next) {
-                // Copy aheader->next before releasing.
-                next = aheader->next;
-                aheader->chunk()->releaseArena(aheader);
-            }
+            ReleaseArenaList(arenaLists[i].head());
         }
-        ArenaHeader *next;
-        for (ArenaHeader *aheader = incrementalSweptArenas.head(); aheader; aheader = next) {
-            // Copy aheader->next before releasing.
-            next = aheader->next;
-            aheader->chunk()->releaseArena(aheader);
-        }
+        ReleaseArenaList(incrementalSweptArenas.head());
+
+        for (size_t i = 0; i < FINALIZE_OBJECT_LIMIT; i++)
+            ReleaseArenaList(savedObjectArenas[i].head());
+        ReleaseArenaList(savedEmptyObjectArenas);
     }
 
     static uintptr_t getFreeListOffset(AllocKind thingKind) {
@@ -823,11 +848,10 @@ class ArenaLists
     ArenaHeader *relocateArenas(ArenaHeader *relocatedList);
 #endif
 
-    void queueObjectsForSweep(FreeOp *fop);
-    void queueStringsAndSymbolsForSweep(FreeOp *fop);
-    void queueShapesForSweep(FreeOp *fop);
-    void queueScriptsForSweep(FreeOp *fop);
-    void queueJitCodeForSweep(FreeOp *fop);
+    void queueForegroundObjectsForSweep(FreeOp *fop);
+    void queueForegroundThingsForSweep(FreeOp *fop);
+
+    void mergeForegroundSweptObjectArenas();
 
     bool foregroundFinalize(FreeOp *fop, AllocKind thingKind, SliceBudget &sliceBudget,
                             SortedArenaList &sweepList);
@@ -835,14 +859,25 @@ class ArenaLists
 
     void wipeDuringParallelExecution(JSRuntime *rt);
 
+    // When finalizing arenas, whether to keep empty arenas on the list or
+    // release them immediately.
+    enum KeepArenasEnum {
+        RELEASE_ARENAS,
+        KEEP_ARENAS
+    };
+
   private:
     inline void finalizeNow(FreeOp *fop, const FinalizePhase& phase);
     inline void queueForForegroundSweep(FreeOp *fop, const FinalizePhase& phase);
     inline void queueForBackgroundSweep(FreeOp *fop, const FinalizePhase& phase);
-    inline void finalizeNow(FreeOp *fop, AllocKind thingKind);
-    inline void forceFinalizeNow(FreeOp *fop, AllocKind thingKind);
+
+    inline void finalizeNow(FreeOp *fop, AllocKind thingKind,
+                            KeepArenasEnum keepArenas, ArenaHeader **empty = nullptr);
+    inline void forceFinalizeNow(FreeOp *fop, AllocKind thingKind,
+                                 KeepArenasEnum keepArenas, ArenaHeader **empty = nullptr);
     inline void queueForForegroundSweep(FreeOp *fop, AllocKind thingKind);
     inline void queueForBackgroundSweep(FreeOp *fop, AllocKind thingKind);
+    inline void mergeSweptArenas(AllocKind thingKind);
 
     TenuredCell *allocateFromArena(JS::Zone *zone, AllocKind thingKind,
                                    AutoMaybeStartBackgroundAllocation &maybeStartBGAlloc);

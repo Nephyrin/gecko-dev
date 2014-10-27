@@ -13,6 +13,7 @@
 #include "mozilla/gfx/PathHelpers.h"
 #include "mozilla/MathAlgorithms.h"
 #include "nsCOMPtr.h"
+#include "nsFontMetrics.h"
 #include "nsGkAtoms.h"
 #include "nsGenericHTMLElement.h"
 #include "nsAttrValueInlines.h"
@@ -335,7 +336,8 @@ nsBulletFrame::PaintBullet(nsRenderingContext& aRenderingContext, nsPoint aPt,
                   padding.top + aPt.y,
                   mRect.width - (padding.left + padding.right),
                   mRect.height - (padding.top + padding.bottom));
-      Rect devPxRect = NSRectToRect(rect, appUnitsPerDevPixel, *drawTarget);
+      Rect devPxRect =
+        NSRectToSnappedRect(rect, appUnitsPerDevPixel, *drawTarget);
       RefPtr<PathBuilder> builder = drawTarget->CreatePathBuilder();
       AppendEllipseToPath(builder, devPxRect.Center(), devPxRect.Size());
       RefPtr<Path> ellipse = builder->Finish();
@@ -364,7 +366,8 @@ nsBulletFrame::PaintBullet(nsRenderingContext& aRenderingContext, nsPoint aPt,
                       pc->RoundAppUnitsToNearestDevPixels(rect.height));
       snapRect.MoveBy((rect.width - snapRect.width) / 2,
                       (rect.height - snapRect.height) / 2);
-      Rect devPxRect = NSRectToRect(snapRect, appUnitsPerDevPixel, *drawTarget);
+      Rect devPxRect =
+        NSRectToSnappedRect(snapRect, appUnitsPerDevPixel, *drawTarget);
       drawTarget->FillRect(devPxRect, color);
     }
     break;
@@ -426,7 +429,6 @@ nsBulletFrame::PaintBullet(nsRenderingContext& aRenderingContext, nsPoint aPt,
     nsLayoutUtils::GetFontMetricsForFrame(this, getter_AddRefs(fm),
                                           GetFontSizeInflation());
     GetListItemText(text);
-    aRenderingContext.SetFont(fm);
     nscoord ascent = fm->MaxAscent();
     aPt.MoveBy(padding.left, padding.top);
     aPt.y = NSToCoordRound(nsLayoutUtils::GetSnappedBaselineY(
@@ -435,7 +437,7 @@ nsBulletFrame::PaintBullet(nsRenderingContext& aRenderingContext, nsPoint aPt,
     if (!presContext->BidiEnabled() && HasRTLChars(text)) {
       presContext->SetBidiEnabled();
     }
-    nsLayoutUtils::DrawString(this, &aRenderingContext,
+    nsLayoutUtils::DrawString(this, *fm, &aRenderingContext,
                               text.get(), text.Length(), aPt);
     break;
   }
@@ -599,10 +601,9 @@ nsBulletFrame::GetDesiredSize(nsPresContext*  aCX,
     default:
       GetListItemText(text);
       finalSize.BSize(wm) = fm->MaxHeight();
-      aRenderingContext->SetFont(fm);
       finalSize.ISize(wm) =
-        nsLayoutUtils::GetStringWidth(this, aRenderingContext,
-                                      text.get(), text.Length());
+        nsLayoutUtils::AppUnitWidthOfStringBidi(text, this, *fm,
+                                                *aRenderingContext);
       aMetrics.SetBlockStartAscent(fm->MaxAscent());
       break;
   }
@@ -860,7 +861,9 @@ nsBulletFrame::GetSpokenText(nsAString& aText)
   bool isBullet;
   style->GetSpokenCounterText(mOrdinal, GetWritingMode(), aText, isBullet);
   if (isBullet) {
-    aText.Append(' ');
+    if (!style->IsNone()) {
+      aText.Append(' ');
+    }
   } else {
     nsAutoString prefix, suffix;
     style->GetPrefix(prefix);
