@@ -401,6 +401,7 @@ BrowserGlue.prototype = {
         Services.obs.removeObserver(this, "browser-search-service");
         this._syncSearchEngines();
         break;
+#ifdef NIGHTLY_BUILD
       case "nsPref:changed":
         if (data == POLARIS_ENABLED) {
           let enabled = Services.prefs.getBoolPref(POLARIS_ENABLED);
@@ -408,6 +409,7 @@ BrowserGlue.prototype = {
           Services.prefs.setBoolPref("privacy.trackingprotection.enabled", enabled);
           Services.prefs.setBoolPref("privacy.trackingprotection.ui.enabled", enabled);
         }
+#endif
     }
   },
 
@@ -2342,7 +2344,12 @@ let E10SUINotification = {
   checkStatus: function() {
     let skipE10sChecks = false;
     try {
+      // This order matters, because
+      // browser.tabs.remote.autostart.disabled-because-using-a11y is not
+      // always defined and will throw when not present.
+      // privacy.trackingprotection.enabled is always defined.
       skipE10sChecks = (UpdateChannel.get() != "nightly") ||
+                       Services.prefs.getBoolPref("privacy.trackingprotection.enabled") ||
                        Services.prefs.getBoolPref("browser.tabs.remote.autostart.disabled-because-using-a11y");
     } catch(e) {}
 
