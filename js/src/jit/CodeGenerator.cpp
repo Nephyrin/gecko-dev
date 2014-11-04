@@ -4099,7 +4099,7 @@ CodeGenerator::generateBody()
 
             if (iter->mirRaw()) {
                 // Only add instructions that have a tracked inline script tree.
-                if (iter->mirRaw()->trackedSite().hasTree()) {
+                if (iter->mirRaw()->trackedTree()) {
                     if (!addNativeToBytecodeEntry(iter->mirRaw()->trackedSite()))
                         return false;
                 }
@@ -7335,7 +7335,8 @@ CodeGenerator::generate()
     // top-level script.
     InlineScriptTree *tree = gen->info().inlineScriptTree();
     jsbytecode *startPC = tree->script()->code();
-    if (!addNativeToBytecodeEntry(BytecodeSite(tree, startPC)))
+    BytecodeSite *startSite = new(gen->alloc()) BytecodeSite(tree, startPC);
+    if (!addNativeToBytecodeEntry(startSite))
         return false;
 
     if (!snapshots_.init())
@@ -7394,21 +7395,21 @@ CodeGenerator::generate()
         return false;
 
     // Reset native => bytecode map table with top-level script and startPc.
-    if (!addNativeToBytecodeEntry(BytecodeSite(tree, startPC)))
+    if (!addNativeToBytecodeEntry(startSite))
         return false;
 
     if (!generateBody())
         return false;
 
     // Reset native => bytecode map table with top-level script and startPc.
-    if (!addNativeToBytecodeEntry(BytecodeSite(tree, startPC)))
+    if (!addNativeToBytecodeEntry(startSite))
         return false;
 
     if (!generateEpilogue())
         return false;
 
     // Reset native => bytecode map table with top-level script and startPc.
-    if (!addNativeToBytecodeEntry(BytecodeSite(tree, startPC)))
+    if (!addNativeToBytecodeEntry(startSite))
         return false;
 
     if (!generateInvalidateEpilogue())
@@ -7424,7 +7425,7 @@ CodeGenerator::generate()
         return false;
 
     // Add terminal entry.
-    if (!addNativeToBytecodeEntry(BytecodeSite(tree, startPC)))
+    if (!addNativeToBytecodeEntry(startSite))
         return false;
 
     // Dump Native to bytecode entries to spew.
@@ -9538,6 +9539,14 @@ CodeGenerator::visitIsObject(LIsObject *ins)
     Register output = ToRegister(ins->output());
     ValueOperand value = ToValue(ins, LIsObject::Input);
     masm.testObjectSet(Assembler::Equal, value, output);
+    return true;
+}
+
+bool
+CodeGenerator::visitIsObjectAndBranch(LIsObjectAndBranch *ins)
+{
+    ValueOperand value = ToValue(ins, LIsObjectAndBranch::Input);
+    testObjectEmitBranch(Assembler::Equal, value, ins->ifTrue(), ins->ifFalse());
     return true;
 }
 

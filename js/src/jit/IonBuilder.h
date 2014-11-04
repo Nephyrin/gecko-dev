@@ -807,11 +807,12 @@ class IonBuilder
                                      MBasicBlock *bottom);
 
     bool objectsHaveCommonPrototype(types::TemporaryTypeSet *types, PropertyName *name,
-                                    bool isGetter, JSObject *foundProto);
+                                    bool isGetter, JSObject *foundProto, bool *guardGlobal);
     void freezePropertiesForCommonPrototype(types::TemporaryTypeSet *types, PropertyName *name,
-                                            JSObject *foundProto);
+                                            JSObject *foundProto, bool allowEmptyTypesForGlobal = false);
     MDefinition *testCommonGetterSetter(types::TemporaryTypeSet *types, PropertyName *name,
-                                        bool isGetter, JSObject *foundProto, Shape *lastProperty);
+                                        bool isGetter, JSObject *foundProto, Shape *lastProperty,
+                                        Shape *globalShape = nullptr);
     bool testShouldDOMCall(types::TypeSet *inTypes,
                            JSFunction *func, JSJitInfo::OpType opType);
 
@@ -900,9 +901,9 @@ class IonBuilder
     MBasicBlock *current;
     uint32_t loopDepth_;
 
-    BytecodeSite bytecodeSite(jsbytecode *pc) {
+    BytecodeSite *bytecodeSite(jsbytecode *pc) {
         MOZ_ASSERT(info().inlineScriptTree()->script()->containsPC(pc));
-        return BytecodeSite(info().inlineScriptTree(), pc);
+        return new(alloc()) BytecodeSite(info().inlineScriptTree(), pc);
     }
 
     MDefinition *lexicalCheck_;

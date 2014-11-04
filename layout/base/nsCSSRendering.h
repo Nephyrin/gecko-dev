@@ -10,6 +10,7 @@
 
 #include "gfxBlur.h"
 #include "gfxContext.h"
+#include "mozilla/gfx/PathHelpers.h"
 #include "mozilla/gfx/Rect.h"
 #include "nsLayoutUtils.h"
 #include "nsStyleStruct.h"
@@ -319,6 +320,7 @@ struct nsCSSRendering {
   typedef mozilla::gfx::DrawTarget DrawTarget;
   typedef mozilla::gfx::Float Float;
   typedef mozilla::gfx::Rect Rect;
+  typedef mozilla::gfx::RectCornerRadii RectCornerRadii;
   typedef nsIFrame::Sides Sides;
 
   /**
@@ -346,7 +348,7 @@ struct nsCSSRendering {
 
   static void ComputePixelRadii(const nscoord *aAppUnitsRadii,
                                 nscoord aAppUnitsPerPixel,
-                                gfxCornerSizes *oBorderRadii);
+                                RectCornerRadii *oBorderRadii);
 
   /**
    * Render the border for an element using css rendering rules
@@ -516,7 +518,7 @@ struct nsCSSRendering {
     gfxRect mDirtyRectGfx;
 
     nscoord mRadii[8];
-    gfxCornerSizes mClippedRadii;
+    RectCornerRadii mClippedRadii;
     bool mHasRoundedCorners;
     bool mHasAdditionalBGClipArea;
 
@@ -829,6 +831,8 @@ protected:
  * This is very useful for creating drop shadows or silhouettes.
  */
 class nsContextBoxBlur {
+  typedef mozilla::gfx::RectCornerRadii RectCornerRadii;
+
 public:
   enum {
     FORCE_MASK = 0x01
@@ -934,7 +938,7 @@ public:
   static void BlurRectangle(gfxContext* aDestinationCtx,
                             const nsRect& aRect,
                             int32_t aAppUnitsPerDevPixel,
-                            gfxCornerSizes* aCornerRadii,
+                            RectCornerRadii* aCornerRadii,
                             nscoord aBlurRadius,
                             const gfxRGBA& aShadowColor,
                             const nsRect& aDirtyRect,
