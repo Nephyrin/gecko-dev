@@ -57,6 +57,12 @@ class B2GDesktopReftest(RefTest):
         self.profile = self.create_profile(options, reftestlist,
                                            profile_to_clone=options.profile)
         env = self.buildBrowserEnv(options, self.profile.profile)
+
+        if self.build_type == "mulet":
+            # FIXME
+            if "MOZ_DISABLE_NONLOCAL_CONNECTIONS" in env:
+                del env["MOZ_DISABLE_NONLOCAL_CONNECTIONS"]
+
         kp_kwargs = { 'processOutputLine': [self._on_output],
                       'onTimeout': [self._on_timeout],
                       'kill_on_timeout': False }
