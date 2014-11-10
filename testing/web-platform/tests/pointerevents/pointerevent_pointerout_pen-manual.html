@@ -31,9 +31,9 @@
                 // When a pen stylus leaves the hover range detectable by the digitizer the pointerout event must be dispatched. 
                 // TA: 7.2
                 on_event(target0, "pointerout", function (event) {
+                    detected_pointertypes[event.pointerType] = true;
                     if(event.pointerType == 'pen') {
                         if (eventTested == false) {
-                            detected_pointertypes[event.pointerType] = true;
                             eventTested = true;
                             test_pointerout.done();
                         }
@@ -51,7 +51,6 @@
         <h1>Pointer Events pointerout tests</h1>
         <div id="complete-notice">
             <p>The following pointer types were detected: <span id="pointertype-log"></span>.</p>
-            <p>Refresh the page to run the tests again with a different pointer type.</p>
         </div>
         <div id="log"></div>
     </body>
