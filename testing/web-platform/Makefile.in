@@ -9,6 +9,13 @@ WPT_METADATA = \
   meta \
   $(NULL)
 
+WPT_OUTBOUND = \
+  outbound \
+  $(NULL)
+
+WPT_MOZILLA = \
+  mozilla \
+  $(NULL)
 
 _DEST_DIR = $(DEPTH)/_tests/web-platform
 PKG_STAGE = $(DIST)/test-stage
@@ -25,6 +32,10 @@ libs::
 libs:: $(WPT_TESTS)
 	$(INSTALL) $(foreach f,$^,"$f") $(_DEST_DIR)
 libs:: $(WPT_METADATA)
+	$(INSTALL) $(foreach f,$^,"$f") $(_DEST_DIR)
+libs:: $(WPT_OUTBOUND)
+	$(INSTALL) $(foreach f,$^,"$f") $(_DEST_DIR)
+libs:: $(WPT_MOZILLA)
 	$(INSTALL) $(foreach f,$^,"$f") $(_DEST_DIR)
 
 stage-package:
