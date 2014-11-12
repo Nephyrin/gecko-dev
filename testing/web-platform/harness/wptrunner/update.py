@@ -352,7 +352,7 @@ def update_metadata(paths, local_tree, initial_rev, bug, log_files, ignore_exist
         except subprocess.CalledProcessError:
             # Patch with that name already exists, probably
             pass
-        needs_human = metadata.update_expected(paths["tests_paths"],
+        needs_human = metadata.update_expected(paths["test_paths"],
                                                paths["serve"],
                                                log_files,
                                                rev_old=initial_rev,
@@ -364,8 +364,11 @@ def update_metadata(paths, local_tree, initial_rev, bug, log_files, ignore_exist
             pass
 
         if not local_tree.is_clean():
-            local_tree.add_new(os.path.relpath(paths["metadata"], local_tree.root))
-            local_tree.update_patch(include=[paths["metadata"]])
+            metadata_paths = [manifest_path["metadata_path"]
+                              for manifest_path in paths["test_paths"].itervalues()]
+            for path in metadata_paths:
+                local_tree.add_new(os.path.relpath(path, local_tree.root))
+            local_tree.update_patch(include=metadata_paths)
 
     except Exception as e:
         #bug.comment("Update failed with error:\n %s" % traceback.format_exc())
