@@ -88,6 +88,19 @@ def do_delayed_imports(serve_root):
             (failed, serve_root))
         sys.exit(1)
 
+class LogLevelRewriter(object):
+    def __init__(self, inner, from_levels, to_level, components=None):
+        self.components = components
+        self.inner = inner
+        self.from_levels = [item.upper() for item in from_levels]
+        self.to_level = to_level.upper()
+
+    def __call__(self, data):
+        if data["action"] == "log" and data["level"].upper() in self.from_levels:
+            data = data.copy()
+            data["level"] = self.to_level
+        return self.inner(data)
+
 
 class TestEnvironmentError(Exception):
     pass
@@ -142,11 +155,10 @@ class TestEnvironment(object):
 
     def setup_server_logging(self):
         server_logger = get_default_logger("serve")
-        assert server_logger is not None
-        handler = handlers.StreamHandler(open("server.log", "w"),
-                                         formatters.MachFormatter(disable_colors=True))
-        handler = handlers.LogLevelFilter(handler, "info")
-        server_logger.add_handler(handler)
+
+        serve_filter = handlers.LogLevelFilter(lambda x:x, "info")
+        serve_filter = LogLevelRewriter(serve_filter, ["error"], "warning")
+        server_logger.component_filter = serve_filter
 
         serve.logger = server_logger
         #Set as the default logger for wptserve
